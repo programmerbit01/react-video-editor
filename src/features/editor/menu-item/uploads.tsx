@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
 import useLayoutStore from "../store/use-layout-store";
 import ModalUpload from "@/components/modal-upload";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useVappMediaStore } from "../store/use-vapp-media-store";
 
 const getLabel = (item: any) =>
@@ -122,6 +122,13 @@ export const Uploads = () => {
     try { await fetchVappPage(page + 1); } catch {}
     finally { setLoadingMore(false); }
   };
+
+  // Auto-load page 1 on mount if nothing loaded yet
+  useEffect(() => {
+    if (uploads.length === 0 && page === 1) {
+      fetchVappPage(1).catch(() => {});
+    }
+  }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
