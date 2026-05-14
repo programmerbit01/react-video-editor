@@ -8,7 +8,6 @@ import {
 import { QueryProvider } from "@/components/query-provider";
 
 import "./globals.css";
-import { ThemeProvider } from "@/components/theme-provider";
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -42,23 +41,16 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className="dark">
       <body
         className={`${geistMono.variable} ${geist.variable} ${outfit.variable} antialiased font-sans bg-muted`}
       >
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem={false}
-          disableTransitionOnChange
-        >
-          <QueryProvider>
-            {children}
-            <StoreInitializer />
-            <BackgroundUploadRunner />
-            <Toaster />
-          </QueryProvider>
-        </ThemeProvider>
+        <QueryProvider>
+          {children}
+          <StoreInitializer />
+          <BackgroundUploadRunner />
+          <Toaster />
+        </QueryProvider>
       </body>
     </html>
   );

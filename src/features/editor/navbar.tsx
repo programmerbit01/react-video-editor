@@ -33,7 +33,6 @@ import {
 import { LogoIcons } from "@/components/shared/logos";
 import Link from "next/link";
 import { ShortcutsModal } from "./shortcuts-modal";
-import { ModeToggle } from "@/components/ui/mode-toggle";
 
 export default function Navbar({
   user,
@@ -139,7 +138,6 @@ export default function Navbar({
           >
             <Keyboard className="size-5" />
           </Button>
-          <ModeToggle />
 
           {/* <Button
             className="flex h-8 gap-1 border border-border"
