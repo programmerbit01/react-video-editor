@@ -1,5 +1,11 @@
 import axios from "axios";
 
+function withEditorBase(path: string): string {
+  if (typeof window === "undefined") return path;
+  if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
+  return path;
+}
+
 export type UploadProgressCallback = (
   uploadId: string,
   progress: number
@@ -27,7 +33,7 @@ export async function processFileUpload(
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await axios.post("/api/uploads/local", formData, {
+    const res = await axios.post(withEditorBase("/api/uploads/local"), formData, {
       headers: { "Content-Type": "multipart/form-data" },
       onUploadProgress: (e) => {
         const pct = Math.round((e.loaded * 80) / (e.total || 1));
@@ -71,7 +77,7 @@ export async function processUrlUpload(
 
     // Upload URL
     const { data: { uploads = [] } = {} } = await axios.post(
-      "/api/uploads/url",
+      withEditorBase("/api/uploads/url"),
       {
         userId: "PJ1nkaufw0hZPyhN7bWCP",
         urls: [url]

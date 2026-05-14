@@ -20,6 +20,12 @@ export const Audios = () => {
   const [hasMore, setHasMore] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
+  const withEditorBase = (path: string) => {
+    if (typeof window === "undefined") return path;
+    if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
+    return path;
+  };
+
   const fetchMusic = async (query: string, pageNumber: number = 1) => {
     if (pageNumber === 1) {
       setIsLoading(true);
@@ -28,7 +34,7 @@ export const Audios = () => {
     }
 
     try {
-      const response = await fetch("/api/audio/music", {
+      const response = await fetch(withEditorBase("/api/audio/music"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
