@@ -4,10 +4,8 @@ import { Music, Loader2, UploadIcon, Upload, RefreshCw } from "lucide-react";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
-import useLayoutStore from "../store/use-layout-store";
 import ModalUpload from "@/components/modal-upload";
-import { useEffect, useState } from "react";
-import { useVappMediaStore } from "../store/use-vapp-media-store";
+import { useEffect, useRef, useState } from "react";
 
 const getLabel = (item: any) =>
   item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
@@ -36,104 +34,73 @@ const Thumb = ({ item }: { item: any }) => {
       />
     );
   }
-  // eslint-disable-next-line @next/next/no-img-element
   return <img src={src} className="w-full h-full object-cover" alt="" loading="lazy" />;
 };
 
-async function loadVappMedia(
-  setUploads: (fn: (prev: any[]) => any[]) => void,
-): Promise<void> {
-  if (typeof window === "undefined") return;
+const getVappParams = () => {
+  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
   const p = new URLSearchParams(window.location.search);
-  const vappHost = p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}:3000`;
-  const token = p.get("token") || "";
-  const baseUrl = p.get("baseUrl") || "https://api.muapi.ai";
+  return {
+    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
+    token: p.get("token") || "",
+    baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
+  };
+};
 
-  const res = await fetch(
-    `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
-  );
-  const data = await res.json();
-  const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
-
-  const items = (data.items || []).map((item: any) => {
-    const proxied = proxyUrl(item.url);
-    return {
-      id: Math.random().toString(36).slice(2),
-      url: proxied,
-      filePath: proxied,
-      fileName: item.name || item.url.split("/").pop()?.split("?")[0] || "media",
-      type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-      metadata: { uploadedUrl: proxied },
-      status: "uploaded",
-    };
-  });
-
-  setUploads((prev: any[]) => {
-    // Replace all vapp items with fresh ones (identified by proxy URL pattern)
-    const nonVapp = prev.filter((u: any) => !u.url?.includes("/api/proxy"));
-    return [...nonVapp, ...items];
-  });
-}
+const toUploadItem = (item: any) => {
+  const proxied = `/api/proxy?url=${encodeURIComponent(item.url)}`;
+  return {
+    id: Math.random().toString(36).slice(2),
+    url: proxied,
+    filePath: proxied,
+    fileName: item.name || item.url.split("/").pop()?.split("?")[0] || "media",
+    type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
+    metadata: { uploadedUrl: proxied },
+    status: "uploaded",
+  };
+};
 
 export const Uploads = () => {
   const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads } = useUploadStore();
-  const { page, hasMore, loadingMore, setPage, setHasMore, setLoadingMore } = useVappMediaStore();
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const initialLoaded = useRef(false);
 
-  const getVappParams = () => {
-    if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
-    const p = new URLSearchParams(window.location.search);
-    return {
-      vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
-      token: p.get("token") || "",
-      baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
-    };
-  };
-
-  const fetchVappPage = async (pageNum: number) => {
+  const fetchPage = async (pageNum: number, replace = false) => {
     const { vappHost, token, baseUrl } = getVappParams();
     const res = await fetch(
       `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`
     );
     const data = await res.json();
-    const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
-    const items = (data.items || []).map((item: any) => {
-      const proxied = proxyUrl(item.url);
-      return {
-        id: Math.random().toString(36).slice(2),
-        url: proxied,
-        filePath: proxied,
-        fileName: item.name || item.url.split("/").pop()?.split("?")[0] || "media",
-        type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-        metadata: { uploadedUrl: proxied },
-        status: "uploaded",
-      };
-    });
+    const items = (data.items || []).map(toUploadItem);
     setHasMore(data.hasMore ?? false);
     setUploads((prev: any[]) => {
-      const existingUrls = new Set(prev.map((u: any) => u.url));
-      return [...prev, ...items.filter((i: any) => !existingUrls.has(i.url))];
+      const base = replace ? prev.filter((u: any) => !u.url?.includes("/api/proxy")) : prev;
+      const existingUrls = new Set(base.map((u: any) => u.url));
+      return [...base, ...items.filter((i: any) => !existingUrls.has(i.url))];
     });
     setPage(pageNum);
   };
 
-  const handleLoadMore = async () => {
-    setLoadingMore(true);
-    try { await fetchVappPage(page + 1); } catch {}
-    finally { setLoadingMore(false); }
-  };
-
-  // Auto-load page 1 on mount if nothing loaded yet
   useEffect(() => {
-    if (uploads.length === 0 && page === 1) {
-      fetchVappPage(1).catch(() => {});
+    if (!initialLoaded.current) {
+      initialLoaded.current = true;
+      fetchPage(1).catch(() => {});
     }
   }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    try { await loadVappMedia(setUploads); } catch {}
+    try { await fetchPage(1, true); } catch {}
     setRefreshing(false);
+  };
+
+  const handleLoadMore = async () => {
+    setLoadingMore(true);
+    try { await fetchPage(page + 1); } catch {}
+    setLoadingMore(false);
   };
 
   const handleAdd = async (item: any) => {
@@ -173,7 +140,6 @@ export const Uploads = () => {
       return;
     }
 
-    // image
     let width = 1920, height = 1080;
     try {
       const meta = await new Promise<{ width: number; height: number }>((resolve, reject) => {
@@ -205,8 +171,8 @@ export const Uploads = () => {
           variant="outline"
           className="cursor-pointer px-3"
           onClick={handleRefresh}
-          title="Refresh Vapp media"
           disabled={refreshing}
+          title="Refresh"
         >
           <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
         </Button>

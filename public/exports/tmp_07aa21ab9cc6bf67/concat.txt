@@ -1,0 +1,3 @@
+file '/Volumes/d_drive/vapp_project/react-video-editor/public/exports/tmp_07aa21ab9cc6bf67/seg_0.mp4'
+file '/Volumes/d_drive/vapp_project/react-video-editor/public/exports/tmp_07aa21ab9cc6bf67/seg_1.mp4'
+file '/Volumes/d_drive/vapp_project/react-video-editor/public/exports/tmp_07aa21ab9cc6bf67/seg_2.mp4'
