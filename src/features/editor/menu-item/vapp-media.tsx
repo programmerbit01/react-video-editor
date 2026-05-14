@@ -5,9 +5,6 @@ import useUploadStore from "../store/use-upload-store";
 
 export const VappMedia = () => {
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const { setUploads, uploads } = useUploadStore();
 
@@ -42,7 +39,7 @@ export const VappMedia = () => {
       };
     });
 
-    setHasMore(data.hasMore ?? false);
+    const more = data.hasMore ?? false;
 
     setUploads((prev: any[]) => {
       const base = isRefresh ? [] : prev;
@@ -51,32 +48,27 @@ export const VappMedia = () => {
       return [...base, ...newItems];
     });
 
-    return items.length > 0;
+    return more;
   };
 
   const load = async () => {
     setLoading(true);
     try {
-      await fetchPage(1, true);
-      setPage(1);
+      let currentPage = 1;
+      let more = true;
+      // first page resets list
+      more = await fetchPage(1, true);
+      currentPage = 1;
+      // keep fetching until no more pages
+      while (more) {
+        currentPage++;
+        more = await fetchPage(currentPage);
+      }
       setLoaded(true);
     } catch {
       // silent
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadMore = async () => {
-    setLoadingMore(true);
-    try {
-      const nextPage = page + 1;
-      await fetchPage(nextPage);
-      setPage(nextPage);
-    } catch {
-      // silent
-    } finally {
-      setLoadingMore(false);
     }
   };
 
@@ -96,16 +88,6 @@ export const VappMedia = () => {
       <p className="text-xs text-muted-foreground">
         {loaded ? "Vapp media loaded in Uploads ✓" : "No media found"}
       </p>
-      {hasMore && (
-        <button
-          onClick={loadMore}
-          disabled={loadingMore}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-white transition-colors border border-border/40 px-3 py-1.5 rounded-md disabled:opacity-50"
-        >
-          {loadingMore ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-          Load more
-        </button>
-      )}
       <button
         onClick={load}
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-white transition-colors border border-border/40 px-3 py-1.5 rounded-md"
