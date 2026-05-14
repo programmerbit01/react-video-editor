@@ -13,7 +13,6 @@ import {
   calculateOffscreenSegments,
   calculateThumbnailSegmentLayout
 } from "../../utils/filmstrip";
-import { getFileFromUrl } from "../../utils/file";
 import { createMediaControls } from "../controls";
 import { SECONDARY_FONT } from "../../constants/constants";
 
