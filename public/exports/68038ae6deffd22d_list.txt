@@ -1,6 +1,0 @@
-file '/Volumes/d_drive/vapp_project/react-video-editor/public/uploads/1778782194643_vapp_TS-1778762175_SE-742913870_CF-na_ST-na_P-human-baby-is-dancing-following-the-motion-in-co_S-otion-20in-20control-20video_F-7f54b5ee__1_.mp4'
-duration 9.042
-file 'https://vapp-media-gar.tomtap.ai/vapp_TS-1778768150_SE-330033864_CF-na_ST-na_P-red-dress_S-red-20dress_F-e8033b7e.png'
-duration 3
-file 'https://vapp-media-gar.tomtap.ai/vapp_TS-1778770206_SE-395298392_CF-na_ST-na_P-red_S-red_F-90a99b49.mp4'
-duration 3.708
