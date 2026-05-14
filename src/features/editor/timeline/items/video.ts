@@ -210,24 +210,6 @@ class Video extends Trimmable {
   }
 
   public async prepareAssets() {
-    const isSecure =
-      typeof window !== "undefined" &&
-      (window.isSecureContext || window.location.hostname === "localhost");
-
-    if (isSecure) {
-      try {
-        const file = await getFileFromUrl(this.src);
-        const stream = file.stream();
-        const { MP4Clip } = await import("@designcombo/frames");
-        this.clip = new MP4Clip(stream);
-        return;
-      } catch {
-        // fall through to canvas-based fallback
-      }
-    }
-
-    // Canvas-based fallback: works on HTTP without OPFS.
-    // Proxy URLs already include CORS headers so canvas won't be tainted.
     this.clip = new CanvasVideoClip(this.src);
   }
 
