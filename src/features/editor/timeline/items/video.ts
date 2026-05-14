@@ -573,8 +573,8 @@ class Video extends Trimmable {
         const xPosition = i * thumbnailWidth + offset - trimFromSize;
 
         ctx.drawImage(img, xPosition, 0, thumbnailWidth, thumbnailHeight);
-        timeInFilmstripe += timePerThumbnail;
       }
+      timeInFilmstripe += timePerThumbnail;
     }
 
     this.isDirty = false;

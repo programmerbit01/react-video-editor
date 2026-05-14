@@ -36,7 +36,13 @@ export async function GET(request: Request) {
   const job = jobs.get(id);
   if (!job) return NextResponse.json({ message: "job not found" }, { status: 404 });
   return NextResponse.json({
-    render: { id, status: job.status, progress: job.progress, presigned_url: job.url },
+    render: {
+      id,
+      status: job.status,
+      progress: job.progress,
+      // Keep download under /api/render/... so vapp_higgs rewrite forwards correctly.
+      presigned_url: job.status === "COMPLETED" ? `/api/render/${id}/download` : undefined,
+    },
   });
 }
 
