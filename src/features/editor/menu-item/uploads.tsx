@@ -12,9 +12,17 @@ const getLabel = (item: any) =>
 
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
+const isVappProxyItem = (u: any) =>
+  Boolean(u?.url?.includes("/api/proxy?url=") || u?.filePath?.includes("/api/proxy?url="));
+
+const normalizeMediaSrc = (src?: string) => {
+  if (!src) return "";
+  if (src.startsWith("/uploads/")) return `/editor${src}`;
+  return src;
+};
 
 const Thumb = ({ item }: { item: any }) => {
-  const src = item.metadata?.uploadedUrl || item.url;
+  const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
   if (isAudio(item)) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-white/5">
@@ -83,9 +91,12 @@ export const Uploads = () => {
         : rawItems.length > 0;
     setHasMore(Boolean(explicitHasMore ?? inferredHasMore));
     setUploads((prev: any[]) => {
-      const base = replace ? prev.filter((u: any) => !u.url?.includes("/api/proxy")) : prev;
+      const base = replace ? prev.filter((u: any) => !isVappProxyItem(u)) : prev;
       const existingUrls = new Set(base.map((u: any) => u.url));
-      return [...base, ...items.filter((i: any) => !existingUrls.has(i.url))];
+      const merged = [...base, ...items.filter((i: any) => !existingUrls.has(i.url))];
+      const vappItems = merged.filter((u: any) => isVappProxyItem(u));
+      const localItems = merged.filter((u: any) => !isVappProxyItem(u));
+      return [...vappItems, ...localItems];
     });
     setPage(pageNum);
   };
@@ -110,7 +121,7 @@ export const Uploads = () => {
   };
 
   const handleAdd = async (item: any) => {
-    const src = item.metadata?.uploadedUrl || item.url;
+    const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
 
     if (isAudio(item)) {
       dispatch(ADD_AUDIO, {

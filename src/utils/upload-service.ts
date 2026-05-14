@@ -6,6 +6,14 @@ function withEditorBase(path: string): string {
   return path;
 }
 
+function withPublicAssetBase(path: string): string {
+  if (typeof window === "undefined") return path;
+  if (path.startsWith("/uploads/") && window.location.pathname.startsWith("/editor")) {
+    return `/editor${path}`;
+  }
+  return path;
+}
+
 export type UploadProgressCallback = (
   uploadId: string,
   progress: number
@@ -42,14 +50,15 @@ export async function processFileUpload(
     });
 
     const { url, fileName } = res.data;
+    const resolvedUrl = withPublicAssetBase(url);
     callbacks.onProgress(uploadId, 100);
 
     const uploadData = {
       fileName: fileName || file.name,
-      filePath: url,
+      filePath: resolvedUrl,
       fileSize: file.size,
       contentType: file.type,
-      metadata: { uploadedUrl: url },
+      metadata: { uploadedUrl: resolvedUrl },
       folder: null,
       type: file.type.split("/")[0],
       method: "direct",
