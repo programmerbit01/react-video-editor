@@ -20,6 +20,12 @@ export function SFX() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
 
+  const withEditorBase = (path: string) => {
+    if (typeof window === "undefined") return path;
+    if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
+    return path;
+  };
+
   const fetchSFX = async (query: string, pageNumber: number = 1) => {
     if (pageNumber === 1) {
       setIsLoading(true);
@@ -28,7 +34,7 @@ export function SFX() {
     }
 
     try {
-      const response = await fetch("/api/audio/sfx", {
+      const response = await fetch(withEditorBase("/api/audio/sfx"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
