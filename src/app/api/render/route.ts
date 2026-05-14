@@ -131,8 +131,11 @@ function buildSegmentArgs({
       ...base,
       "-vf", vf,
       ...videoArgs,
+      "-map", "0:v:0",
+      "-map", "0:a:0",
       "-c:a", "aac",
       "-b:a", "128k",
+      "-ar", "48000",
       "-ac", "2",
       "-pix_fmt", "yuv420p",
       "-shortest",
@@ -154,6 +157,21 @@ function buildSegmentArgs({
     "-shortest",
     output,
   ];
+}
+
+async function hasAudioStream(inputPath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=codec_type",
+      "-of", "csv=p=0",
+      inputPath,
+    ]);
+    return String(stdout).trim() === "audio";
+  } catch {
+    return false;
+  }
 }
 
 async function runExport(jobId: string, design: any, quality = "high", format = "mp4") {
@@ -226,6 +244,7 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
         dur,
         vf: platformPreset.vf,
         videoArgs: platformPreset.videoArgs,
+        includeSourceAudio: await hasAudioStream(f),
       });
       await execFileAsync("ffmpeg", args);
       segFiles.push(segPath);
@@ -287,6 +306,7 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
         dur,
         vf: `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`,
         videoArgs: ["-c:v", "libx264", "-preset", preset, "-crf", crf],
+        includeSourceAudio: await hasAudioStream(f),
       });
 
       await execFileAsync("ffmpeg", args);
