@@ -22,43 +22,30 @@ export async function processFileUpload(
   callbacks: UploadCallbacks
 ): Promise<any> {
   try {
-    // Get presigned URL
-    const {
-      data: { uploads }
-    } = await axios.post(
-      "/api/uploads/presign",
-      {
-        userId: "PJ1nkaufw0hZPyhN7bWCP",
-        fileNames: [file.name]
-      },
-      {
-        headers: { "Content-Type": "application/json" }
-      }
-    );
+    callbacks.onProgress(uploadId, 20);
 
-    const uploadInfo = uploads[0];
+    const formData = new FormData();
+    formData.append("file", file);
 
-    // Upload file with progress tracking
-    await axios.put(uploadInfo.presignedUrl, file, {
-      headers: { "Content-Type": uploadInfo.contentType },
-      onUploadProgress: (progressEvent) => {
-        const percent = Math.round(
-          (progressEvent.loaded * 100) / (progressEvent.total || 1)
-        );
-        callbacks.onProgress(uploadId, percent);
+    const res = await axios.post("/api/uploads/local", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress: (e) => {
+        const pct = Math.round((e.loaded * 80) / (e.total || 1));
+        callbacks.onProgress(uploadId, 20 + pct);
       },
-      validateStatus: () => true
     });
 
-    // Construct upload data from uploadInfo
+    const { url, fileName } = res.data;
+    callbacks.onProgress(uploadId, 100);
+
     const uploadData = {
-      fileName: uploadInfo.fileName,
-      filePath: uploadInfo.filePath,
+      fileName: fileName || file.name,
+      filePath: url,
       fileSize: file.size,
-      contentType: uploadInfo.contentType,
-      metadata: { uploadedUrl: uploadInfo.url },
-      folder: uploadInfo.folder || null,
-      type: uploadInfo.contentType.split("/")[0],
+      contentType: file.type,
+      metadata: { uploadedUrl: url },
+      folder: null,
+      type: file.type.split("/")[0],
       method: "direct",
       origin: "user",
       status: "uploaded",

@@ -1,4 +1,9 @@
 import React, { use, useEffect, useRef, useState } from "react";
+
+const genId = () =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? genId()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36);
 import {
   Dialog,
   DialogContent,
@@ -64,7 +69,7 @@ const ModalUpload: React.FC<ModalUploadProps> = ({ type = "all" }) => {
 
     const newFiles = selectedFiles
       .filter((f) => !files.some((fileObj) => fileObj.file?.name === f.name))
-      .map((f) => ({ id: crypto.randomUUID(), file: f }));
+      .map((f) => ({ id: genId(), file: f }));
 
     if (newFiles.length === 0) return;
 
@@ -101,7 +106,7 @@ const ModalUpload: React.FC<ModalUploadProps> = ({ type = "all" }) => {
     if (e.dataTransfer.files) {
       const newFiles = Array.from(e.dataTransfer.files)
         .filter((f) => !files.some((fileObj) => fileObj.file?.name === f.name))
-        .map((f) => ({ id: crypto.randomUUID(), file: f }));
+        .map((f) => ({ id: genId(), file: f }));
       if (newFiles.length === 0) return;
 
       setFiles((prev) => [...newFiles, ...prev]);
@@ -176,7 +181,7 @@ const ModalUpload: React.FC<ModalUploadProps> = ({ type = "all" }) => {
     const urlUploads = videoUrl.trim()
       ? [
           {
-            id: crypto.randomUUID(),
+            id: genId(),
             url: videoUrl.trim(),
             type: "url",
             status: "pending" as const,

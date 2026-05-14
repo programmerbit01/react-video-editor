@@ -11,6 +11,7 @@ import { useIsLargeScreen } from "@/hooks/use-media-query";
 import { Uploads } from "./uploads";
 import { AiVoice } from "./ai-voice";
 import { SFX } from "./sfx";
+import { VappMedia } from "./vapp-media";
 
 const ActiveMenuItem = () => {
   const { activeMenuItem } = useLayoutStore();
@@ -55,6 +56,10 @@ const ActiveMenuItem = () => {
 
   if (activeMenuItem === "sfx") {
     return <SFX />;
+  }
+
+  if (activeMenuItem === "vapp") {
+    return <VappMedia />;
   }
 
   return null;

@@ -14,9 +14,11 @@ const SceneEmpty = () => {
   useEffect(() => {
     const container = containerRef.current!;
     const PADDING = 96;
-    const containerHeight = container.clientHeight - PADDING;
-    const containerWidth = container.clientWidth - PADDING;
+    const containerHeight = (container.clientHeight || window.innerHeight) - PADDING;
+    const containerWidth = (container.clientWidth || window.innerWidth) - PADDING;
     const { width, height } = size;
+
+    if (!width || !height) { setIsLoading(false); return; }
 
     const desiredZoom = Math.min(
       containerWidth / width,
