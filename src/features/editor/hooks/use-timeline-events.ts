@@ -14,7 +14,7 @@ import { TIMELINE_SEEK, TIMELINE_PREFIX } from "@designcombo/timeline";
 import { getSafeCurrentFrame } from "../utils/time";
 
 const useTimelineEvents = () => {
-  const { playerRef, fps, timeline, setState } = useStore();
+  const { playerRef, fps, timeline, setState, trackItemsMap } = useStore();
 
   //handle player events
   useEffect(() => {
@@ -72,13 +72,20 @@ const useTimelineEvents = () => {
 
     const selectionSubscription = selectionEvents.subscribe((obj) => {
       if (obj.key === LAYER_SELECTION) {
-        setState({
-          activeIds: obj.value?.payload.activeIds
-        });
+        const activeIds = obj.value?.payload.activeIds || [];
+        setState({ activeIds });
+
+        const firstSelectedId = activeIds[0];
+        if (!firstSelectedId) return;
+        const item = trackItemsMap?.[firstSelectedId];
+        const fromMs = item?.display?.from;
+        if (playerRef?.current && typeof fromMs === "number" && Number.isFinite(fromMs)) {
+          playerRef.current.seekTo(Math.max(0, Math.round((fromMs / 1000) * fps)));
+        }
       }
     });
     return () => selectionSubscription.unsubscribe();
-  }, [timeline]);
+  }, [timeline, trackItemsMap, playerRef, fps, setState]);
 };
 
 export default useTimelineEvents;
