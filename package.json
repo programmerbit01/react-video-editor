@@ -96,6 +96,10 @@
 		"zod": "^3.25.3",
 		"zustand": "^5.0.4"
 	},
+	"overrides": {
+		"remotion": "4.0.461",
+		"@remotion/transitions": "4.0.461"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
 		"@designcombo/types": "^5.4.2",
