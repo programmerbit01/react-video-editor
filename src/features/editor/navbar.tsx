@@ -186,15 +186,21 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const [isResolutionOpen, setIsResolutionOpen] = useState(false);
   const [open, setOpen] = useState(false);
 
+  const unwrapProxyUrls = (design: IDesign): IDesign => {
+    const json = JSON.stringify(design).replace(
+      /\/api\/proxy\?url=([^"\\]+)/g,
+      (_, encoded) => decodeURIComponent(encoded)
+    );
+    return JSON.parse(json);
+  };
+
   const handleExport = () => {
     const data: IDesign = {
       id: generateId(),
       ...stateManager.toJSON()
     };
 
-    console.log({ data });
-
-    actions.setState({ payload: data });
+    actions.setState({ payload: unwrapProxyUrls(data) });
     actions.startExport();
   };
 

@@ -81,6 +81,7 @@ class CanvasVideoClip {
         });
       }
       try {
+        await new Promise<void>((res) => requestAnimationFrame(() => res()));
         ctx.drawImage(v, 0, 0, width, h);
         const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.7));
         if (blob) results.push({ ts, img: blob });
