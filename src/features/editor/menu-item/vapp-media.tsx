@@ -2,7 +2,6 @@
 import React, { useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import useUploadStore from "../store/use-upload-store";
-import useLayoutStore from "../store/use-layout-store";
 
 export const VappMedia = () => {
   const [loading, setLoading] = useState(false);
@@ -11,7 +10,6 @@ export const VappMedia = () => {
   const [hasMore, setHasMore] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const { setUploads, uploads } = useUploadStore();
-  const { setActiveMenuItem } = useLayoutStore();
 
   const getParams = () => {
     if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
@@ -59,10 +57,9 @@ export const VappMedia = () => {
   const load = async () => {
     setLoading(true);
     try {
-      const hasItems = await fetchPage(1, true);
+      await fetchPage(1, true);
       setPage(1);
       setLoaded(true);
-      if (hasItems) setActiveMenuItem("uploads");
     } catch {
       // silent
     } finally {

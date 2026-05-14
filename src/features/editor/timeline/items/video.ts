@@ -37,11 +37,18 @@ class CanvasVideoClip {
       v.crossOrigin = "anonymous";
       v.preload = "auto";
       v.muted = true;
-      const done = () => { this.video = v; resolve(); };
+      v.playsInline = true;
+      let resolved = false;
+      const done = () => {
+        if (resolved) return;
+        resolved = true;
+        this.video = v;
+        resolve();
+      };
       v.onloadeddata = done;
-      v.onloadedmetadata = done;
+      v.oncanplay = done;
       v.onerror = () => resolve();
-      setTimeout(resolve, 8000); // max wait
+      setTimeout(resolve, 10000);
       v.src = this.src;
       v.load();
     });
@@ -55,31 +62,29 @@ class CanvasVideoClip {
     if (!this.video) return [];
 
     const v = this.video;
-    const height = 40;
+    const aspect = v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : 9 / 16;
+    const h = Math.max(1, Math.round(width / aspect));
     const canvas = document.createElement("canvas");
     canvas.width = width;
-    canvas.height = height;
+    canvas.height = h;
     const ctx = canvas.getContext("2d")!;
     const results: { ts: number; img: Blob }[] = [];
 
     for (const ts of timestamps) {
       const secs = ts / 1e6;
-      await new Promise<void>((res) => {
-        const timeout = setTimeout(res, 3000);
-        const onSeeked = () => {
-          clearTimeout(timeout);
-          v.removeEventListener("seeked", onSeeked);
-          res();
-        };
-        v.addEventListener("seeked", onSeeked);
-        v.currentTime = secs;
-      });
-
-      ctx.drawImage(v, 0, 0, width, height);
-      const blob = await new Promise<Blob | null>((res) =>
-        canvas.toBlob(res, "image/jpeg", 0.7)
-      );
-      if (blob) results.push({ ts, img: blob });
+      if (Math.abs(v.currentTime - secs) > 0.05) {
+        await new Promise<void>((res) => {
+          const timeout = setTimeout(res, 2000);
+          const onSeeked = () => { clearTimeout(timeout); v.removeEventListener("seeked", onSeeked); res(); };
+          v.addEventListener("seeked", onSeeked);
+          v.currentTime = secs;
+        });
+      }
+      try {
+        ctx.drawImage(v, 0, 0, width, h);
+        const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.7));
+        if (blob) results.push({ ts, img: blob });
+      } catch { /* canvas tainted — skip */ }
     }
 
     return results;
