@@ -97,7 +97,9 @@
 		"zustand": "^5.0.4"
 	},
 	"overrides": {
-		"@designcombo/transitions>remotion": "4.0.461"
+		"@designcombo/transitions": {
+			"remotion": "4.0.461"
+		}
 	},
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
