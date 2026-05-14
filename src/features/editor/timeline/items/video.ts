@@ -45,10 +45,20 @@ class CanvasVideoClip {
         this.video = v;
         resolve();
       };
+      const fail = () => {
+        if (resolved) return;
+        resolved = true;
+        resolve();
+      };
+      const timer = setTimeout(fail, 10000);
+      const finish = () => {
+        clearTimeout(timer);
+        done();
+      };
       v.onloadeddata = done;
-      v.oncanplay = done;
-      v.onerror = () => resolve();
-      setTimeout(resolve, 10000);
+      v.onloadedmetadata = finish;
+      v.oncanplay = finish;
+      v.onerror = fail;
       v.src = this.src;
       v.load();
     });

@@ -75,6 +75,56 @@ const PLATFORM_PRESETS: Record<string, {
   },
 };
 
+function buildSegmentArgs({
+  input,
+  output,
+  dur,
+  vf,
+  videoArgs,
+  includeSourceAudio = false,
+}: {
+  input: string;
+  output: string;
+  dur: number;
+  vf: string;
+  videoArgs: string[];
+  includeSourceAudio?: boolean;
+}) {
+  const isImage = /\.(jpg|jpeg|png|webp)$/i.test(input);
+  const base = isImage
+    ? ["-y", "-loop", "1", "-t", String(dur), "-i", input]
+    : ["-y", "-i", input];
+
+  if (includeSourceAudio && !isImage) {
+    return [
+      ...base,
+      "-vf", vf,
+      ...videoArgs,
+      "-c:a", "aac",
+      "-b:a", "128k",
+      "-ac", "2",
+      "-pix_fmt", "yuv420p",
+      "-shortest",
+      output,
+    ];
+  }
+
+  return [
+    ...base,
+    "-f", "lavfi", "-t", String(dur), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+    "-vf", vf,
+    ...videoArgs,
+    "-map", "0:v:0",
+    "-map", "1:a:0",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-ac", "2",
+    "-pix_fmt", "yuv420p",
+    "-shortest",
+    output,
+  ];
+}
+
 async function runExport(jobId: string, design: any, quality = "high", format = "mp4") {
   const exportsDir = path.join(process.cwd(), "public", "exports");
   const tmpDir = path.join(exportsDir, `tmp_${jobId}`);
@@ -101,7 +151,7 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
   jobs.set(jobId, { status: "PROCESSING", progress: 5 });
 
   // Download all sources to temp files
-  const tempFiles: string[] = [];
+  const tempFiles: { path: string; item: any }[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const src = item.details?.src || "";
@@ -113,7 +163,7 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
 
     try {
       await fetchToFile(src, tmpFile);
-      tempFiles.push(tmpFile);
+      tempFiles.push({ path: tmpFile, item });
     } catch (err) {
       console.error(`Skipping item ${i} (${src}): ${err}`);
     }
@@ -135,17 +185,17 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
   if (platformPreset) {
     const segFiles: string[] = [];
     for (let i = 0; i < tempFiles.length; i++) {
-      const f = tempFiles[i];
-      const item = items[i];
-      const isImage = /\.(jpg|jpeg|png|webp)$/i.test(f);
+      const f = tempFiles[i].path;
+      const item = tempFiles[i].item;
       const dur = ((item?.display?.to ?? 0) - (item?.display?.from ?? 0) || item?.duration || 5000) / 1000;
       const segPath = path.join(tmpDir, `seg_${i}.mp4`);
-      const args = isImage
-        ? ["-y", "-loop", "1", "-t", String(dur), "-i", f, "-vf", platformPreset.vf,
-           ...platformPreset.videoArgs, "-pix_fmt", "yuv420p", "-an", segPath]
-        : ["-y", "-i", f, "-vf", platformPreset.vf,
-           ...platformPreset.videoArgs, ...platformPreset.audioArgs,
-           "-pix_fmt", "yuv420p", segPath];
+      const args = buildSegmentArgs({
+        input: f,
+        output: segPath,
+        dur,
+        vf: platformPreset.vf,
+        videoArgs: platformPreset.videoArgs,
+      });
       await execFileAsync("ffmpeg", args);
       segFiles.push(segPath);
       jobs.set(jobId, { status: "PROCESSING", progress: Math.round(50 + (i / tempFiles.length) * 40) });
@@ -161,15 +211,15 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
         "-c", "copy", "-movflags", "+faststart", outputPath]);
     }
     jobs.set(jobId, { status: "COMPLETED", progress: 100, url: `/exports/${jobId}.mp4` });
-    for (const f of tempFiles) unlink(f).catch(() => {});
+    for (const f of tempFiles) unlink(f.path).catch(() => {});
     return;
   }
 
   if (tempFiles.length === 1) {
     // Single file — just re-encode to target size
-    const f = tempFiles[0];
+    const f = tempFiles[0].path;
     const isImage = /\.(jpg|jpeg|png|webp)$/i.test(f);
-    const dur = (items[0]?.duration || 5000) / 1000;
+    const dur = (tempFiles[0]?.item?.duration || 5000) / 1000;
 
     const args = isImage
       ? [
@@ -195,29 +245,18 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
     const segFiles: string[] = [];
 
     for (let i = 0; i < tempFiles.length; i++) {
-      const f = tempFiles[i];
-      const item = items[i];
-      const isImage = /\.(jpg|jpeg|png|webp)$/i.test(f);
+      const f = tempFiles[i].path;
+      const item = tempFiles[i].item;
       const dur = ((item?.display?.to ?? 0) - (item?.display?.from ?? 0) || item?.duration || 5000) / 1000;
       const segPath = path.join(tmpDir, `seg_${i}.mp4`);
 
-      const args = isImage
-        ? [
-            "-y",
-            "-loop", "1", "-t", String(dur), "-i", f,
-            "-vf", `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`,
-            "-c:v", "libx264", "-preset", preset, "-crf", crf,
-            "-pix_fmt", "yuv420p", "-an",
-            segPath,
-          ]
-        : [
-            "-y", "-i", f,
-            "-vf", `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`,
-            "-c:v", "libx264", "-preset", preset, "-crf", crf,
-            "-c:a", "aac", "-b:a", "192k", "-ac", "2",
-            "-pix_fmt", "yuv420p",
-            segPath,
-          ];
+      const args = buildSegmentArgs({
+        input: f,
+        output: segPath,
+        dur,
+        vf: `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`,
+        videoArgs: ["-c:v", "libx264", "-preset", preset, "-crf", crf],
+      });
 
       await execFileAsync("ffmpeg", args);
       segFiles.push(segPath);
@@ -244,6 +283,6 @@ async function runExport(jobId: string, design: any, quality = "high", format = 
 
   // Cleanup temp dir
   for (const f of [...tempFiles]) {
-    unlink(f).catch(() => {});
+    unlink(f.path).catch(() => {});
   }
 }

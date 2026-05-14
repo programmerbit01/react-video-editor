@@ -74,8 +74,14 @@ export const Uploads = () => {
       `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`
     );
     const data = await res.json();
-    const items = (data.items || []).map(toUploadItem);
-    setHasMore(data.hasMore ?? false);
+    const rawItems = data.items || [];
+    const items = rawItems.map(toUploadItem);
+    const explicitHasMore = data.hasMore ?? data.pagination?.hasMore;
+    const inferredHasMore =
+      typeof data.total === "number" && rawItems.length > 0
+        ? pageNum * rawItems.length < data.total
+        : rawItems.length > 0;
+    setHasMore(Boolean(explicitHasMore ?? inferredHasMore));
     setUploads((prev: any[]) => {
       const base = replace ? prev.filter((u: any) => !u.url?.includes("/api/proxy")) : prev;
       const existingUrls = new Set(base.map((u: any) => u.url));
