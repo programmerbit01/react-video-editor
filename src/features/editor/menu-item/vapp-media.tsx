@@ -2,11 +2,12 @@
 import React, { useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import useUploadStore from "../store/use-upload-store";
+import { useVappMediaStore } from "../store/use-vapp-media-store";
 
 export const VappMedia = () => {
   const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const { setUploads, uploads } = useUploadStore();
+  const { setUploads } = useUploadStore();
+  const { page, hasMore, setPage, setHasMore } = useVappMediaStore();
 
   const getParams = () => {
     if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
@@ -25,7 +26,6 @@ export const VappMedia = () => {
     );
     const data = await res.json();
     const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
-
     const items = (data.items || []).map((item: any) => {
       const proxied = proxyUrl(item.url);
       return {
@@ -38,38 +38,22 @@ export const VappMedia = () => {
         status: "uploaded",
       };
     });
-
-    const more = data.hasMore ?? false;
-
+    setHasMore(data.hasMore ?? false);
     setUploads((prev: any[]) => {
       const base = isRefresh ? [] : prev;
       const existingUrls = new Set(base.map((u: any) => u.url));
-      const newItems = items.filter((i: any) => !existingUrls.has(i.url));
-      return [...base, ...newItems];
+      return [...base, ...items.filter((i: any) => !existingUrls.has(i.url))];
     });
-
-    return more;
+    return data.hasMore ?? false;
   };
 
   const load = async () => {
     setLoading(true);
     try {
-      let currentPage = 1;
-      let more = true;
-      // first page resets list
-      more = await fetchPage(1, true);
-      currentPage = 1;
-      // keep fetching until no more pages
-      while (more) {
-        currentPage++;
-        more = await fetchPage(currentPage);
-      }
-      setLoaded(true);
-    } catch {
-      // silent
-    } finally {
-      setLoading(false);
-    }
+      await fetchPage(1, true);
+      setPage(1);
+    } catch {}
+    finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
@@ -85,9 +69,7 @@ export const VappMedia = () => {
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3">
-      <p className="text-xs text-muted-foreground">
-        {loaded ? "Vapp media loaded in Uploads ✓" : "No media found"}
-      </p>
+      <p className="text-xs text-muted-foreground">Vapp media loaded in Uploads ✓</p>
       <button
         onClick={load}
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-white transition-colors border border-border/40 px-3 py-1.5 rounded-md"

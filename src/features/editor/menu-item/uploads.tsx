@@ -7,6 +7,7 @@ import useUploadStore from "../store/use-upload-store";
 import useLayoutStore from "../store/use-layout-store";
 import ModalUpload from "@/components/modal-upload";
 import { useState } from "react";
+import { useVappMediaStore } from "../store/use-vapp-media-store";
 
 const getLabel = (item: any) =>
   item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
@@ -76,7 +77,51 @@ async function loadVappMedia(
 
 export const Uploads = () => {
   const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads } = useUploadStore();
+  const { page, hasMore, loadingMore, setPage, setHasMore, setLoadingMore } = useVappMediaStore();
   const [refreshing, setRefreshing] = useState(false);
+
+  const getVappParams = () => {
+    if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
+    const p = new URLSearchParams(window.location.search);
+    return {
+      vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
+      token: p.get("token") || "",
+      baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
+    };
+  };
+
+  const fetchVappPage = async (pageNum: number) => {
+    const { vappHost, token, baseUrl } = getVappParams();
+    const res = await fetch(
+      `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`
+    );
+    const data = await res.json();
+    const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
+    const items = (data.items || []).map((item: any) => {
+      const proxied = proxyUrl(item.url);
+      return {
+        id: Math.random().toString(36).slice(2),
+        url: proxied,
+        filePath: proxied,
+        fileName: item.name || item.url.split("/").pop()?.split("?")[0] || "media",
+        type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
+        metadata: { uploadedUrl: proxied },
+        status: "uploaded",
+      };
+    });
+    setHasMore(data.hasMore ?? false);
+    setUploads((prev: any[]) => {
+      const existingUrls = new Set(prev.map((u: any) => u.url));
+      return [...prev, ...items.filter((i: any) => !existingUrls.has(i.url))];
+    });
+    setPage(pageNum);
+  };
+
+  const handleLoadMore = async () => {
+    setLoadingMore(true);
+    try { await fetchVappPage(page + 1); } catch {}
+    finally { setLoadingMore(false); }
+  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -183,7 +228,7 @@ export const Uploads = () => {
       )}
 
       {uploads.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 px-4 pb-4">
+        <div className="grid grid-cols-3 gap-2 px-4 pb-2">
           {uploads.map((item, idx) => (
             <div key={item.id || idx} className="flex flex-col gap-1 items-center">
               <div
@@ -197,6 +242,20 @@ export const Uploads = () => {
               </span>
             </div>
           ))}
+        </div>
+      )}
+
+      {hasMore && (
+        <div className="px-4 pb-4 pt-1">
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            Load more
+          </Button>
         </div>
       )}
     </div>
