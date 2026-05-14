@@ -73,12 +73,6 @@ const MENU_ITEMS = [
     label: "SFX",
     ariaLabel: "Generate SFX from text"
   },
-  {
-    id: "vapp",
-    icon: Icons.smart,
-    label: "Vapp",
-    ariaLabel: "Your Vapp generated media"
-  }
 ] as const;
 
 // Memoized menu button component for better performance
