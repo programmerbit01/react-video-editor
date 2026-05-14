@@ -35,10 +35,13 @@ class CanvasVideoClip {
     return new Promise((resolve) => {
       const v = document.createElement("video");
       v.crossOrigin = "anonymous";
-      v.preload = "metadata";
+      v.preload = "auto";
       v.muted = true;
-      v.onloadedmetadata = () => { this.video = v; resolve(); };
-      v.onerror = () => resolve(); // resolve anyway so callers don't hang
+      const done = () => { this.video = v; resolve(); };
+      v.onloadeddata = done;
+      v.onloadedmetadata = done;
+      v.onerror = () => resolve();
+      setTimeout(resolve, 8000); // max wait
       v.src = this.src;
       v.load();
     });
@@ -62,7 +65,12 @@ class CanvasVideoClip {
     for (const ts of timestamps) {
       const secs = ts / 1e6;
       await new Promise<void>((res) => {
-        const onSeeked = () => { v.removeEventListener("seeked", onSeeked); res(); };
+        const timeout = setTimeout(res, 3000);
+        const onSeeked = () => {
+          clearTimeout(timeout);
+          v.removeEventListener("seeked", onSeeked);
+          res();
+        };
         v.addEventListener("seeked", onSeeked);
         v.currentTime = secs;
       });
