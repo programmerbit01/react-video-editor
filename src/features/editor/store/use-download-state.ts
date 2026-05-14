@@ -62,7 +62,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
     startExport: async () => {
       try {
         set({ exporting: true, displayProgressModal: true });
-        const { payload, exportQuality, exportResolution } = get();
+        const { payload, exportQuality, exportResolution, exportType } = get();
         const res = RESOLUTION_MAP[exportResolution] ?? RESOLUTION_MAP["1080p"];
         if (!payload) throw new Error("Payload is not defined");
 
