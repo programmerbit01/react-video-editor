@@ -20,6 +20,65 @@ import { SECONDARY_FONT } from "../../constants/constants";
 // Type declaration for MP4Clip to avoid SSR issues
 type MP4ClipType = any;
 
+// Canvas-based thumbnail extractor — fallback when OPFS (MP4Clip) is unavailable (HTTP context).
+// Works with proxied URLs that return Access-Control-Allow-Origin: *.
+class CanvasVideoClip {
+  private src: string;
+  private video: HTMLVideoElement | null = null;
+  private ready: Promise<void>;
+
+  constructor(src: string) {
+    this.src = src;
+    this.ready = this.init();
+  }
+
+  private init(): Promise<void> {
+    return new Promise((resolve) => {
+      const v = document.createElement("video");
+      v.crossOrigin = "anonymous";
+      v.preload = "metadata";
+      v.muted = true;
+      v.onloadedmetadata = () => { this.video = v; resolve(); };
+      v.onerror = () => resolve(); // resolve anyway so callers don't hang
+      v.src = this.src;
+      v.load();
+    });
+  }
+
+  async thumbnailsList(
+    width: number,
+    { timestamps }: { timestamps: number[] }
+  ): Promise<{ ts: number; img: Blob }[]> {
+    await this.ready;
+    if (!this.video) return [];
+
+    const v = this.video;
+    const height = 40;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    const results: { ts: number; img: Blob }[] = [];
+
+    for (const ts of timestamps) {
+      const secs = ts / 1e6;
+      await new Promise<void>((res) => {
+        const onSeeked = () => { v.removeEventListener("seeked", onSeeked); res(); };
+        v.addEventListener("seeked", onSeeked);
+        v.currentTime = secs;
+      });
+
+      ctx.drawImage(v, 0, 0, width, height);
+      const blob = await new Promise<Blob | null>((res) =>
+        canvas.toBlob(res, "image/jpeg", 0.7)
+      );
+      if (blob) results.push({ ts, img: blob });
+    }
+
+    return results;
+  }
+}
+
 const EMPTY_FILMSTRIP: Filmstrip = {
   offset: 0,
   startTime: 0,
@@ -151,22 +210,25 @@ class Video extends Trimmable {
   }
 
   public async prepareAssets() {
-    const file = await getFileFromUrl(this.src);
-    const stream = file.stream();
+    const isSecure =
+      typeof window !== "undefined" &&
+      (window.isSecureContext || window.location.hostname === "localhost");
 
-    // Dynamically import MP4Clip only on the client side
-    if (typeof window !== "undefined") {
+    if (isSecure) {
       try {
+        const file = await getFileFromUrl(this.src);
+        const stream = file.stream();
         const { MP4Clip } = await import("@designcombo/frames");
         this.clip = new MP4Clip(stream);
-      } catch (error) {
-        console.warn("Failed to load MP4Clip:", error);
-        this.clip = null;
+        return;
+      } catch {
+        // fall through to canvas-based fallback
       }
-    } else {
-      // Server-side rendering - skip MP4Clip initialization
-      this.clip = null;
     }
+
+    // Canvas-based fallback: works on HTTP without OPFS.
+    // Proxy URLs already include CORS headers so canvas won't be tainted.
+    this.clip = new CanvasVideoClip(this.src);
   }
 
   private calculateFilmstripDimensions({

@@ -23,24 +23,12 @@ export class AudioDataManager {
 
   private async loadAudioData(src: string, id: string): Promise<void> {
     try {
-      console.log("Loading audio data for", src);
       const data = await getAudioData(src);
-      this.audioDatas[id] = {
-        data,
-        lastAccessed: Date.now()
-      };
+      this.audioDatas[id] = { data, lastAccessed: Date.now() };
       this.cleanupCache();
-    } catch (error) {
-      console.error(`Error loading audio data for ${src}:`, error);
-
-      // If it's an EncodingError (no audio track), just ignore it
-      if (error instanceof Error && error.name === "EncodingError") {
-        console.log(`No audio track found for ${src}, ignoring`);
-        return;
-      }
-
-      // For other errors, still throw them
-      throw error;
+    } catch {
+      // Ignore all audio loading failures — CORS, no audio track, network errors.
+      // Audio waveform visualization is non-critical.
     }
   }
 

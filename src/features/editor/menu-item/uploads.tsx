@@ -1,248 +1,204 @@
 import { ADD_AUDIO, ADD_IMAGE, ADD_VIDEO } from "@designcombo/state";
 import { dispatch } from "@designcombo/events";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card } from "@/components/ui/card";
-import {
-  Music,
-  Image as ImageIcon,
-  Video as VideoIcon,
-  Loader2,
-  UploadIcon,
-  Upload
-} from "lucide-react";
+import { Music, Loader2, UploadIcon, Upload, RefreshCw } from "lucide-react";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
+import useLayoutStore from "../store/use-layout-store";
 import ModalUpload from "@/components/modal-upload";
+import { useState } from "react";
+
+const getLabel = (item: any) =>
+  item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
+
+const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
+const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
+
+const Thumb = ({ item }: { item: any }) => {
+  const src = item.metadata?.uploadedUrl || item.url;
+  if (isAudio(item)) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-white/5">
+        <Music className="w-6 h-6 text-muted-foreground" />
+      </div>
+    );
+  }
+  if (isVideo(item)) {
+    return (
+      <video
+        src={src}
+        className="w-full h-full object-cover"
+        muted
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={(e) => { (e.currentTarget as HTMLVideoElement).currentTime = 0.5; }}
+      />
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} className="w-full h-full object-cover" alt="" loading="lazy" />;
+};
+
+async function loadVappMedia(
+  setUploads: (fn: (prev: any[]) => any[]) => void,
+): Promise<void> {
+  if (typeof window === "undefined") return;
+  const p = new URLSearchParams(window.location.search);
+  const vappHost = p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}:3000`;
+  const token = p.get("token") || "";
+  const baseUrl = p.get("baseUrl") || "https://api.muapi.ai";
+
+  const res = await fetch(
+    `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
+  );
+  const data = await res.json();
+  const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
+
+  const items = (data.items || []).map((item: any) => {
+    const proxied = proxyUrl(item.url);
+    return {
+      id: Math.random().toString(36).slice(2),
+      url: proxied,
+      filePath: proxied,
+      fileName: item.name || item.url.split("/").pop()?.split("?")[0] || "media",
+      type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
+      metadata: { uploadedUrl: proxied },
+      status: "uploaded",
+    };
+  });
+
+  setUploads((prev: any[]) => {
+    // Replace all vapp items with fresh ones (identified by proxy URL pattern)
+    const nonVapp = prev.filter((u: any) => !u.url?.includes("/api/proxy"));
+    return [...nonVapp, ...items];
+  });
+}
 
 export const Uploads = () => {
-  const { setShowUploadModal, uploads, pendingUploads, activeUploads } =
-    useUploadStore();
+  const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads } = useUploadStore();
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Group completed uploads by type
-  const videos = uploads.filter(
-    (upload) => upload.type?.startsWith("video/") || upload.type === "video"
-  );
-  const images = uploads.filter(
-    (upload) => upload.type?.startsWith("image/") || upload.type === "image"
-  );
-  const audios = uploads.filter(
-    (upload) => upload.type?.startsWith("audio/") || upload.type === "audio"
-  );
-
-  const handleAddVideo = (video: any) => {
-    const srcVideo = video.metadata?.uploadedUrl || video.url;
-
-    dispatch(ADD_VIDEO, {
-      payload: {
-        id: generateId(),
-        details: {
-          src: srcVideo
-        },
-        metadata: {
-          previewUrl: ""
-        }
-      },
-      options: {
-        resourceId: "main",
-        scaleMode: "fit"
-      }
-    });
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try { await loadVappMedia(setUploads); } catch {}
+    setRefreshing(false);
   };
 
-  const handleAddImage = (image: any) => {
-    const srcImage = image.metadata?.uploadedUrl || image.url;
+  const handleAdd = async (item: any) => {
+    const src = item.metadata?.uploadedUrl || item.url;
 
+    if (isAudio(item)) {
+      dispatch(ADD_AUDIO, {
+        payload: { id: generateId(), type: "audio", details: { src }, metadata: {} },
+        options: {},
+      });
+      return;
+    }
+
+    if (isVideo(item)) {
+      let duration = 10000, width = 1920, height = 1080;
+      try {
+        const meta = await new Promise<{ duration: number; width: number; height: number }>(
+          (resolve, reject) => {
+            const el = document.createElement("video");
+            el.preload = "metadata";
+            el.onloadedmetadata = () => resolve({
+              duration: Math.round(el.duration * 1000) || 10000,
+              width: el.videoWidth || 1920,
+              height: el.videoHeight || 1080,
+            });
+            el.onerror = reject;
+            el.src = src;
+            el.load();
+          }
+        );
+        duration = meta.duration; width = meta.width; height = meta.height;
+      } catch {}
+      dispatch(ADD_VIDEO, {
+        payload: { id: generateId(), duration, details: { src, width, height }, metadata: { previewUrl: "" } },
+        options: { resourceId: "main", scaleMode: "fit" },
+      });
+      return;
+    }
+
+    // image
+    let width = 1920, height = 1080;
+    try {
+      const meta = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth || 1920, height: img.naturalHeight || 1080 });
+        img.onerror = reject;
+        img.src = src;
+      });
+      width = meta.width; height = meta.height;
+    } catch {}
     dispatch(ADD_IMAGE, {
-      payload: {
-        id: generateId(),
-        type: "image",
-        display: {
-          from: 0,
-          to: 5000
-        },
-        details: {
-          src: srcImage
-        },
-        metadata: {}
-      },
-      options: {}
+      payload: { id: generateId(), type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: {} },
+      options: {},
     });
   };
 
-  const handleAddAudio = (audio: any) => {
-    const srcAudio = audio.metadata?.uploadedUrl || audio.url;
-    dispatch(ADD_AUDIO, {
-      payload: {
-        id: generateId(),
-        type: "audio",
-        details: {
-          src: srcAudio
-        },
-        metadata: {}
-      },
-      options: {}
-    });
-  };
+  const hasItems = uploads.length > 0 || pendingUploads.length > 0 || activeUploads.length > 0;
 
-  const UploadPrompt = () => (
-    <div className="flex items-center justify-center p-4">
-      <Button
-        className="w-full cursor-pointer"
-        onClick={() => setShowUploadModal(true)}
-        variant={"outline"}
-      >
-        <UploadIcon className="w-4 h-4" />
-        <span className="ml-2">Upload</span>
-      </Button>
-    </div>
-  );
-
-  const noUploads =
-    pendingUploads.length === 0 &&
-    activeUploads.length === 0 &&
-    videos.length === 0 &&
-    images.length === 0 &&
-    audios.length === 0;
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col min-h-0 overflow-y-auto">
       <ModalUpload />
-      <UploadPrompt />
 
-      {noUploads && (
+      <div className="p-4 flex gap-2">
+        <Button className="flex-1 cursor-pointer" onClick={() => setShowUploadModal(true)} variant="outline">
+          <UploadIcon className="w-4 h-4" />
+          <span className="ml-2">Upload</span>
+        </Button>
+        <Button
+          variant="outline"
+          className="cursor-pointer px-3"
+          onClick={handleRefresh}
+          title="Refresh Vapp media"
+          disabled={refreshing}
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+        </Button>
+      </div>
+
+      {!hasItems && (
         <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
           <Upload size={32} className="opacity-50" />
-          <span className="text-sm">
-            {uploads.length === 0 ? "No uploads yet" : "No matches found"}
-          </span>
+          <span className="text-sm">No uploads yet</span>
         </div>
       )}
 
-      {/* Uploads in Progress Section */}
       {(pendingUploads.length > 0 || activeUploads.length > 0) && (
-        <div className="p-4">
+        <div className="px-4 pb-2">
           <div className="font-medium text-sm mb-2 flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-            Uploads in Progress
+            Uploading…
           </div>
-          <div className="flex flex-col gap-2">
-            {pendingUploads.map((upload) => (
-              <div key={upload.id} className="flex items-center gap-2">
-                <span className="truncate text-xs flex-1">
-                  {upload.file?.name || upload.url || "Unknown"}
-                </span>
-                <span className="text-xs text-muted-foreground">Pending</span>
-              </div>
-            ))}
-            {activeUploads.map((upload) => (
-              <div key={upload.id} className="flex items-center gap-2">
-                <span className="truncate text-xs flex-1">
-                  {upload.file?.name || upload.url || "Unknown"}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                  <span className="text-xs">{upload.progress ?? 0}%</span>
-                  <span className="text-xs text-muted-foreground ml-2">
-                    {upload.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+          {[...pendingUploads, ...activeUploads].map((u) => (
+            <div key={u.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="truncate flex-1">{u.file?.name || "…"}</span>
+              <span>{u.progress ?? 0}%</span>
+            </div>
+          ))}
         </div>
       )}
 
-      <div className="flex flex-col gap-10 p-4">
-        {/* Videos Section */}
-        {videos.length > 0 && (
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <VideoIcon className="w-4 h-4 text-muted-foreground" />
-              <span className="font-medium text-sm">Videos</span>
-            </div>
-            <ScrollArea className="max-h-32">
-              <div className="grid grid-cols-3 gap-2 max-w-full">
-                {videos.map((video, idx) => (
-                  <div
-                    className="flex items-center gap-2 flex-col w-full"
-                    key={video.id || idx}
-                  >
-                    <Card
-                      className="w-16 h-16 flex items-center justify-center overflow-hidden relative cursor-pointer"
-                      onClick={() => handleAddVideo(video)}
-                    >
-                      <VideoIcon className="w-8 h-8 text-muted-foreground" />
-                    </Card>
-                    <div className="text-xs text-muted-foreground truncate w-full text-center">
-                      {video.file?.name || video.url || "Video"}
-                    </div>
-                  </div>
-                ))}
+      {uploads.length > 0 && (
+        <div className="grid grid-cols-3 gap-2 px-4 pb-4">
+          {uploads.map((item, idx) => (
+            <div key={item.id || idx} className="flex flex-col gap-1 items-center">
+              <div
+                className="w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
+                onClick={() => handleAdd(item)}
+              >
+                <Thumb item={item} />
               </div>
-            </ScrollArea>
-          </div>
-        )}
-
-        {/* Images Section */}
-        {images.length > 0 && (
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <ImageIcon className="w-4 h-4 text-muted-foreground" />
-              <span className="font-medium text-sm">Images</span>
+              <span className="text-xs text-muted-foreground truncate w-full text-center">
+                {getLabel(item)}
+              </span>
             </div>
-            <ScrollArea className="max-h-32">
-              <div className="grid grid-cols-3 gap-2 max-w-full">
-                {images.map((image, idx) => (
-                  <div
-                    className="flex items-center gap-2 flex-col w-full"
-                    key={image.id || idx}
-                  >
-                    <Card
-                      className="w-16 h-16 flex items-center justify-center overflow-hidden relative cursor-pointer"
-                      onClick={() => handleAddImage(image)}
-                    >
-                      <ImageIcon className="w-8 h-8 text-muted-foreground" />
-                    </Card>
-                    <div className="text-xs text-muted-foreground truncate w-full text-center">
-                      {image.file?.name || image.url || "Image"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
-        )}
-
-        {/* Audios Section */}
-        {audios.length > 0 && (
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Music className="w-4 h-4 text-muted-foreground" />
-              <span className="font-medium text-sm">Audios</span>
-            </div>
-            <ScrollArea className="max-h-32">
-              <div className="grid grid-cols-3 gap-2 max-w-full">
-                {audios.map((audio, idx) => (
-                  <div
-                    className="flex items-center gap-2 flex-col w-full"
-                    key={audio.id || idx}
-                  >
-                    <Card
-                      className="w-16 h-16 flex items-center justify-center overflow-hidden relative cursor-pointer"
-                      onClick={() => handleAddAudio(audio)}
-                    >
-                      <Music className="w-8 h-8 text-muted-foreground" />
-                    </Card>
-                    <div className="text-xs text-muted-foreground truncate w-full text-center">
-                      {audio.file?.name || audio.url || "Audio"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

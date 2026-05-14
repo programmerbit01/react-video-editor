@@ -139,12 +139,6 @@ export default function Navbar({
           >
             <Keyboard className="size-5" />
           </Button>
-          <Link href="https://discord.gg/Jmxsd5f2jp" target="_blank">
-            <Button className="h-8 rounded-lg" variant={"outline"}>
-              <LogoIcons.discord className="w-6 h-6" />
-              <span className="hidden md:block">Join Us</span>
-            </Button>
-          </Link>
           <ModeToggle />
 
           {/* <Button
@@ -167,10 +161,31 @@ export default function Navbar({
   );
 }
 
+const EXPORT_TYPE_LABELS: Record<string, string> = {
+  "mp4":            "MP4 — Custom quality",
+  "fb-whatsapp":    "WhatsApp / FB  (480×896, 1.3Mbps)",
+  "fb-web-highres": "FB Web High-res  (680×1274, 2.2Mbps)",
+  "json":           "JSON (project file)",
+};
+
+const QUALITY_LABELS = {
+  high:   "High — CRF 18 (near-lossless)",
+  medium: "Medium — CRF 23",
+  low:    "Low — CRF 28 (fast, small file)",
+};
+const RESOLUTION_LABELS = {
+  "1080p": "1080p  (1080 × 1920)",
+  "720p":  "720p   (720 × 1280)",
+  "540p":  "540p   (540 × 960)",
+  "2k":    "2K     (1440 × 2560)",
+};
+
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const isMediumScreen = useIsMediumScreen();
-  const { actions, exportType } = useDownloadState();
+  const { actions, exportType, exportQuality, exportResolution } = useDownloadState();
   const [isExportTypeOpen, setIsExportTypeOpen] = useState(false);
+  const [isQualityOpen, setIsQualityOpen] = useState(false);
+  const [isResolutionOpen, setIsResolutionOpen] = useState(false);
   const [open, setOpen] = useState(false);
 
   const handleExport = () => {
@@ -205,29 +220,60 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
         <Popover open={isExportTypeOpen} onOpenChange={setIsExportTypeOpen}>
           <PopoverTrigger asChild>
             <Button className="w-full justify-between" variant="outline">
-              <div>{exportType.toUpperCase()}</div>
+              <div className="text-sm truncate">{EXPORT_TYPE_LABELS[exportType] ?? exportType.toUpperCase()}</div>
+              <ChevronDown width={16} className="shrink-0" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="bg-background z-[251] w-[--radix-popover-trigger-width] px-2 py-2">
+            {(Object.entries(EXPORT_TYPE_LABELS) as [string, string][]).map(([val, label]) => (
+              <div
+                key={val}
+                className="flex min-h-7 items-center rounded-sm px-3 py-1 text-sm hover:cursor-pointer hover:bg-zinc-800"
+                onClick={() => { actions.setExportType(val as any); setIsExportTypeOpen(false); }}
+              >
+                {label}
+              </div>
+            ))}
+          </PopoverContent>
+        </Popover>
+
+        <Popover open={isResolutionOpen} onOpenChange={setIsResolutionOpen}>
+          <PopoverTrigger asChild>
+            <Button className="w-full justify-between" variant="outline">
+              <div className="text-sm font-mono">{RESOLUTION_LABELS[exportResolution]}</div>
               <ChevronDown width={16} />
             </Button>
           </PopoverTrigger>
           <PopoverContent className="bg-background z-[251] w-[--radix-popover-trigger-width] px-2 py-2">
-            <div
-              className="flex h-7 items-center rounded-sm px-3 text-sm hover:cursor-pointer hover:bg-zinc-800"
-              onClick={() => {
-                actions.setExportType("mp4");
-                setIsExportTypeOpen(false);
-              }}
-            >
-              MP4
-            </div>
-            <div
-              className="flex h-7 items-center rounded-sm px-3 text-sm hover:cursor-pointer hover:bg-zinc-800"
-              onClick={() => {
-                actions.setExportType("json");
-                setIsExportTypeOpen(false);
-              }}
-            >
-              JSON
-            </div>
+            {(Object.keys(RESOLUTION_LABELS) as (keyof typeof RESOLUTION_LABELS)[]).map((r) => (
+              <div
+                key={r}
+                className="flex h-7 items-center rounded-sm px-3 text-sm font-mono hover:cursor-pointer hover:bg-zinc-800"
+                onClick={() => { actions.setExportResolution(r); setIsResolutionOpen(false); }}
+              >
+                {RESOLUTION_LABELS[r]}
+              </div>
+            ))}
+          </PopoverContent>
+        </Popover>
+
+        <Popover open={isQualityOpen} onOpenChange={setIsQualityOpen}>
+          <PopoverTrigger asChild>
+            <Button className="w-full justify-between" variant="outline">
+              <div className="text-sm">{QUALITY_LABELS[exportQuality]}</div>
+              <ChevronDown width={16} />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="bg-background z-[251] w-[--radix-popover-trigger-width] px-2 py-2">
+            {(["high", "medium", "low"] as const).map((q) => (
+              <div
+                key={q}
+                className="flex h-7 items-center rounded-sm px-3 text-sm hover:cursor-pointer hover:bg-zinc-800"
+                onClick={() => { actions.setExportQuality(q); setIsQualityOpen(false); }}
+              >
+                {QUALITY_LABELS[q]}
+              </div>
+            ))}
           </PopoverContent>
         </Popover>
 

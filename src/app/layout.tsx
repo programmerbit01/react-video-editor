@@ -1,4 +1,4 @@
-import { Geist_Mono, Geist } from "next/font/google";
+import { Geist_Mono, Geist, Outfit } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { baseUrl, createMetadata } from "@/utils/metadata";
 import {
@@ -6,8 +6,6 @@ import {
   BackgroundUploadRunner,
 } from "@/components/store-initializer";
 import { QueryProvider } from "@/components/query-provider";
-import { Analytics } from "@vercel/analytics/react";
-import { Outfit } from "next/font/google";
 
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -50,8 +48,8 @@ export default async function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="light"
-          enableSystem
+          defaultTheme="dark"
+          enableSystem={false}
           disableTransitionOnChange
         >
           <QueryProvider>
@@ -60,7 +58,6 @@ export default async function RootLayout({
             <BackgroundUploadRunner />
             <Toaster />
           </QueryProvider>
-          <Analytics />
         </ThemeProvider>
       </body>
     </html>

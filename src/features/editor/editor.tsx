@@ -31,12 +31,21 @@ import ControlItemHorizontal from "./control-item-horizontal";
 import { design } from "./mock";
 import { Separator } from "@/components/ui/separator";
 
-const stateManager = new StateManager({
-  size: {
-    width: 1080,
-    height: 1920,
+const stateManager = new StateManager(
+  {
+    size: {
+      width: 1080,
+      height: 1920,
+    },
   },
-});
+  {
+    cors: {
+      video: false,
+      image: false,
+      audio: false,
+    },
+  }
+);
 
 const SceneContainer = ({
   sceneRef,
