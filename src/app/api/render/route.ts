@@ -47,9 +47,11 @@ export async function GET(request: Request) {
 }
 
 async function fetchToFile(url: string, dest: string): Promise<void> {
-  const internalOrigin = process.env.EDITOR_INTERNAL_ORIGIN || "http://127.0.0.1:3001";
+  const internalOrigin =
+    process.env.EDITOR_INTERNAL_ORIGIN || "http://127.0.0.1:3001/editor";
+  const normalizedOrigin = internalOrigin.replace(/\/$/, "");
   const sourceUrl = url.startsWith("/api/")
-    ? `${internalOrigin}${url}`
+    ? `${normalizedOrigin}${url}`
     : url;
 
   if (sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")) {
