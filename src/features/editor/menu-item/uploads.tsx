@@ -94,9 +94,9 @@ export const Uploads = () => {
       const base = replace ? prev.filter((u: any) => !isVappProxyItem(u)) : prev;
       const existingUrls = new Set(base.map((u: any) => u.url));
       const merged = [...base, ...items.filter((i: any) => !existingUrls.has(i.url))];
-      const vappItems = merged.filter((u: any) => isVappProxyItem(u));
       const localItems = merged.filter((u: any) => !isVappProxyItem(u));
-      return [...vappItems, ...localItems];
+      const vappItems = merged.filter((u: any) => isVappProxyItem(u));
+      return [...localItems, ...vappItems];
     });
     setPage(pageNum);
   };
@@ -174,6 +174,8 @@ export const Uploads = () => {
   };
 
   const hasItems = uploads.length > 0 || pendingUploads.length > 0 || activeUploads.length > 0;
+  const localUploads = uploads.filter((u: any) => !isVappProxyItem(u));
+  const vappUploads = uploads.filter((u: any) => isVappProxyItem(u));
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-y-auto">
@@ -218,20 +220,46 @@ export const Uploads = () => {
       )}
 
       {uploads.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 px-4 pb-2">
-          {uploads.map((item, idx) => (
-            <div key={item.id || idx} className="flex flex-col gap-1 items-center">
-              <div
-                className="w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
-                onClick={() => handleAdd(item)}
-              >
-                <Thumb item={item} />
-              </div>
-              <span className="text-xs text-muted-foreground truncate w-full text-center">
-                {getLabel(item)}
-              </span>
+        <div className="px-4 pb-2">
+          {localUploads.length > 0 && (
+            <div className="grid grid-cols-3 gap-2">
+              {localUploads.map((item, idx) => (
+                <div key={item.id || `local-${idx}`} className="flex flex-col gap-1 items-center">
+                  <div
+                    className="w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
+                    onClick={() => handleAdd(item)}
+                  >
+                    <Thumb item={item} />
+                  </div>
+                  <span className="text-xs text-muted-foreground truncate w-full text-center">
+                    {getLabel(item)}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+
+          {localUploads.length > 0 && vappUploads.length > 0 && (
+            <div className="my-3 border-t border-white/10" />
+          )}
+
+          {vappUploads.length > 0 && (
+            <div className="grid grid-cols-3 gap-2">
+              {vappUploads.map((item, idx) => (
+                <div key={item.id || `vapp-${idx}`} className="flex flex-col gap-1 items-center">
+                  <div
+                    className="w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
+                    onClick={() => handleAdd(item)}
+                  >
+                    <Thumb item={item} />
+                  </div>
+                  <span className="text-xs text-muted-foreground truncate w-full text-center">
+                    {getLabel(item)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
