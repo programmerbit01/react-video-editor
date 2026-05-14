@@ -84,7 +84,7 @@ class CanvasVideoClip {
       const secs = ts / 1e6;
       if (Math.abs(v.currentTime - secs) > 0.05) {
         await new Promise<void>((res) => {
-          const timeout = setTimeout(res, 2000);
+          const timeout = setTimeout(res, 6000);
           const onSeeked = () => { clearTimeout(timeout); v.removeEventListener("seeked", onSeeked); res(); };
           v.addEventListener("seeked", onSeeked);
           v.currentTime = secs;
@@ -96,6 +96,18 @@ class CanvasVideoClip {
         const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.7));
         if (blob) results.push({ ts, img: blob });
       } catch { /* canvas tainted — skip */ }
+    }
+
+    // Some remote MP4s don't support fast/random seeking reliably.
+    // If extraction failed, provide at least one reusable frame.
+    if (results.length === 0 && timestamps.length > 0) {
+      try {
+        ctx.drawImage(v, 0, 0, width, h);
+        const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.7));
+        if (blob) {
+          return timestamps.map((ts) => ({ ts, img: blob }));
+        }
+      } catch { /* ignore */ }
     }
 
     return results;
@@ -277,7 +289,10 @@ class Video extends Trimmable {
   // load fallback thumbnail, resize it and cache it
   private async loadFallbackThumbnail() {
     const fallbackThumbnail = this.previewUrl;
-    if (!fallbackThumbnail) return;
+    if (!fallbackThumbnail) {
+      await this.loadFallbackFromVideoFrame();
+      return;
+    }
 
     return new Promise<void>((resolve) => {
       const img = new Image();
@@ -287,7 +302,7 @@ class Video extends Trimmable {
         // Create a temporary canvas to resize the image
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d");
-        if (!ctx) return;
+        if (!ctx) return resolve();
 
         // Calculate new width maintaining aspect ratio
         const aspectRatio = img.width / img.height;
@@ -307,6 +322,50 @@ class Video extends Trimmable {
         this.thumbnailCache.setThumbnail("fallback", resizedImg);
         resolve();
       };
+      img.onerror = () => resolve();
+    });
+  }
+
+  private async loadFallbackFromVideoFrame() {
+    return new Promise<void>((resolve) => {
+      const v = document.createElement("video");
+      v.crossOrigin = "anonymous";
+      v.preload = "metadata";
+      v.muted = true;
+      v.playsInline = true;
+      const finish = () => resolve();
+      const timer = setTimeout(finish, 6000);
+      v.onloadeddata = () => {
+        try {
+          const w = v.videoWidth || 0;
+          const h = v.videoHeight || 0;
+          if (!w || !h) return finish();
+          const aspectRatio = w / h;
+          const targetHeight = 40;
+          const targetWidth = Math.max(1, Math.round(targetHeight * aspectRatio));
+          const canvas = document.createElement("canvas");
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return finish();
+          ctx.drawImage(v, 0, 0, targetWidth, targetHeight);
+          const img = new Image();
+          img.onload = () => {
+            this.aspectRatio = aspectRatio;
+            this.thumbnailWidth = targetWidth;
+            this.thumbnailCache.setThumbnail("fallback", img);
+            clearTimeout(timer);
+            finish();
+          };
+          img.onerror = finish;
+          img.src = canvas.toDataURL("image/jpeg", 0.7);
+        } catch {
+          finish();
+        }
+      };
+      v.onerror = finish;
+      v.src = this.src;
+      v.load();
     });
   }
 

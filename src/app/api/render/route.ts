@@ -4,6 +4,9 @@ import { promisify } from "util";
 import { writeFile, mkdir, unlink, readFile } from "fs/promises";
 import path from "path";
 import { randomBytes } from "crypto";
+import { createWriteStream } from "fs";
+import { pipeline } from "stream/promises";
+import { Readable } from "stream";
 import { jobs } from "./jobs";
 
 const execFileAsync = promisify(execFile);
@@ -38,19 +41,39 @@ export async function GET(request: Request) {
 }
 
 async function fetchToFile(url: string, dest: string): Promise<void> {
-  if (url.startsWith("http://") || url.startsWith("https://")) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Failed to download ${url}: ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    await writeFile(dest, buf);
-  } else {
-    // local path under public/
-    const localPath = url.startsWith("/")
-      ? path.join(process.cwd(), "public", url)
-      : url;
-    const buf = await readFile(localPath);
-    await writeFile(dest, buf);
+  const internalOrigin = process.env.EDITOR_INTERNAL_ORIGIN || "http://127.0.0.1:3001";
+  const sourceUrl = url.startsWith("/api/")
+    ? `${internalOrigin}${url}`
+    : url;
+
+  if (sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")) {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      try {
+        const res = await fetch(sourceUrl, { signal: controller.signal });
+        if (!res.ok || !res.body) {
+          throw new Error(`Failed to download ${sourceUrl}: ${res.status}`);
+        }
+        const writer = createWriteStream(dest);
+        await pipeline(Readable.fromWeb(res.body as any), writer);
+        clearTimeout(timeout);
+        return;
+      } catch (err) {
+        clearTimeout(timeout);
+        lastError = err;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("download failed");
   }
+
+  // local path under public/
+  const localPath = sourceUrl.startsWith("/")
+    ? path.join(process.cwd(), "public", sourceUrl)
+    : sourceUrl;
+  const buf = await readFile(localPath);
+  await writeFile(dest, buf);
 }
 
 const QUALITY_PRESETS = {

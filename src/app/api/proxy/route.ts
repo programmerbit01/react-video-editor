@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { mkdir, readFile, writeFile, stat } from "fs/promises";
 import path from "path";
+import { Readable } from "stream";
 
 const CACHE_DIR = path.join(process.cwd(), ".proxy-cache");
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -95,12 +96,13 @@ export async function GET(request: NextRequest) {
     }
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const body = Buffer.from(await upstream.arrayBuffer());
-
-    // Cache full responses only
-    if (!rangeHeader && upstream.status === 200) {
-      putCache(url, body, contentType).catch(() => {});
-    }
+    const contentLength = upstream.headers.get("content-length");
+    const shouldBufferForCache =
+      !rangeHeader &&
+      upstream.status === 200 &&
+      contentLength !== null &&
+      Number(contentLength) > 0 &&
+      Number(contentLength) <= 25 * 1024 * 1024;
 
     const headers: Record<string, string> = {
       ...CORS,
@@ -112,8 +114,24 @@ export async function GET(request: NextRequest) {
     if (upstream.headers.get("content-range")) {
       headers["Content-Range"] = upstream.headers.get("content-range")!;
     }
+    if (contentLength) {
+      headers["Content-Length"] = contentLength;
+    }
 
-    return new NextResponse(body, { status: upstream.status, headers });
+    if (shouldBufferForCache) {
+      const body = Buffer.from(await upstream.arrayBuffer());
+      putCache(url, body, contentType).catch(() => {});
+      return new NextResponse(body, { status: upstream.status, headers });
+    }
+
+    if (!upstream.body) {
+      return NextResponse.json({ error: "upstream body empty" }, { status: 502 });
+    }
+
+    return new NextResponse(Readable.fromWeb(upstream.body as any) as any, {
+      status: upstream.status,
+      headers,
+    });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 502 });
   }
