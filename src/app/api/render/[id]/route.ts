@@ -15,7 +15,8 @@ export async function GET(
       id,
       status: job.status,
       progress: job.progress,
-      presigned_url: job.url,
+      presigned_url:
+        job.status === "COMPLETED" ? `/api/render/${id}/download` : undefined,
     }
   });
 }
