@@ -50,6 +50,12 @@ const curatedImagesCache: CuratedImagesCache = {
 // Cache duration: 5 minutes
 const CACHE_DURATION = 5 * 60 * 1000;
 
+const withEditorBase = (path: string) => {
+  if (typeof window === "undefined") return path;
+  if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
+  return path;
+};
+
 // Function to clear the cache
 const clearCuratedImagesCache = () => {
   curatedImagesCache.data = null;
@@ -109,7 +115,7 @@ export function usePexelsImages(): UsePexelsImagesReturn {
 
   const searchImages = useCallback(
     async (query: string, page = 1) => {
-      const url = `/api/pexels?query=${encodeURIComponent(query)}&page=${page}&per_page=20`;
+      const url = withEditorBase(`/api/pexels?query=${encodeURIComponent(query)}&page=${page}&per_page=20`);
       await fetchImages(url);
     },
     [fetchImages]
@@ -120,7 +126,7 @@ export function usePexelsImages(): UsePexelsImagesReturn {
     setError(null);
 
     try {
-      const url = `/api/pexels?query=${encodeURIComponent(query)}&page=${page}&per_page=20`;
+      const url = withEditorBase(`/api/pexels?query=${encodeURIComponent(query)}&page=${page}&per_page=20`);
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -162,7 +168,7 @@ export function usePexelsImages(): UsePexelsImagesReturn {
     }
 
     // Fetch fresh data
-    const url = `/api/pexels?page=${page}&per_page=20`;
+    const url = withEditorBase(`/api/pexels?page=${page}&per_page=20`);
     setLoading(true);
     setError(null);
 
@@ -198,7 +204,7 @@ export function usePexelsImages(): UsePexelsImagesReturn {
     setError(null);
 
     try {
-      const url = `/api/pexels?page=${page}&per_page=20`;
+      const url = withEditorBase(`/api/pexels?page=${page}&per_page=20`);
       const response = await fetch(url);
 
       if (!response.ok) {

@@ -67,6 +67,12 @@ const popularVideosCache: PopularVideosCache = {
 // Cache duration: 5 minutes
 const CACHE_DURATION = 5 * 60 * 1000;
 
+const withEditorBase = (path: string) => {
+  if (typeof window === "undefined") return path;
+  if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
+  return path;
+};
+
 // Function to clear the cache
 const clearPopularVideosCache = () => {
   popularVideosCache.data = null;
@@ -126,7 +132,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
 
   const searchVideos = useCallback(
     async (query: string, page = 1) => {
-      const url = `/api/pexels-videos?query=${encodeURIComponent(query)}&page=${page}&per_page=15`;
+      const url = withEditorBase(`/api/pexels-videos?query=${encodeURIComponent(query)}&page=${page}&per_page=15`);
       await fetchVideos(url);
     },
     [fetchVideos]
@@ -137,7 +143,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
     setError(null);
 
     try {
-      const url = `/api/pexels-videos?query=${encodeURIComponent(query)}&page=${page}&per_page=15`;
+      const url = withEditorBase(`/api/pexels-videos?query=${encodeURIComponent(query)}&page=${page}&per_page=15`);
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -179,7 +185,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
     }
 
     // Fetch fresh data
-    const url = `/api/pexels-videos?page=${page}&per_page=15`;
+    const url = withEditorBase(`/api/pexels-videos?page=${page}&per_page=15`);
     setLoading(true);
     setError(null);
 
@@ -215,7 +221,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
     setError(null);
 
     try {
-      const url = `/api/pexels-videos?page=${page}&per_page=15`;
+      const url = withEditorBase(`/api/pexels-videos?page=${page}&per_page=15`);
       const response = await fetch(url);
 
       if (!response.ok) {
