@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const PEXELS_API_BASE_URL = "https://api.pexels.com/videos";
+const PEXELS_API_KEY = "ZmExlHQM4iFJUHDEFLJyUDQdw4GNQcbnfohuO5zximnpw9l2VDKKD76P";
 
 interface PexelsVideo {
   id: number;
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest) {
   const page = searchParams.get("page") || "1";
   const perPage = searchParams.get("per_page") || "15"; // Fewer videos per page due to larger file sizes
 
-  const apiKey = process.env.PEXELS_API_KEY;
+  const apiKey = PEXELS_API_KEY || process.env.PEXELS_API_KEY;
 
   if (!apiKey) {
     return NextResponse.json(
