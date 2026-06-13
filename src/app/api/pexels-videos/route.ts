@@ -52,7 +52,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("query");
   const page = searchParams.get("page") || "1";
-  const perPage = searchParams.get("per_page") || "15"; // Fewer videos per page due to larger file sizes
+  const perPage = searchParams.get("per_page") || "15";
+  const orientation = searchParams.get("orientation");
+  const size = searchParams.get("size");
 
   const apiKey = PEXELS_API_KEY || process.env.PEXELS_API_KEY;
 
@@ -66,12 +68,18 @@ export async function GET(request: NextRequest) {
   try {
     let url: string;
 
+    const upstreamParams = new URLSearchParams({
+      page,
+      per_page: perPage,
+    });
+    if (orientation) upstreamParams.set("orientation", orientation);
+    if (size) upstreamParams.set("size", size);
+    if (query) upstreamParams.set("query", query);
+
     if (query) {
-      // Search for specific videos
-      url = `${PEXELS_API_BASE_URL}/search?query=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`;
+      url = `${PEXELS_API_BASE_URL}/search?${upstreamParams.toString()}`;
     } else {
-      // Get popular videos
-      url = `${PEXELS_API_BASE_URL}/popular?page=${page}&per_page=${perPage}`;
+      url = `${PEXELS_API_BASE_URL}/popular?${upstreamParams.toString()}`;
     }
 
     const response = await fetch(url, {

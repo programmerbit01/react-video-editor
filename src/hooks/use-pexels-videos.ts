@@ -1,6 +1,11 @@
 import { useState, useCallback } from "react";
 import { IVideo } from "@designcombo/types";
 
+export interface PexelsVideoFilters {
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  size?: "small" | "medium" | "large";
+}
+
 interface PexelsVideo extends Partial<IVideo> {
   metadata?: {
     pexels_id: number;
@@ -43,26 +48,20 @@ interface UsePexelsVideosReturn {
   currentPage: number;
   hasNextPage: boolean;
   hasPrevPage: boolean;
-  searchVideos: (query: string, page?: number) => Promise<void>;
-  loadPopularVideos: (page?: number) => Promise<void>;
-  searchVideosAppend: (query: string, page?: number) => Promise<void>;
-  loadPopularVideosAppend: (page?: number) => Promise<void>;
+  searchVideos: (query: string, page?: number, filters?: PexelsVideoFilters) => Promise<void>;
+  loadPopularVideos: (page?: number, filters?: PexelsVideoFilters) => Promise<void>;
+  searchVideosAppend: (query: string, page?: number, filters?: PexelsVideoFilters) => Promise<void>;
+  loadPopularVideosAppend: (page?: number, filters?: PexelsVideoFilters) => Promise<void>;
   clearVideos: () => void;
-  refreshPopularVideos: (page?: number) => Promise<void>;
+  refreshPopularVideos: (page?: number, filters?: PexelsVideoFilters) => Promise<void>;
 }
 
-// Cache for popular videos to avoid unnecessary API calls
-interface PopularVideosCache {
+interface PopularVideosCacheEntry {
   data: PexelsVideoResponse | null;
   timestamp: number;
-  page: number;
 }
 
-const popularVideosCache: PopularVideosCache = {
-  data: null,
-  timestamp: 0,
-  page: 1
-};
+const popularVideosCache = new Map<string, PopularVideosCacheEntry>();
 
 // Cache duration: 5 minutes
 const CACHE_DURATION = 5 * 60 * 1000;
@@ -73,12 +72,31 @@ const withEditorBase = (path: string) => {
   return path;
 };
 
-// Function to clear the cache
 const clearPopularVideosCache = () => {
-  popularVideosCache.data = null;
-  popularVideosCache.timestamp = 0;
-  popularVideosCache.page = 1;
+  popularVideosCache.clear();
 };
+
+const buildVideoUrl = (
+  query: string,
+  page: number,
+  perPage: number,
+  filters?: PexelsVideoFilters
+) => {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+  });
+  const trimmedQuery = query.trim();
+  if (trimmedQuery) params.set("query", trimmedQuery);
+  if (filters?.size) params.set("size", filters.size);
+  if (filters?.aspectRatio === "16:9") params.set("orientation", "landscape");
+  if (filters?.aspectRatio === "9:16") params.set("orientation", "portrait");
+  if (filters?.aspectRatio === "1:1") params.set("orientation", "square");
+  return withEditorBase(`/api/pexels-videos?${params.toString()}`);
+};
+
+const getPopularCacheKey = (page: number, filters?: PexelsVideoFilters) =>
+  JSON.stringify({ page, filters: filters || {} });
 
 /**
  * Hook for fetching and managing Pexels videos with caching support.
@@ -131,19 +149,19 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
   }, []);
 
   const searchVideos = useCallback(
-    async (query: string, page = 1) => {
-      const url = withEditorBase(`/api/pexels-videos?query=${encodeURIComponent(query)}&page=${page}&per_page=15`);
+    async (query: string, page = 1, filters?: PexelsVideoFilters) => {
+      const url = buildVideoUrl(query, page, 15, filters);
       await fetchVideos(url);
     },
     [fetchVideos]
   );
 
-  const searchVideosAppend = useCallback(async (query: string, page = 1) => {
+  const searchVideosAppend = useCallback(async (query: string, page = 1, filters?: PexelsVideoFilters) => {
     setLoading(true);
     setError(null);
 
     try {
-      const url = withEditorBase(`/api/pexels-videos?query=${encodeURIComponent(query)}&page=${page}&per_page=15`);
+      const url = buildVideoUrl(query, page, 15, filters);
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -164,17 +182,14 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
     }
   }, []);
 
-  const loadPopularVideos = useCallback(async (page = 1) => {
-    // Check if we have cached data for this page and it's still valid
+  const loadPopularVideos = useCallback(async (page = 1, filters?: PexelsVideoFilters) => {
     const now = Date.now();
-    const isCacheValid =
-      popularVideosCache.data &&
-      popularVideosCache.page === page &&
-      now - popularVideosCache.timestamp < CACHE_DURATION;
+    const cacheKey = getPopularCacheKey(page, filters);
+    const cached = popularVideosCache.get(cacheKey);
+    const isCacheValid = cached && now - cached.timestamp < CACHE_DURATION;
 
-    if (isCacheValid && popularVideosCache.data) {
-      // Use cached data
-      const data = popularVideosCache.data;
+    if (isCacheValid && cached?.data) {
+      const data = cached.data;
       setVideos(data.videos);
       setTotalResults(data.total_results);
       setCurrentPage(data.page);
@@ -184,8 +199,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
       return;
     }
 
-    // Fetch fresh data
-    const url = withEditorBase(`/api/pexels-videos?page=${page}&per_page=15`);
+    const url = buildVideoUrl("", page, 15, filters);
     setLoading(true);
     setError(null);
 
@@ -198,10 +212,10 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
 
       const data: PexelsVideoResponse = await response.json();
 
-      // Cache the data
-      popularVideosCache.data = data;
-      popularVideosCache.timestamp = now;
-      popularVideosCache.page = page;
+      popularVideosCache.set(cacheKey, {
+        data,
+        timestamp: now,
+      });
 
       setVideos(data.videos);
       setTotalResults(data.total_results);
@@ -216,12 +230,12 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
     }
   }, []);
 
-  const loadPopularVideosAppend = useCallback(async (page = 1) => {
+  const loadPopularVideosAppend = useCallback(async (page = 1, filters?: PexelsVideoFilters) => {
     setLoading(true);
     setError(null);
 
     try {
-      const url = withEditorBase(`/api/pexels-videos?page=${page}&per_page=15`);
+      const url = buildVideoUrl("", page, 15, filters);
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -254,10 +268,9 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
   }, []);
 
   const refreshPopularVideos = useCallback(
-    async (page = 1) => {
-      // Clear cache and fetch fresh data
+    async (page = 1, filters?: PexelsVideoFilters) => {
       clearPopularVideosCache();
-      await loadPopularVideos(page);
+      await loadPopularVideos(page, filters);
     },
     [loadPopularVideos]
   );

@@ -1,11 +1,12 @@
 import { ADD_AUDIO, ADD_IMAGE, ADD_VIDEO } from "@designcombo/state";
 import { dispatch } from "@designcombo/events";
-import { Music, Loader2, UploadIcon, Upload, RefreshCw } from "lucide-react";
+import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause } from "lucide-react";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
 import ModalUpload from "@/components/modal-upload";
 import { useEffect, useRef, useState } from "react";
+import type { Dispatch, MouseEvent, SetStateAction } from "react";
 
 const getLabel = (item: any) =>
   item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
@@ -45,6 +46,110 @@ const Thumb = ({ item }: { item: any }) => {
   return <img src={src} className="w-full h-full object-cover" alt="" loading="lazy" />;
 };
 
+const UploadGridItem = ({
+  item,
+  onAdd,
+  activePreviewId,
+  setActivePreviewId,
+}: {
+  item: any;
+  onAdd: (item: any) => void;
+  activePreviewId: string | null;
+  setActivePreviewId: Dispatch<SetStateAction<string | null>>;
+}) => {
+  const mediaId = String(item.id || item.url || item.fileName || Math.random());
+  const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const previewable = isVideo(item) || isAudio(item);
+
+  const stopPreview = () => {
+    videoRef.current?.pause();
+    audioRef.current?.pause();
+    if (videoRef.current) videoRef.current.currentTime = 0;
+    if (audioRef.current) audioRef.current.currentTime = 0;
+    setIsPlaying(false);
+    setActivePreviewId((current) => (current === mediaId ? null : current));
+  };
+
+  useEffect(() => {
+    if (activePreviewId !== mediaId && isPlaying) {
+      videoRef.current?.pause();
+      audioRef.current?.pause();
+      if (videoRef.current) videoRef.current.currentTime = 0;
+      if (audioRef.current) audioRef.current.currentTime = 0;
+      setIsPlaying(false);
+    }
+  }, [activePreviewId, isPlaying, mediaId]);
+
+  const handleTogglePreview = async (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!previewable) return;
+    if (isPlaying) {
+      stopPreview();
+      return;
+    }
+    setActivePreviewId(mediaId);
+    try {
+      if (isVideo(item) && videoRef.current) {
+        videoRef.current.currentTime = 0;
+        await videoRef.current.play();
+      } else if (isAudio(item) && audioRef.current) {
+        audioRef.current.currentTime = 0;
+        await audioRef.current.play();
+      }
+      setIsPlaying(true);
+    } catch {
+      setIsPlaying(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1 items-center">
+      <div
+        className="relative w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
+        onClick={() => onAdd(item)}
+        onMouseLeave={stopPreview}
+      >
+        <Thumb item={item} />
+        {isVideo(item) && (
+          <video
+            ref={videoRef}
+            src={src}
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity ${isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+            playsInline
+            preload="metadata"
+            onEnded={stopPreview}
+          />
+        )}
+        {isAudio(item) && (
+          <audio
+            ref={audioRef}
+            src={src}
+            preload="metadata"
+            onEnded={stopPreview}
+          />
+        )}
+        {previewable && (
+          <button
+            type="button"
+            onClick={handleTogglePreview}
+            className="absolute top-1.5 right-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/75 text-white/90 hover:bg-black/90"
+            title={isPlaying ? "Stop preview" : "Play preview"}
+          >
+            {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
+          </button>
+        )}
+      </div>
+      <span className="text-xs text-muted-foreground truncate w-full text-center">
+        {getLabel(item)}
+      </span>
+    </div>
+  );
+};
+
 const getVappParams = () => {
   if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
   const p = new URLSearchParams(window.location.search);
@@ -74,6 +179,7 @@ export const Uploads = () => {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
   const initialLoaded = useRef(false);
 
   const fetchPage = async (pageNum: number, replace = false) => {
@@ -224,17 +330,13 @@ export const Uploads = () => {
           {localUploads.length > 0 && (
             <div className="grid grid-cols-3 gap-2">
               {localUploads.map((item, idx) => (
-                <div key={item.id || `local-${idx}`} className="flex flex-col gap-1 items-center">
-                  <div
-                    className="w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
-                    onClick={() => handleAdd(item)}
-                  >
-                    <Thumb item={item} />
-                  </div>
-                  <span className="text-xs text-muted-foreground truncate w-full text-center">
-                    {getLabel(item)}
-                  </span>
-                </div>
+                <UploadGridItem
+                  key={item.id || `local-${idx}`}
+                  item={item}
+                  onAdd={handleAdd}
+                  activePreviewId={activePreviewId}
+                  setActivePreviewId={setActivePreviewId}
+                />
               ))}
             </div>
           )}
@@ -246,17 +348,13 @@ export const Uploads = () => {
           {vappUploads.length > 0 && (
             <div className="grid grid-cols-3 gap-2">
               {vappUploads.map((item, idx) => (
-                <div key={item.id || `vapp-${idx}`} className="flex flex-col gap-1 items-center">
-                  <div
-                    className="w-full aspect-video rounded-md overflow-hidden cursor-pointer bg-white/5 hover:ring-1 hover:ring-white/20 transition-all"
-                    onClick={() => handleAdd(item)}
-                  >
-                    <Thumb item={item} />
-                  </div>
-                  <span className="text-xs text-muted-foreground truncate w-full text-center">
-                    {getLabel(item)}
-                  </span>
-                </div>
+                <UploadGridItem
+                  key={item.id || `vapp-${idx}`}
+                  item={item}
+                  onAdd={handleAdd}
+                  activePreviewId={activePreviewId}
+                  setActivePreviewId={setActivePreviewId}
+                />
               ))}
             </div>
           )}

@@ -4,17 +4,42 @@ import { dispatch } from "@designcombo/events";
 import { ADD_VIDEO } from "@designcombo/state";
 import { generateId } from "@designcombo/timeline";
 import { IVideo } from "@designcombo/types";
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, PlusIcon } from "lucide-react";
+import { Search, Loader2, Play, PlusIcon } from "lucide-react";
 import { usePexelsVideos } from "@/hooks/use-pexels-videos";
+import type { PexelsVideoFilters } from "@/hooks/use-pexels-videos";
 import { ImageLoading } from "@/components/ui/image-loading";
+
+const QUICK_TOPICS = ["nature", "cats", "business", "city", "food"];
+const ASPECT_RATIO_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["aspectRatio"]> }> = [
+  { label: "16:9", value: "16:9" },
+  { label: "9:16", value: "9:16" },
+  { label: "1:1", value: "1:1" },
+];
+const SIZE_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["size"]> }> = [
+  { label: "HD", value: "small" },
+  { label: "FHD", value: "medium" },
+  { label: "4K", value: "large" },
+];
+
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+const getAspectRatioLabel = (width?: number, height?: number) => {
+  const w = Number(width || 0);
+  const h = Number(height || 0);
+  if (!w || !h) return "";
+  const divisor = gcd(w, h) || 1;
+  return `${Math.round(w / divisor)}:${Math.round(h / divisor)}`;
+};
 
 export const Videos = () => {
   const isDraggingOverTimeline = useIsDraggingOverTimeline();
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
+  const [aspectRatio, setAspectRatio] = useState<NonNullable<PexelsVideoFilters["aspectRatio"]>>("16:9");
+  const [size, setSize] = useState<NonNullable<PexelsVideoFilters["size"]>>("medium");
 
   const {
     videos: pexelsVideos,
@@ -29,10 +54,15 @@ export const Videos = () => {
     clearVideos
   } = usePexelsVideos();
 
-  // Load popular videos on component mount
+  const filters = useMemo<PexelsVideoFilters>(() => ({ aspectRatio, size }), [aspectRatio, size]);
+
   useEffect(() => {
-    loadPopularVideos();
-  }, [loadPopularVideos]);
+    if (activeQuery.trim()) {
+      void searchVideos(activeQuery, 1, filters);
+      return;
+    }
+    void loadPopularVideos(1, filters);
+  }, [activeQuery, filters, loadPopularVideos, searchVideos]);
 
   const handleAddVideo = (payload: Partial<IVideo>) => {
     dispatch(ADD_VIDEO, {
@@ -45,15 +75,8 @@ export const Videos = () => {
   };
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      await loadPopularVideos();
-      return;
-    }
-
-    try {
-      await searchVideos(searchQuery);
-    } finally {
-    }
+    const nextQuery = searchQuery.trim();
+    setActiveQuery(nextQuery);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -64,22 +87,23 @@ export const Videos = () => {
 
   const handleLoadMore = () => {
     if (hasNextPage) {
-      if (searchQuery.trim()) {
-        searchVideosAppend(searchQuery, currentPage + 1);
+      if (activeQuery.trim()) {
+        searchVideosAppend(activeQuery, currentPage + 1, filters);
       } else {
-        loadPopularVideosAppend(currentPage + 1);
+        loadPopularVideosAppend(currentPage + 1, filters);
       }
     }
   };
 
   const handleClearSearch = () => {
     setSearchQuery("");
+    setActiveQuery("");
     clearVideos();
-    loadPopularVideos();
   };
-
-  // Use Pexels videos if available, otherwise fall back to static videos
-  const displayVideos = pexelsVideos;
+  const handleTopicClick = (topic: string) => {
+    setSearchQuery(topic);
+    setActiveQuery(topic);
+  };
 
   return (
     <div className="flex flex-1 flex-col">
@@ -106,6 +130,30 @@ export const Videos = () => {
             className="pl-10"
           />
         </div>
+        <select
+          value={aspectRatio}
+          onChange={(e) => setAspectRatio(e.target.value as NonNullable<PexelsVideoFilters["aspectRatio"]>)}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          title="Aspect ratio"
+        >
+          {ASPECT_RATIO_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={size}
+          onChange={(e) => setSize(e.target.value as NonNullable<PexelsVideoFilters["size"]>)}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          title="Quality"
+        >
+          {SIZE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
         {searchQuery && (
           <Button
             size="sm"
@@ -116,6 +164,21 @@ export const Videos = () => {
             Clear
           </Button>
         )}
+      </div>
+
+      <div className="px-4 pb-2 flex flex-wrap gap-2">
+        {QUICK_TOPICS.map((topic) => (
+          <Button
+            key={topic}
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs capitalize"
+            onClick={() => handleTopicClick(topic)}
+            disabled={pexelsLoading}
+          >
+            {topic}
+          </Button>
+        ))}
       </div>
 
       {pexelsError && (
@@ -129,7 +192,7 @@ export const Videos = () => {
       <ScrollArea className="flex-1 px-4 max-h-full">
         <div className="max-h-full">
           <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
-            {displayVideos.map((video, index) => {
+            {pexelsVideos.map((video, index) => {
               return (
                 <VideoItem
                   key={video.id || index}
@@ -176,6 +239,10 @@ const VideoItem = ({
   video: Partial<IVideo>;
   shouldDisplayPreview: boolean;
 }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const durationSeconds = Math.round(((video.details as any)?.duration || 0));
+  const aspectRatioLabel = getAspectRatioLabel((video.details as any)?.width, (video.details as any)?.height);
   const style = React.useMemo(
     () => ({
       backgroundImage: `url(${video.preview})`,
@@ -185,6 +252,26 @@ const VideoItem = ({
     }),
     [video.preview]
   );
+
+  const stopPreview = () => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.pause();
+    el.currentTime = 0;
+    setIsPreviewPlaying(false);
+  };
+
+  const startPreview = async () => {
+    const el = videoRef.current;
+    if (!el) return;
+    try {
+      el.currentTime = 0;
+      await el.play();
+      setIsPreviewPlaying(true);
+    } catch {
+      setIsPreviewPlaying(false);
+    }
+  };
 
   return (
     <Draggable
@@ -209,24 +296,38 @@ const VideoItem = ({
             }
           } as any)
         }
+        onMouseEnter={() => { void startPreview(); }}
+        onMouseLeave={stopPreview}
         className="relative aspect-square flex w-full items-center justify-center overflow-hidden bg-background pb-2 group cursor-pointer"
       >
         <img
           draggable={false}
           src={video.preview}
-          className="h-full w-full rounded-md object-cover"
+          className={`h-full w-full rounded-md object-cover transition-opacity ${isPreviewPlaying ? "opacity-0" : "opacity-100"}`}
           alt="Video preview"
         />
-        {/* Play button overlay */}
+        <video
+          ref={videoRef}
+          src={video.details?.src}
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity ${isPreviewPlaying ? "opacity-100" : "opacity-0"}`}
+        />
         <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
           <div className="rounded-full p-1">
-            <PlusIcon className="h-6 w-6 fill-current" />
+            {isPreviewPlaying ? <Play className="h-6 w-6 fill-current opacity-70" /> : <PlusIcon className="h-6 w-6 fill-current" />}
           </div>
         </div>
-        {/* Duration badge */}
-        {(video.details as any)?.duration && (
+        {aspectRatioLabel && (
+          <div className="absolute bottom-3 left-2 bg-black/90 text-white/85 text-[10px] px-1.5 py-0.5 rounded">
+            {aspectRatioLabel}
+          </div>
+        )}
+        {durationSeconds > 0 && (
           <div className="absolute bottom-3 right-2 bg-black/90 text-primary/90 text-xs px-1 py-0.5 rounded">
-            {Math.round((video.details as any).duration)}s
+            {durationSeconds}s
           </div>
         )}
       </div>
