@@ -11,8 +11,8 @@ import {
   slidingDoors,
   star,
   wipe
-} from "@designcombo/transitions";
-import { TransitionSeries } from "@designcombo/transitions";
+} from "./transitions";
+import { TransitionSeries } from "./transitions";
 
 interface TransitionOptions {
   width: number;
@@ -22,6 +22,8 @@ interface TransitionOptions {
   direction?: SlideDirection;
 }
 
+const asTransitionPresentation = <T,>(presentation: T) => presentation as any;
+
 export const Transitions: Record<
   string,
   (options: TransitionOptions) => JSX.Element
@@ -29,35 +31,35 @@ export const Transitions: Record<
   none: ({ id }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={fade()}
+      presentation={asTransitionPresentation(fade())}
       timing={linearTiming({ durationInFrames: 1 })}
     />
   ),
   fade: ({ durationInFrames, id }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={fade()}
+      presentation={asTransitionPresentation(fade())}
       timing={linearTiming({ durationInFrames })}
     />
   ),
   slide: ({ durationInFrames, id, direction }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={slide({ direction: direction })}
+      presentation={asTransitionPresentation(slide({ direction: direction }))}
       timing={linearTiming({ durationInFrames })}
     />
   ),
   wipe: ({ durationInFrames, id, direction }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={wipe({ direction: direction })}
+      presentation={asTransitionPresentation(wipe({ direction: direction }))}
       timing={linearTiming({ durationInFrames })}
     />
   ),
   flip: ({ durationInFrames, id }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={flip()}
+      presentation={asTransitionPresentation(flip())}
       timing={linearTiming({ durationInFrames })}
     />
   ),
@@ -65,14 +67,14 @@ export const Transitions: Record<
   clockWipe: ({ width, height, durationInFrames, id }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={clockWipe({ width, height })}
+      presentation={asTransitionPresentation(clockWipe({ width, height }))}
       timing={linearTiming({ durationInFrames })}
     />
   ),
   star: ({ width, height, durationInFrames, id }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={star({ width, height })}
+      presentation={asTransitionPresentation(star({ width, height }))}
       timing={linearTiming({ durationInFrames })}
     />
   ),
@@ -80,7 +82,7 @@ export const Transitions: Record<
     return (
       <TransitionSeries.Transition
         key={id}
-        presentation={circle({ width, height })}
+        presentation={asTransitionPresentation(circle({ width, height }))}
         timing={linearTiming({ durationInFrames })}
       />
     );
@@ -88,7 +90,7 @@ export const Transitions: Record<
   rectangle: ({ width, height, durationInFrames, id }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={rectangle({ width, height })}
+      presentation={asTransitionPresentation(rectangle({ width, height }))}
       timing={linearTiming({ durationInFrames })}
     />
   ),
@@ -100,7 +102,7 @@ export const Transitions: Record<
   }: TransitionOptions) => (
     <TransitionSeries.Transition
       key={id}
-      presentation={slidingDoors({ width, height })}
+      presentation={asTransitionPresentation(slidingDoors({ width, height }))}
       timing={linearTiming({ durationInFrames })}
     />
   )
