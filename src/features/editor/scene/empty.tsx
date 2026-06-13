@@ -6,12 +6,18 @@ import { DroppableArea } from "./droppable";
 
 const SceneEmpty = () => {
   const [isLoading, setIsLoading] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [desiredSize, setDesiredSize] = useState({ width: 0, height: 0 });
   const { size } = useStore();
 
   useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isMounted || !containerRef.current) return;
     const container = containerRef.current!;
     const PADDING = 96;
     const containerHeight = (container.clientHeight || window.innerHeight) - PADDING;
@@ -29,7 +35,7 @@ const SceneEmpty = () => {
       height: height * desiredZoom
     });
     setIsLoading(false);
-  }, [size]);
+  }, [isMounted, size]);
 
   const onSelectFiles = (files: File[]) => {
     console.log({ files });
@@ -40,7 +46,12 @@ const SceneEmpty = () => {
       ref={containerRef}
       className="absolute z-50 flex h-full w-full flex-1 dark:bg-card/80 bg-card"
     >
-      {!isLoading ? (
+      {!isMounted || isLoading ? (
+        <div className="fixed top-0 left-0 z-50 flex h-screen w-screen flex-col items-center justify-center gap-4 bg-card">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </div>
+      ) : (
         <Droppable
           maxFileCount={4}
           maxSize={4 * 1024 * 1024}
@@ -71,11 +82,6 @@ const SceneEmpty = () => {
             </div>
           </DroppableArea>
         </Droppable>
-      ) : (
-        <div className="fixed top-0 left-0 z-50 flex h-screen w-screen flex-col items-center justify-center gap-4 bg-card">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        </div>
       )}
     </div>
   );

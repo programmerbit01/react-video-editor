@@ -1,5 +1,5 @@
 import { Player } from "../player";
-import { useRef, useImperativeHandle, forwardRef } from "react";
+import { useRef, useImperativeHandle, forwardRef, useEffect, useState } from "react";
 import useStore from "../store/use-store";
 import StateManager, { DESIGN_RESIZE } from "@designcombo/state";
 import SceneEmpty from "./empty";
@@ -25,6 +25,7 @@ const Scene = forwardRef<
 >(({ stateManager }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { size, trackItemIds } = useStore();
+  const [isMounted, setIsMounted] = useState(false);
   const { zoom, handlePinch, recalculateZoom } = useZoom(
     containerRef as React.RefObject<HTMLDivElement>,
     size
@@ -51,6 +52,10 @@ const Scene = forwardRef<
     recalculateZoom
   }));
 
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   return (
     <div
       style={{
@@ -66,23 +71,25 @@ const Scene = forwardRef<
       }}
       ref={containerRef}
     >
-      <div className="pointer-events-none absolute right-4 top-4 z-[150]">
-        <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-white/10 bg-black/60 px-3 py-2 backdrop-blur-sm">
-          <span className="text-xs font-medium text-white/70">Canvas</span>
-          <select
-            value={activeCanvas}
-            onChange={(event) => handleCanvasChange(event.target.value)}
-            className="h-8 rounded-md border border-white/10 bg-black/70 px-2 text-sm text-white outline-none"
-          >
-            {CANVAS_OPTIONS.map((option) => (
-              <option key={option.label} value={option.label}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+      {isMounted && (
+        <div className="pointer-events-none absolute right-4 top-4 z-[150]">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-white/10 bg-black/60 px-3 py-2 backdrop-blur-sm">
+            <span className="text-xs font-medium text-white/70">Canvas</span>
+            <select
+              value={activeCanvas}
+              onChange={(event) => handleCanvasChange(event.target.value)}
+              className="h-8 rounded-md border border-white/10 bg-black/70 px-2 text-sm text-white outline-none"
+            >
+              {CANVAS_OPTIONS.map((option) => (
+                <option key={option.label} value={option.label}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-      </div>
-      {trackItemIds.length === 0 && <SceneEmpty />}
+      )}
+      {isMounted && trackItemIds.length === 0 && <SceneEmpty />}
       <div
         style={{
           width: size.width,
