@@ -12,13 +12,17 @@ export default function Audio({
   const { fps } = options;
   const { details } = item;
   const playbackRate = item.playbackRate || 1;
+  const trimFromMs = item.trim?.from ?? 0;
+  const trimToMs = item.trim?.to ?? Math.max(item.display.to - item.display.from, 1);
+  const startFrom = Math.max(0, Math.round((trimFromMs / 1000) * fps));
+  const endAt = Math.max(startFrom + 1, Math.round((trimToMs / 1000) * fps));
   const children = (
     <RemotionAudio
-      startFrom={(item.trim?.from! / 1000) * fps}
-      endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
+      startFrom={startFrom}
+      endAt={endAt}
       playbackRate={playbackRate}
       src={details.src}
-      volume={details.volume! / 100}
+      volume={(details.volume ?? 100) / 100}
     />
   );
   return BaseSequence({ item, options, children });
