@@ -13,16 +13,45 @@ import { usePexelsVideos } from "@/hooks/use-pexels-videos";
 import type { PexelsVideoFilters } from "@/hooks/use-pexels-videos";
 import { ImageLoading } from "@/components/ui/image-loading";
 
-const QUICK_TOPICS = ["nature", "cats", "business", "city", "food"];
-const ASPECT_RATIO_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["aspectRatio"]> }> = [
+const QUICK_TOPICS = [
+  "nature",
+  "business",
+  "health",
+  "sports",
+  "travel",
+  "technology",
+  "food",
+  "cats"
+];
+const CATEGORY_OPTIONS = [
+  "nature",
+  "cats",
+  "business",
+  "city",
+  "food",
+  "health",
+  "sports",
+  "travel",
+  "fitness",
+  "technology",
+  "education",
+  "medical",
+  "finance",
+  "fashion",
+  "animals",
+  "all"
+];
+const ASPECT_RATIO_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["aspectRatio"]> | "all" }> = [
   { label: "16:9", value: "16:9" },
   { label: "9:16", value: "9:16" },
   { label: "1:1", value: "1:1" },
+  { label: "All items", value: "all" },
 ];
-const SIZE_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["size"]> }> = [
+const SIZE_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["size"]> | "all" }> = [
   { label: "HD", value: "small" },
   { label: "FHD", value: "medium" },
   { label: "4K", value: "large" },
+  { label: "All items", value: "all" },
 ];
 
 const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
@@ -38,8 +67,9 @@ export const Videos = () => {
   const isDraggingOverTimeline = useIsDraggingOverTimeline();
   const [searchQuery, setSearchQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
-  const [aspectRatio, setAspectRatio] = useState<NonNullable<PexelsVideoFilters["aspectRatio"]>>("16:9");
-  const [size, setSize] = useState<NonNullable<PexelsVideoFilters["size"]>>("medium");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [aspectRatio, setAspectRatio] = useState<NonNullable<PexelsVideoFilters["aspectRatio"]> | "all">("16:9");
+  const [size, setSize] = useState<NonNullable<PexelsVideoFilters["size"]> | "all">("medium");
 
   const {
     videos: pexelsVideos,
@@ -54,7 +84,13 @@ export const Videos = () => {
     clearVideos
   } = usePexelsVideos();
 
-  const filters = useMemo<PexelsVideoFilters>(() => ({ aspectRatio, size }), [aspectRatio, size]);
+  const filters = useMemo<PexelsVideoFilters>(
+    () => ({
+      aspectRatio: aspectRatio === "all" ? undefined : aspectRatio,
+      size: size === "all" ? undefined : size
+    }),
+    [aspectRatio, size]
+  );
 
   useEffect(() => {
     if (activeQuery.trim()) {
@@ -76,6 +112,7 @@ export const Videos = () => {
 
   const handleSearch = async () => {
     const nextQuery = searchQuery.trim();
+    setSelectedCategory("all");
     setActiveQuery(nextQuery);
   };
 
@@ -98,9 +135,26 @@ export const Videos = () => {
   const handleClearSearch = () => {
     setSearchQuery("");
     setActiveQuery("");
+    setSelectedCategory("all");
     clearVideos();
   };
   const handleTopicClick = (topic: string) => {
+    if (topic === "all") {
+      handleClearSearch();
+      return;
+    }
+    setSearchQuery(topic);
+    setActiveQuery(topic);
+    setSelectedCategory(topic);
+  };
+
+  const handleCategoryChange = (topic: string) => {
+    setSelectedCategory(topic);
+    if (topic === "all") {
+      setSearchQuery("");
+      setActiveQuery("");
+      return;
+    }
     setSearchQuery(topic);
     setActiveQuery(topic);
   };
@@ -132,7 +186,7 @@ export const Videos = () => {
         </div>
         <select
           value={aspectRatio}
-          onChange={(e) => setAspectRatio(e.target.value as NonNullable<PexelsVideoFilters["aspectRatio"]>)}
+          onChange={(e) => setAspectRatio(e.target.value as NonNullable<PexelsVideoFilters["aspectRatio"]> | "all")}
           className="h-9 rounded-md border border-input bg-background px-2 text-sm"
           title="Aspect ratio"
         >
@@ -144,13 +198,25 @@ export const Videos = () => {
         </select>
         <select
           value={size}
-          onChange={(e) => setSize(e.target.value as NonNullable<PexelsVideoFilters["size"]>)}
+          onChange={(e) => setSize(e.target.value as NonNullable<PexelsVideoFilters["size"]> | "all")}
           className="h-9 rounded-md border border-input bg-background px-2 text-sm"
           title="Quality"
         >
           {SIZE_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={selectedCategory}
+          onChange={(e) => handleCategoryChange(e.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          title="Category"
+        >
+          {CATEGORY_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option === "all" ? "All items" : option.charAt(0).toUpperCase() + option.slice(1)}
             </option>
           ))}
         </select>
@@ -179,6 +245,15 @@ export const Videos = () => {
             {topic}
           </Button>
         ))}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-xs"
+          onClick={() => handleTopicClick("all")}
+          disabled={pexelsLoading}
+        >
+          All items
+        </Button>
       </div>
 
       {pexelsError && (
