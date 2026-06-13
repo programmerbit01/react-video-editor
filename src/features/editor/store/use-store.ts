@@ -43,6 +43,8 @@ interface ITimelineStore {
     type: "color" | "image";
     value: string;
   };
+  snapEnabled: boolean;
+  setSnapEnabled: (snapEnabled: boolean) => void;
   viewTimeline: boolean;
   setViewTimeline: (viewTimeline: boolean) => void;
 }
@@ -60,6 +62,8 @@ const useStore = create<ITimelineStore>((set) => ({
     type: "color",
     value: "transparent"
   },
+  snapEnabled: true,
+  setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
   viewTimeline: true,
   setViewTimeline: (viewTimeline) => set({ viewTimeline }),
 

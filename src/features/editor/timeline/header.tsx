@@ -9,7 +9,7 @@ import {
 import { PLAYER_PAUSE, PLAYER_PLAY } from "../constants/events";
 import { frameToTimeString, getCurrentTime, timeToString } from "../utils/time";
 import useStore from "../store/use-store";
-import { SquareSplitHorizontal, Trash, ZoomIn, ZoomOut } from "lucide-react";
+import { Magnet, SquareSplitHorizontal, Trash, ZoomIn, ZoomOut } from "lucide-react";
 import {
   getFitZoomLevel,
   getNextZoomLevel,
@@ -83,7 +83,7 @@ const IconPlayerSkipForward = ({ size }: { size: number }) => (
 );
 const Header = () => {
   const [playing, setPlaying] = useState(false);
-  const { duration, fps, scale, playerRef, activeIds } = useStore();
+  const { duration, fps, scale, playerRef, activeIds, snapEnabled, setSnapEnabled } = useStore();
   const isLargeScreen = useIsLargeScreen();
   useUpdateAnsestors({ playing, playerRef });
 
@@ -197,6 +197,16 @@ const Header = () => {
             >
               <SquareSplitHorizontal size={15} />{" "}
               <span className="hidden lg:block">Clone</span>
+            </Button>
+            <Button
+              onClick={() => setSnapEnabled(!snapEnabled)}
+              variant={snapEnabled ? "secondary" : "ghost"}
+              size={isLargeScreen ? "sm" : "icon"}
+              className="flex items-center gap-1 px-2"
+              title={snapEnabled ? "Magnet on" : "Magnet off"}
+            >
+              <Magnet size={15} />
+              <span className="hidden lg:block">Magnet</span>
             </Button>
           </div>
           <div className="flex items-center justify-center">

@@ -62,6 +62,7 @@ export function SceneInteractions({
   const {
     activeIds,
     setState,
+    snapEnabled,
     trackItemsMap,
     playerRef,
     setSceneMoveableRef,
@@ -237,12 +238,12 @@ export function SceneInteractions({
       target={targets}
       zoom={1 / zoom}
       className="designcombo-scene-moveable"
-      snappable
-      elementGuidelines={elementGuidelines}
+      snappable={selectionInfo.ables.snappable && snapEnabled}
+      elementGuidelines={snapEnabled ? elementGuidelines : []}
       elementSnapDirections={snapDirections}
       snapDirections={snapDirections}
-      snapThreshold={30}
-      snapGap={true}
+      snapThreshold={snapEnabled ? 30 : 0}
+      snapGap={snapEnabled}
       isDisplaySnapDigit={false}
       isDisplayInnerSnapDigit={false}
       onDrag={({ target, top, left }) => {
