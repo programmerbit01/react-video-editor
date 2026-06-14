@@ -71,7 +71,7 @@ export default function TranscriptPanel({
 
   // 3. fetch on-demand from /api/vapp/stt
   useEffect(() => {
-    const isVappMedia = mediaSrc.includes("rpublic.tomtap.ai") || mediaSrc.includes("/api/proxy?url=");
+    const isVappMedia = mediaSrc.includes("/api/proxy?url=") || mediaSrc.includes("rpublic.tomtap.ai");
     if (transcript || !mediaSrc || !isVappMedia) return;
     const { vappHost, token, baseUrl } = getVappParams();
     setLoading(true);
