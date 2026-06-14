@@ -162,7 +162,7 @@ const getVappParams = () => {
 
 const toUploadItem = (item: any) => {
   const proxied = `/api/proxy?url=${encodeURIComponent(item.url)}`;
-  return {
+  const entry: any = {
     id: Math.random().toString(36).slice(2),
     url: proxied,
     filePath: proxied,
@@ -171,6 +171,8 @@ const toUploadItem = (item: any) => {
     metadata: { uploadedUrl: proxied },
     status: "uploaded",
   };
+  if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
+  return entry;
 };
 
 export const Uploads = () => {
@@ -256,8 +258,10 @@ export const Uploads = () => {
         );
         duration = meta.duration; width = meta.width; height = meta.height;
       } catch {}
+      const videoMeta: Record<string, any> = { previewUrl: "" };
+      if (item.stt && typeof item.stt === "object") videoMeta.transcriptData = item.stt;
       dispatch(ADD_VIDEO, {
-        payload: { id: generateId(), duration, details: { src, width, height }, metadata: { previewUrl: "" } },
+        payload: { id: generateId(), duration, details: { src, width, height }, metadata: videoMeta },
         options: { resourceId: "main", scaleMode: "fit" },
       });
       return;
