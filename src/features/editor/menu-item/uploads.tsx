@@ -15,12 +15,11 @@ const getLabel = (item: any) =>
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
 
-// Vapp items come through the editor proxy
 const isVappItem = (u: any) =>
   Boolean(
     u?.metadata?.vappItem ||
-    u?.url?.includes("/api/proxy?url=") ||
-    u?.filePath?.includes("/api/proxy?url=")
+    u?.url?.includes("rpublic.tomtap.ai") ||
+    u?.url?.includes("/api/proxy?url=") // legacy
   );
 
 const normalizeMediaSrc = (src?: string) => {
@@ -42,16 +41,17 @@ const getVappParams = () => {
 const toUploadItem = (item: any) => {
   const rawUrl = String(item.url || "");
   if (!rawUrl) return null;
-  const finalUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
+  // Direct CDN URL for display — HTML5 video/img don't need CORS for playback
+  // Canvas operations (timeline filmstrip) use proxy separately in CanvasVideoClip
   const entry: any = {
     id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
-    url: finalUrl,
-    filePath: finalUrl,
+    url: rawUrl,
+    filePath: rawUrl,
     fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
     type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-    metadata: { uploadedUrl: finalUrl, vappItem: true },
+    metadata: { uploadedUrl: rawUrl, vappItem: true },
     status: "uploaded",
-    createdAt: item.createdAt || "",   // preserve for client-side sort
+    createdAt: item.createdAt || "",
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
   return entry;
