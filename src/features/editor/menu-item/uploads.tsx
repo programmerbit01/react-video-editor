@@ -14,8 +14,17 @@ const getLabel = (item: any) =>
 
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
-const isVappProxyItem = (u: any) =>
-  Boolean(u?.url?.includes("/api/proxy?url=") || u?.filePath?.includes("/api/proxy?url="));
+// Vapp items are either proxied OR direct CDN urls (rpublic.*) — used for sort/display separation
+const VAPP_CDN_HOST = "rpublic.tomtap.ai";
+const isVappItem = (u: any) =>
+  Boolean(
+    u?.metadata?.vappItem ||
+    u?.url?.includes("/api/proxy?url=") ||
+    u?.filePath?.includes("/api/proxy?url=") ||
+    u?.url?.includes(VAPP_CDN_HOST)
+  );
+// keep old name as alias so all callsites work unchanged
+const isVappProxyItem = isVappItem;
 
 const normalizeMediaSrc = (src?: string) => {
   if (!src) return "";
@@ -162,14 +171,19 @@ const getVappParams = () => {
 };
 
 const toUploadItem = (item: any) => {
-  const proxied = `/api/proxy?url=${encodeURIComponent(item.url)}`;
+  const rawUrl = String(item.url || "");
+  // Use direct URL for public CDN files — CORS is configured on R2 for editor origins.
+  // Only proxy URLs we can't serve directly (e.g. private storage, missing CORS).
+  const finalUrl = rawUrl.includes(VAPP_CDN_HOST)
+    ? rawUrl
+    : `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
   const entry: any = {
     id: Math.random().toString(36).slice(2),
-    url: proxied,
-    filePath: proxied,
-    fileName: item.name || item.url.split("/").pop()?.split("?")[0] || "media",
+    url: finalUrl,
+    filePath: finalUrl,
+    fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
     type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-    metadata: { uploadedUrl: proxied },
+    metadata: { uploadedUrl: finalUrl, vappItem: true },
     status: "uploaded",
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
@@ -201,15 +215,20 @@ export const Uploads = () => {
         : rawItems.length > 0;
     setHasMore(Boolean(explicitHasMore ?? inferredHasMore));
     setUploads((prev: any[]) => {
-      const localItems = prev.filter((u: any) => !isVappProxyItem(u));
+      // Keep only in-progress local uploads (status !== "uploaded").
+      // Completed local uploads accumulate in localStorage and mess up the sort order
+      // by appearing before the server's newest-first vapp list.
+      const inProgressLocals = prev.filter(
+        (u: any) => !isVappProxyItem(u) && u.status !== "uploaded"
+      );
       if (pageNum === 1) {
-        // page 1: always replace vapp items with fresh API order (newest first)
-        return [...localItems, ...items];
+        // page 1: fresh server order (newest first) + any still-uploading local items
+        return [...inProgressLocals, ...items];
       }
-      // load more: append new unique items only
+      // load more: append new unique vapp items after existing ones
       const existingVappUrls = new Set(prev.filter((u: any) => isVappProxyItem(u)).map((u: any) => u.url));
       const existingVapp = prev.filter((u: any) => isVappProxyItem(u));
-      return [...localItems, ...existingVapp, ...items.filter((i: any) => !existingVappUrls.has(i.url))];
+      return [...inProgressLocals, ...existingVapp, ...items.filter((i: any) => !existingVappUrls.has(i.url))];
     });
     setPage(pageNum);
   };
@@ -237,8 +256,20 @@ export const Uploads = () => {
     const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
 
     if (isAudio(item)) {
+      const audioMeta: Record<string, any> = {};
+      if (item.stt && typeof item.stt === "object") {
+        audioMeta.transcriptData = item.stt;
+        setTranscriptResult(src, item.stt);
+      } else {
+        // fetch STT in background for audio clips too
+        const { vappHost, token, baseUrl } = getVappParams();
+        fetch(`${vappHost}/api/vapp/stt?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&url=${encodeURIComponent(src)}`)
+          .then((r) => r.json())
+          .then((data) => { if (data?.stt?.segments?.length) setTranscriptResult(src, data.stt); })
+          .catch(() => {});
+      }
       dispatch(ADD_AUDIO, {
-        payload: { id: generateId(), type: "audio", details: { src }, metadata: {} },
+        payload: { id: generateId(), type: "audio", details: { src }, metadata: audioMeta },
         options: {},
       });
       return;

@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ITrackItem } from "@designcombo/types";
+import { dispatch } from "@designcombo/events";
 import useCaptionTranscribeStore, {
   TranscriptResult,
   TranscriptSegment
 } from "../store/use-caption-transcribe-store";
 import useUploadStore from "../store/use-upload-store";
+import useStore from "../store/use-store";
+import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
+import { PLAYER_SEEK } from "../constants/events";
 
 const formatSeconds = (seconds: number) => {
   const safeSeconds = Math.max(0, Math.floor(seconds || 0));
@@ -48,7 +52,11 @@ export default function TranscriptPanel({
 }) {
   const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
   const { uploads } = useUploadStore();
+  const { playerRef, fps } = useStore();
   const [loading, setLoading] = useState(false);
+  const activeWordRef = useRef<HTMLSpanElement | null>(null);
+
+  const currentFrame = useCurrentPlayerFrame(playerRef || null);
 
   const mediaSrc = String((trackItem as any)?.details?.src || "").trim();
 
@@ -61,9 +69,11 @@ export default function TranscriptPanel({
     if (match?.stt?.segments?.length) transcript = match.stt as TranscriptResult;
   }
 
-  // 3. fetch on-demand from /api/vapp/stt — stores into runtimeResults so existing UI picks it up
+  // 3. fetch on-demand from /api/vapp/stt
   useEffect(() => {
-    if (transcript || !mediaSrc || !mediaSrc.includes("/api/proxy?url=")) return;
+    // Fetch STT for any vapp media URL — either direct CDN or proxied
+    const isVappMedia = mediaSrc.includes("/api/proxy?url=") || mediaSrc.includes("rpublic.tomtap.ai");
+    if (transcript || !mediaSrc || !isVappMedia) return;
     const { vappHost, token, baseUrl } = getVappParams();
     setLoading(true);
     fetch(
@@ -76,6 +86,56 @@ export default function TranscriptPanel({
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [mediaSrc]);
+
+  // Compute media-relative time in seconds
+  const safeDisplayFrom = Number((trackItem as any)?.display?.from || 0);
+  const safeTrimFrom = Number((trackItem as any)?.trim?.from || 0);
+  const currentTimeMs = currentFrame * (1000 / (fps || 30));
+  const mediaTimeSec = (currentTimeMs - safeDisplayFrom + safeTrimFrom) / 1000;
+
+  // Find active segment and word indices
+  let activeSegmentIdx = -1;
+  let activeWordIdx = -1;
+  if (transcript?.segments) {
+    for (let si = 0; si < transcript.segments.length; si++) {
+      const seg = transcript.segments[si];
+      if (mediaTimeSec >= seg.start && mediaTimeSec <= seg.end) {
+        activeSegmentIdx = si;
+        if (seg.words?.length) {
+          for (let wi = 0; wi < seg.words.length; wi++) {
+            const w = seg.words[wi];
+            if (mediaTimeSec >= w.start && mediaTimeSec <= w.end) {
+              activeWordIdx = wi;
+              break;
+            }
+          }
+          // If between words, use the last passed word
+          if (activeWordIdx === -1) {
+            for (let wi = seg.words.length - 1; wi >= 0; wi--) {
+              if (mediaTimeSec >= seg.words[wi].start) {
+                activeWordIdx = wi;
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  // Auto-scroll active word into view
+  useEffect(() => {
+    if (activeWordRef.current) {
+      activeWordRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeSegmentIdx, activeWordIdx]);
+
+  const seekToSegment = (segment: TranscriptSegment) => {
+    const segStartMs = segment.start * 1000;
+    const clipTimeMs = safeDisplayFrom - safeTrimFrom + segStartMs;
+    dispatch(PLAYER_SEEK, { payload: { time: clipTimeMs } });
+  };
 
   if (!trackItem) return null;
 
@@ -106,19 +166,55 @@ export default function TranscriptPanel({
       </div>
 
       <div className="space-y-2">
-        {transcript.segments.map((segment, index) => (
-          <div
-            key={`${trackItem.id}-segment-${index}`}
-            className="rounded-md border border-border/50 bg-card/30 p-3"
-          >
-            <div className="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground">
-              {formatRange(segment)}
+        {transcript.segments.map((segment, si) => {
+          const isActiveSegment = si === activeSegmentIdx;
+          const hasWords = segment.words && segment.words.length > 0;
+
+          return (
+            <div
+              key={`${trackItem.id}-segment-${si}`}
+              className={`rounded-md border p-3 cursor-pointer transition-colors ${
+                isActiveSegment
+                  ? "border-violet-500/60 bg-violet-500/10"
+                  : "border-border/50 bg-card/30 hover:bg-card/50"
+              }`}
+              onClick={() => seekToSegment(segment)}
+            >
+              <div className="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground">
+                {formatRange(segment)}
+              </div>
+              <div className="text-sm leading-6">
+                {hasWords ? (
+                  segment.words!.map((word, wi) => {
+                    const isActiveWord = isActiveSegment && wi === activeWordIdx;
+                    return (
+                      <span
+                        key={wi}
+                        ref={isActiveWord ? activeWordRef : null}
+                        className={`transition-colors ${
+                          isActiveWord
+                            ? "bg-violet-500 text-white rounded px-0.5"
+                            : isActiveSegment
+                            ? "text-foreground/90"
+                            : "text-foreground/60"
+                        }`}
+                      >
+                        {word.word}{wi < segment.words!.length - 1 ? " " : ""}
+                      </span>
+                    );
+                  })
+                ) : (
+                  <span
+                    ref={isActiveSegment ? activeWordRef : null}
+                    className={isActiveSegment ? "text-foreground/90" : "text-foreground/60"}
+                  >
+                    {segment.text}
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="text-sm leading-6 text-foreground/90">
-              {segment.text}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
