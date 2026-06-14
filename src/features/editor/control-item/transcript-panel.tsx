@@ -85,6 +85,14 @@ export default function TranscriptPanel({
       .finally(() => setLoading(false));
   }, [mediaSrc]);
 
+  console.log("[TP render]", {
+    hasTrackItem: !!trackItem,
+    loading,
+    fetchedSttSegments: fetchedStt?.segments?.length ?? "null",
+    transcriptSegments: transcript?.segments?.length ?? "null",
+    mediaSrc: mediaSrc.slice(-40),
+  });
+
   if (!trackItem) return null;
 
   if (loading) {
