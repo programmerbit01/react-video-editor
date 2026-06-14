@@ -14,6 +14,16 @@ function withPublicAssetBase(path: string): string {
   return path;
 }
 
+function getVappParams(): { vappHost: string; token: string; baseUrl: string } | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const token = p.get("token") || "";
+  if (!token) return null;
+  const baseUrl = p.get("baseUrl") || "https://api.muapi.ai";
+  const vappHost = p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`;
+  return { vappHost, token, baseUrl };
+}
+
 export type UploadProgressCallback = (
   uploadId: string,
   progress: number
@@ -35,6 +45,11 @@ export async function processFileUpload(
   file: File,
   callbacks: UploadCallbacks
 ): Promise<any> {
+  const vapp = getVappParams();
+  if (vapp) {
+    return processVappFileUpload(uploadId, file, callbacks, vapp);
+  }
+
   try {
     callbacks.onProgress(uploadId, 20);
 
@@ -65,6 +80,57 @@ export async function processFileUpload(
       origin: "user",
       status: "uploaded",
       isPreview: false
+    };
+
+    callbacks.onStatus(uploadId, "uploaded");
+    return uploadData;
+  } catch (error) {
+    callbacks.onStatus(uploadId, "failed", (error as Error).message);
+    throw error;
+  }
+}
+
+async function processVappFileUpload(
+  uploadId: string,
+  file: File,
+  callbacks: UploadCallbacks,
+  vapp: { vappHost: string; token: string; baseUrl: string }
+): Promise<any> {
+  try {
+    callbacks.onProgress(uploadId, 10);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const uploadUrl = `${vapp.vappHost}/api/vapp/upload?token=${encodeURIComponent(vapp.token)}&baseUrl=${encodeURIComponent(vapp.baseUrl)}`;
+
+    const res = await axios.post(uploadUrl, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress: (e) => {
+        const pct = Math.round((e.loaded * 80) / (e.total || 1));
+        callbacks.onProgress(uploadId, 10 + pct);
+      },
+    });
+
+    const { url: rawUrl, type: mediaType, name } = res.data;
+    const proxyUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
+    const mimeType = mediaType === "video" ? "video/mp4"
+      : mediaType === "audio" ? "audio/mp3"
+      : "image/jpeg";
+
+    callbacks.onProgress(uploadId, 100);
+
+    const uploadData = {
+      id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
+      url: proxyUrl,
+      filePath: proxyUrl,
+      fileName: name || file.name,
+      fileSize: file.size,
+      type: mimeType,
+      contentType: mimeType,
+      metadata: { uploadedUrl: proxyUrl, directUrl: rawUrl, vappItem: true },
+      status: "uploaded",
+      createdAt: new Date().toISOString(),
     };
 
     callbacks.onStatus(uploadId, "uploaded");
