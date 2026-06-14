@@ -35,6 +35,12 @@ class Caption extends Resizable {
     this.strokeWidth = 0;
     if (props.guideOnly) {
       this.fill = "#3A2F1D";
+      this.selectable = false;
+      this.evented = false;
+      this.hasControls = false;
+      this.lockMovementX = true;
+      this.lockMovementY = true;
+      this.hoverCursor = "default";
     }
   }
 

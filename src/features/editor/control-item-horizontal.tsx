@@ -23,6 +23,7 @@ import ColorPicker from "@/components/color-picker";
 import { dispatch } from "@designcombo/events";
 import { EDIT_OBJECT } from "@designcombo/state";
 import { Label } from "@/components/ui/label";
+import TranscriptPanel from "./control-item/transcript-panel";
 
 const ActiveControlItem = ({
   trackItem,
@@ -697,6 +698,7 @@ export default function ControlItemHorizontal() {
                   trackItem={trackItem as ITrackItem & any}
                   feature={typeControlItem}
                 />
+                <TranscriptPanel trackItem={trackItem} />
               </div>
             </div>
           </motion.div>

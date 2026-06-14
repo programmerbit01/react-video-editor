@@ -16,6 +16,7 @@ import {
   TooltipContent,
   TooltipTrigger
 } from "@/components/ui/tooltip";
+import useStore from "./store/use-store";
 
 // Define menu items configuration for better maintainability
 const MENU_ITEMS = [
@@ -122,6 +123,10 @@ function MenuList() {
     drawerOpen,
     setDrawerOpen
   } = useLayoutStore();
+  const clearActiveSelection = useCallback(() => {
+    useStore.setState({ activeIds: [] });
+    useLayoutStore.setState({ trackItem: null });
+  }, []);
 
   const isLargeScreen = useIsLargeScreen();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -130,6 +135,7 @@ function MenuList() {
 
   const handleMenuItemClick = useCallback(
     (menuItem: string) => {
+      clearActiveSelection();
       setActiveMenuItem(menuItem as any);
       // Use drawer on mobile, sidebar on desktop
       if (!isLargeScreen) {
@@ -138,7 +144,13 @@ function MenuList() {
         setShowMenuItem(true);
       }
     },
-    [isLargeScreen, setActiveMenuItem, setDrawerOpen, setShowMenuItem]
+    [
+      clearActiveSelection,
+      isLargeScreen,
+      setActiveMenuItem,
+      setDrawerOpen,
+      setShowMenuItem
+    ]
   );
 
   const handleDrawerOpenChange = useCallback(

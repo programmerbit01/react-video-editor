@@ -16,6 +16,7 @@ import BasicCaption from "./basic-caption";
 import { MenuItem } from "../menu-item";
 import useStore from "../store/use-store";
 import useLayoutStore from "../store/use-layout-store";
+import TranscriptPanel from "./transcript-panel";
 
 const ActiveControlItem = ({
   trackItem
@@ -72,6 +73,7 @@ export const ControlItem = () => {
   return (
     <div className="w-full flex-none border-l border-border/80 bg-card hidden lg:block">
       <ActiveControlItem trackItem={trackItem} />
+      <TranscriptPanel trackItem={trackItem} />
     </div>
   );
 };

@@ -13,6 +13,7 @@ import { VisuallyHidden } from "@/components/ui/visually-hidden";
 import { MenuItem } from "./menu-item/menu-item";
 import { useIsLargeScreen } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
+import useStore from "./store/use-store";
 
 // Define menu item data structure
 interface MenuItemData {
@@ -88,6 +89,8 @@ export default function MenuListHorizontal() {
   const isLargeScreen = useIsLargeScreen();
 
   const handleMenuItemClick = (menuItem: string) => {
+    useStore.setState({ activeIds: [] });
+    useLayoutStore.setState({ trackItem: null });
     setActiveMenuItem(menuItem as any);
     // Use drawer on mobile, sidebar on desktop
     if (!isLargeScreen) {
