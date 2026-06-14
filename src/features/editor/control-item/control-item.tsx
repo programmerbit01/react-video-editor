@@ -71,7 +71,7 @@ export const ControlItem = () => {
   }
 
   return (
-    <div className="w-full flex-none border-l border-border/80 bg-card hidden lg:block">
+    <div className="w-full flex-none border-l border-border/80 bg-card hidden lg:flex lg:flex-col h-full overflow-y-auto">
       <ActiveControlItem trackItem={trackItem} />
       <TranscriptPanel trackItem={trackItem} />
     </div>

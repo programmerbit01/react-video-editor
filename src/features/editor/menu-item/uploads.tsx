@@ -275,8 +275,14 @@ export const Uploads = () => {
       const videoMeta: Record<string, any> = { previewUrl: "" };
       if (item.stt && typeof item.stt === "object") {
         videoMeta.transcriptData = item.stt;
-        // immediately seed runtimeResults so transcript shows without selecting clip first
         setTranscriptResult(src, item.stt);
+      } else {
+        // no stt in store yet — fetch in background immediately on add
+        const { vappHost, token, baseUrl } = getVappParams();
+        fetch(`${vappHost}/api/vapp/stt?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&url=${encodeURIComponent(src)}`)
+          .then((r) => r.json())
+          .then((data) => { if (data?.stt?.segments?.length) setTranscriptResult(src, data.stt); })
+          .catch(() => {});
       }
       dispatch(ADD_VIDEO, {
         payload: { id: generateId(), duration, details: { src, width, height }, metadata: videoMeta },
