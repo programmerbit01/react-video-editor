@@ -315,6 +315,40 @@ async function runExport(
     }
   }
 
+  // Burn captions via drawtext filters
+  const captionItems = allItems
+    .filter((it: any) => it.type === "caption" && !it.metadata?.transcriptGuide && !it.details?.guideOnly)
+    .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
+
+  let finalVideoLabel = "vout";
+
+  if (captionItems.length > 0) {
+    const escDT = (t: string) =>
+      t.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/:/g, "\\:");
+
+    let prev = "vout";
+    captionItems.forEach((item: any, i: number) => {
+      const rawText = String(item.details?.text || "").trim();
+      if (!rawText) return;
+
+      const outLabel = i === captionItems.length - 1 ? "vcap" : `vdt${i}`;
+      const fontSize = Math.round(Number(item.details?.fontSize || 22) * outW / baseW);
+      const fontColor = String(item.details?.color || "#FFFFFF");
+      const topStr = String(item.details?.top || "80%");
+      const topFrac = topStr.endsWith("%") ? parseFloat(topStr) / 100 : 0.8;
+      const startS = (Number(item.display?.from || 0) / 1000).toFixed(3);
+      const endS   = (Number(item.display?.to   || 0) / 1000).toFixed(3);
+
+      filterParts.push(
+        `[${prev}]drawtext=text='${escDT(rawText)}':fontsize=${fontSize}:fontcolor='${fontColor}':` +
+        `x=(w-text_w)/2:y=h*${topFrac.toFixed(3)}-text_h:` +
+        `enable='between(t,${startS},${endS})'[${outLabel}]`
+      );
+      prev = outLabel;
+      finalVideoLabel = outLabel;
+    });
+  }
+
   // Mix all audio tracks
   const hasAudio = audioLabels.length > 0;
   if (hasAudio) {
@@ -330,7 +364,7 @@ async function runExport(
   }
 
   ffmpegArgs.push("-filter_complex", filterParts.join(";"));
-  ffmpegArgs.push("-map", "[vout]");
+  ffmpegArgs.push("-map", `[${finalVideoLabel}]`);
   if (hasAudio) ffmpegArgs.push("-map", "[aout]");
 
   // Codec args

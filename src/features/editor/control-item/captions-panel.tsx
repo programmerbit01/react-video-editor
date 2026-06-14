@@ -8,6 +8,7 @@ import useCaptionTranscribeStore, { TranscriptResult } from "../store/use-captio
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import useStore from "../store/use-store";
 import { millisecondsToHHMMSS } from "../utils/format";
+import useCaptionStyleStore from "../store/use-caption-style-store";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -199,7 +200,15 @@ function ColorSwatch({ label, value, onChange }: { label: string; value: string;
 export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) {
   const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
   const { tracks } = useStore();
-  const [style, setStyle] = useState(DEFAULT_STYLE);
+  const globalStyle = useCaptionStyleStore();
+  const [style, setStyle] = useState(() => ({
+    fontSize: globalStyle.fontSize,
+    color: globalStyle.color,
+    activeColor: globalStyle.activeColor,
+    activeFillColor: globalStyle.activeFillColor,
+    backgroundColor: globalStyle.backgroundColor,
+    position: globalStyle.position
+  }));
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
 

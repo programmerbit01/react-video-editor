@@ -90,7 +90,7 @@ export default function Caption({
             ...extraStyles,
             transition: "transform 0.2s ease",
             borderRadius: "16px",
-            display: currentFrame > 0 ? "block" : "none",
+            display: currentFrame >= 0 ? "block" : "none",
             maxWidth: "100%",
             maxHeight: "max-content",
             height: "100%",
