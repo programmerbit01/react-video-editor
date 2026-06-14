@@ -82,14 +82,14 @@ class CanvasVideoClip {
 
     for (const ts of timestamps) {
       const secs = ts / 1e6;
-      if (Math.abs(v.currentTime - secs) > 0.05) {
-        await new Promise<void>((res) => {
-          const timeout = setTimeout(res, 6000);
-          const onSeeked = () => { clearTimeout(timeout); v.removeEventListener("seeked", onSeeked); res(); };
-          v.addEventListener("seeked", onSeeked);
-          v.currentTime = secs;
-        });
-      }
+      // Always seek explicitly — skipping when currentTime matches causes black frames
+      // because the decoder may not have produced the frame yet (especially at t=0 via proxy)
+      await new Promise<void>((res) => {
+        const timeout = setTimeout(res, 6000);
+        const onSeeked = () => { clearTimeout(timeout); v.removeEventListener("seeked", onSeeked); res(); };
+        v.addEventListener("seeked", onSeeked);
+        v.currentTime = secs;
+      });
       try {
         await new Promise<void>((res) => requestAnimationFrame(() => res()));
         ctx.drawImage(v, 0, 0, width, h);

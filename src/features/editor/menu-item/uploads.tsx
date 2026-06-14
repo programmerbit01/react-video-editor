@@ -210,7 +210,7 @@ const UploadGridItem = ({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export const Uploads = () => {
-  const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads } = useUploadStore();
+  const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads, uploadsLoaded, setUploadsLoaded } = useUploadStore();
   const { setTranscriptResult } = useCaptionTranscribeStore();
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -224,17 +224,11 @@ export const Uploads = () => {
     const { vappHost, token, baseUrl } = getVappParams();
     const apiUrl = `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`;
 
-    console.log(`[uploads] fetchPage(${pageNum}) →`, apiUrl);
-    console.log(`[uploads] params: vappHost=${vappHost} baseUrl=${baseUrl} token=${token ? token.slice(0,20)+"…" : "MISSING"}`);
-
     const res = await fetch(apiUrl);
-    console.log(`[uploads] response status:`, res.status, res.ok ? "OK" : "FAIL");
     if (!res.ok) throw new Error(`Server returned ${res.status}`);
 
     const data = await res.json();
     const rawItems: any[] = data.items || [];
-    console.log(`[uploads] rawItems: ${rawItems.length}, total: ${data.total}, hasMore: ${data.hasMore}`);
-    console.log(`[uploads] first 5 items:`, rawItems.slice(0, 5).map((i: any) => ({ name: i.name, type: i.type, createdAt: i.createdAt, url: String(i.url || "").slice(-50) })));
 
     const items = (rawItems.map(toUploadItem).filter(Boolean) as any[])
       // client-side safety sort: newest first by ISO date string (lexicographic = correct for ISO)
@@ -259,10 +253,12 @@ export const Uploads = () => {
     setFetchError(null);
   };
 
-  // Fetch on every mount — safe since uploads is no longer persisted in localStorage
+  // Only fetch on first mount — skip if media already loaded (user switching tabs)
   useEffect(() => {
+    if (uploadsLoaded && uploads.filter((u: any) => isVappItem(u)).length > 0) return;
     setLoading(true);
     fetchPage(1)
+      .then(() => setUploadsLoaded(true))
       .catch((err) => setFetchError(String(err?.message || "Failed to load media")))
       .finally(() => setLoading(false));
   }, []);
@@ -270,7 +266,8 @@ export const Uploads = () => {
   const handleRefresh = async () => {
     setRefreshing(true);
     setFetchError(null);
-    try { await fetchPage(1); } catch (err: any) { setFetchError(String(err?.message || "Refresh failed")); }
+    setUploadsLoaded(false);
+    try { await fetchPage(1); setUploadsLoaded(true); } catch (err: any) { setFetchError(String(err?.message || "Refresh failed")); }
     setRefreshing(false);
   };
 

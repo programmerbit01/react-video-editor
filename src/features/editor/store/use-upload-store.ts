@@ -42,6 +42,8 @@ interface IUploadStore {
   removeUpload: (id: string) => void;
   uploads: any[];
   setUploads: (uploads: any[] | ((prev: any[]) => any[])) => void;
+  uploadsLoaded: boolean;
+  setUploadsLoaded: (v: boolean) => void;
 }
 
 const useUploadStore = create<IUploadStore>()(
@@ -179,7 +181,9 @@ const useUploadStore = create<IUploadStore>()(
             typeof uploads === "function"
               ? (uploads as (prev: any[]) => any[])(state.uploads)
               : uploads
-        }))
+        })),
+      uploadsLoaded: false,
+      setUploadsLoaded: (v: boolean) => set({ uploadsLoaded: v })
     }),
     {
       name: "upload-store",
