@@ -7,8 +7,8 @@ import useCaptionTranscribeStore, {
   TranscriptSegment
 } from "../store/use-caption-transcribe-store";
 
-const TRANSCRIPT_TRACK_PREFIX = "transcript-track:";
-const TRANSCRIPT_ITEM_PREFIX = "transcript-guide:";
+const TRANSCRIPT_TRACK_PREFIX = "transcript-track--";
+const TRANSCRIPT_ITEM_PREFIX = "transcript-guide--";
 
 const CAPTION_ACCEPTS = [
   "audio",
@@ -212,7 +212,7 @@ function createGuideItemsForMedia(
     const overlapEnd = Math.min(trimTo, Number(segment.end || 0));
     if (overlapEnd <= overlapStart) return [];
 
-    const id = `${TRANSCRIPT_ITEM_PREFIX}${mediaItem.id}:${index}`;
+    const id = `${TRANSCRIPT_ITEM_PREFIX}${mediaItem.id}--${index}`;
     const currentItem = currentGuideItems[id];
     const displayFrom = clipDisplayFrom + (overlapStart - trimFrom) * 1000;
     const displayTo = clipDisplayFrom + (overlapEnd - trimFrom) * 1000;

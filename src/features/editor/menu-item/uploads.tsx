@@ -4,6 +4,7 @@ import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause } from "luci
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
+import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import ModalUpload from "@/components/modal-upload";
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, MouseEvent, SetStateAction } from "react";
@@ -182,6 +183,7 @@ const toUploadItem = (item: any) => {
 
 export const Uploads = () => {
   const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads } = useUploadStore();
+  const { setTranscriptResult } = useCaptionTranscribeStore();
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -273,9 +275,8 @@ export const Uploads = () => {
       const videoMeta: Record<string, any> = { previewUrl: "" };
       if (item.stt && typeof item.stt === "object") {
         videoMeta.transcriptData = item.stt;
-        console.log("[uploads] setting transcriptData on ADD_VIDEO", { segments: item.stt?.segments?.length });
-      } else {
-        console.log("[uploads] ADD_VIDEO without transcriptData", { hasStt: !!item.stt });
+        // immediately seed runtimeResults so transcript shows without selecting clip first
+        setTranscriptResult(src, item.stt);
       }
       dispatch(ADD_VIDEO, {
         payload: { id: generateId(), duration, details: { src, width, height }, metadata: videoMeta },
