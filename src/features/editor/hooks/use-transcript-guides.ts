@@ -88,6 +88,7 @@ function buildTranscriptGuidePatch({
   const nextTrackItemsMap = { ...currentTrackItemsMap };
   const desiredGuideItems: Record<string, GuideItem> = {};
   const guidesByTrackId: Record<string, string[]> = {};
+  let mediaMetadataChanged = false;
 
   for (const track of baseTracks) {
     for (const itemId of track.items || []) {
@@ -96,12 +97,27 @@ function buildTranscriptGuidePatch({
       if (item.type !== "audio" && item.type !== "video") continue;
 
       const mediaSrc = String(item?.details?.src || "").trim();
-      const transcript = runtimeResults[mediaSrc];
+      const metadataTranscript = item?.metadata?.transcriptData as
+        | TranscriptResult
+        | undefined;
+      const transcript = runtimeResults[mediaSrc] || metadataTranscript;
       if (!transcript?.segments?.length) continue;
+
+      if (runtimeResults[mediaSrc] && item?.metadata?.transcriptData !== runtimeResults[mediaSrc]) {
+        nextTrackItemsMap[item.id] = {
+          ...item,
+          metadata: {
+            ...(item.metadata || {}),
+            transcriptData: runtimeResults[mediaSrc],
+            transcriptUpdatedAt: Date.now()
+          }
+        };
+        mediaMetadataChanged = true;
+      }
 
       const transcriptTrackId = `${TRANSCRIPT_TRACK_PREFIX}${track.id}`;
       for (const guideItem of createGuideItemsForMedia(
-        item,
+        (nextTrackItemsMap[item.id] as ITrackItem) || item,
         transcript,
         currentGuideItems
       )) {
@@ -154,6 +170,7 @@ function buildTranscriptGuidePatch({
   ];
 
   const changed =
+    mediaMetadataChanged ||
     JSON.stringify(currentTracks) !== JSON.stringify(nextTracks) ||
     JSON.stringify(currentTrackItemIds) !== JSON.stringify(nextTrackItemIds) ||
     JSON.stringify(currentTrackItemsMap) !== JSON.stringify(nextTrackItemsMap);

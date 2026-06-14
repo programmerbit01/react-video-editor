@@ -47,6 +47,12 @@ export const Captions = () => {
   >({});
   const [mediaTrackItems, setMediaTrackItems] = useState<ITrackItem[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const selectedTrackItem = mediaTrackItems.find(
+    (item) => item.details.src === selectedMedia
+  );
+  const selectedStoredTranscript = selectedTrackItem?.metadata?.transcriptData as
+    | TranscriptResult
+    | undefined;
 
   useEffect(() => {
     const mediaTrackItems = fetchMediaTrackItems(trackItemsMap);
@@ -104,7 +110,7 @@ export const Captions = () => {
         throw new Error("Track item not found");
       }
 
-      const { url, result } = await transcribeMedia(selectedMedia, "ES");
+      const { url, result } = await transcribeMedia(selectedMedia, "");
       const jsonData = result || (url ? await fetchJsonFromUrl(url) : null);
       if (!jsonData) {
         throw new Error("Transcription result missing");
@@ -131,7 +137,10 @@ export const Captions = () => {
           selectedMedia={selectedMedia}
           onSelectChange={handleSelectChange}
           captionTrackItemsMap={captionTrackItemsMap}
-          transcriptResult={selectedMedia ? resultsByMedia[selectedMedia] : undefined}
+          transcriptResult={
+            (selectedMedia ? resultsByMedia[selectedMedia] : undefined) ||
+            selectedStoredTranscript
+          }
           createCaptions={createCaptions}
           isGenerating={isGenerating}
         />
@@ -400,6 +409,7 @@ async function transcribeMedia(
     },
     body: JSON.stringify({
       url: mediaUrl,
+      timestamp_type: "word",
       targetLanguage,
       token,
       baseUrl

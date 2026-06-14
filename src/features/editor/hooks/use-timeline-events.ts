@@ -72,12 +72,23 @@ const useTimelineEvents = () => {
 
     const selectionSubscription = selectionEvents.subscribe((obj) => {
       if (obj.key === LAYER_SELECTION) {
-        const activeIds = obj.value?.payload.activeIds || [];
+        const rawActiveIds = obj.value?.payload.activeIds || [];
+        const rewrittenActiveIds = rawActiveIds.map((id: string) => {
+          const maybeGuide = trackItemsMap?.[id] as any;
+          if (maybeGuide?.metadata?.transcriptGuide && maybeGuide?.metadata?.parentId) {
+            return maybeGuide.metadata.parentId as string;
+          }
+          return id;
+        });
+        const activeIds = [...new Set(rewrittenActiveIds)];
         setState({ activeIds });
 
-        const firstSelectedId = activeIds[0];
+        const firstSelectedId = rawActiveIds[0] || activeIds[0];
         if (!firstSelectedId) return;
-        const item = trackItemsMap?.[firstSelectedId];
+        const rawItem = trackItemsMap?.[firstSelectedId] as any;
+        const item = rawItem?.metadata?.transcriptGuide && rawItem?.metadata?.parentId
+          ? trackItemsMap?.[rawItem.metadata.parentId]
+          : rawItem;
         const fromMs = item?.display?.from;
         if (playerRef?.current && typeof fromMs === "number" && Number.isFinite(fromMs)) {
           playerRef.current.seekTo(Math.max(0, Math.round((fromMs / 1000) * fps)));
