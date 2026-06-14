@@ -3,6 +3,7 @@ import useCaptionTranscribeStore, {
   TranscriptResult,
   TranscriptSegment
 } from "../store/use-caption-transcribe-store";
+import useUploadStore from "../store/use-upload-store";
 
 const formatSeconds = (seconds: number) => {
   const safeSeconds = Math.max(0, Math.floor(seconds || 0));
@@ -39,7 +40,21 @@ export default function TranscriptPanel({
   trackItem?: ITrackItem | null;
 }) {
   const { resultsByMedia } = useCaptionTranscribeStore();
-  const transcript = getTrackTranscript(trackItem, resultsByMedia);
+  const { uploads } = useUploadStore();
+
+  let transcript = getTrackTranscript(trackItem, resultsByMedia);
+
+  // Fallback: look up stt from upload store by matching src URL
+  if (!transcript && trackItem) {
+    const mediaSrc = String((trackItem as any)?.details?.src || "").trim();
+    if (mediaSrc) {
+      const match = uploads.find((u: any) => {
+        const uUrl = u.metadata?.uploadedUrl || u.url || "";
+        return uUrl === mediaSrc;
+      });
+      if (match?.stt?.segments?.length) transcript = match.stt as TranscriptResult;
+    }
+  }
 
   if (!trackItem || !transcript?.segments?.length) {
     return null;
