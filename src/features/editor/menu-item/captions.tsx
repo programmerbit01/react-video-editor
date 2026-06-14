@@ -323,12 +323,17 @@ const groupCaptionItems = (trackItemsMap: ITrackItemsMap) => {
   return groupBy(captionTrackItems, "metadata.sourceUrl");
 };
 
+const withEditorBase = (path: string) => {
+  if (typeof window === "undefined") return path;
+  return window.location.pathname.startsWith("/editor") ? `/editor${path}` : path;
+};
+
 async function transcribeMedia(
   mediaUrl: string,
   targetLanguage: string
 ): Promise<{ url: string; result?: any }> {
   const { token, baseUrl } = getVappParams();
-  const transcribeResponse = await fetch("/api/transcribe", {
+  const transcribeResponse = await fetch(withEditorBase("/api/transcribe"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
