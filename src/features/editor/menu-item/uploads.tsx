@@ -195,9 +195,14 @@ export const Uploads = () => {
     console.log("[uploads] fetchPage url →", apiUrl);
     const res = await fetch(apiUrl);
     const data = await res.json();
-    console.log("[uploads] raw API response", JSON.stringify(data).slice(0, 800));
+    console.log("[uploads] raw API response total:", data.total, "hasMore:", data.hasMore);
     const rawItems = data.items || [];
-    console.log("[uploads] rawItems count", rawItems.length, "first item keys:", rawItems[0] ? Object.keys(rawItems[0]) : []);
+    console.log("[uploads] all item urls + stt:", rawItems.map((it: any) => ({
+      url: String(it.url || "").slice(-60),
+      type: it.type || it.media,
+      hasStt: !!it.stt,
+      keys: Object.keys(it),
+    })));
     const items = rawItems.map(toUploadItem);
     const explicitHasMore = data.hasMore ?? data.pagination?.hasMore;
     const inferredHasMore =
