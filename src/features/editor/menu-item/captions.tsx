@@ -7,10 +7,7 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { useEffect, useState } from "react";
-import { generateCaptions } from "../utils/captions";
-import { loadFonts } from "../utils/fonts";
 import { dispatch } from "@designcombo/events";
-import { ADD_CAPTIONS, ADD_ITEMS } from "@designcombo/state";
 import { ITrackItem, ITrackItemsMap } from "@designcombo/types";
 import { millisecondsToHHMMSS } from "../utils/format";
 import useStore from "../store/use-store";
@@ -18,8 +15,11 @@ import { groupBy } from "lodash";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PLAYER_SEEK } from "../constants/events";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
-import { generateId } from "@designcombo/timeline";
 import { Loader2 } from "lucide-react";
+import useCaptionTranscribeStore, {
+  TranscriptResult,
+  TranscriptSegment
+} from "../store/use-caption-transcribe-store";
 
 const getVappParams = () => {
   if (typeof window === "undefined") return { token: "", baseUrl: "" };
@@ -32,6 +32,12 @@ const getVappParams = () => {
 
 export const Captions = () => {
   const { trackItemsMap } = useStore();
+  const {
+    pendingMediaSrc,
+    clearPendingRequest,
+    setTranscriptResult,
+    resultsByMedia
+  } = useCaptionTranscribeStore();
   const [selectMediaItems, setSelectMediaItems] = useState<
     { label: string; value: string }[]
   >([]);
@@ -62,6 +68,27 @@ export const Captions = () => {
     setCaptionTrackItemsMap(groupedCaptions);
   }, [trackItemsMap]);
 
+  useEffect(() => {
+    if (!pendingMediaSrc) return;
+    const matchedItem = mediaTrackItems.find(
+      (item) => item.details.src === pendingMediaSrc
+    );
+    if (!matchedItem) return;
+
+    setSelectedMedia(pendingMediaSrc);
+    clearPendingRequest();
+
+    if (!resultsByMedia[pendingMediaSrc] && !captionTrackItemsMap[pendingMediaSrc]) {
+      void createCaptions(pendingMediaSrc);
+    }
+  }, [
+    pendingMediaSrc,
+    mediaTrackItems,
+    clearPendingRequest,
+    resultsByMedia,
+    captionTrackItemsMap
+  ]);
+
   const handleSelectChange = (value: string) => {
     setSelectedMedia(value);
   };
@@ -82,40 +109,11 @@ export const Captions = () => {
       if (!jsonData) {
         throw new Error("Transcription result missing");
       }
-      const fontInfo = {
-        fontFamily: "theboldfont",
-        fontUrl: "https://cdn.designcombo.dev/fonts/the-bold-font.ttf",
-        fontSize: 64
-      };
-      const options = {
-        containerWidth: 800,
-        linesPerCaption: 1,
-        parentId: trackItem.id,
-        displayFrom: trackItem.display.from
-      };
-
-      await loadFonts([{ name: fontInfo.fontFamily, url: fontInfo.fontUrl }]);
-      const captions = generateCaptions(
-        { ...jsonData, sourceUrl: selectedMedia },
-        fontInfo,
-        options
+      const transcriptResult = normalizeTranscriptResult(
+        jsonData,
+        Math.max(1, (trackItem.display.to - trackItem.display.from) / 1000)
       );
-
-      console.log({ captions });
-
-      dispatch(ADD_ITEMS, {
-        payload: {
-          trackItems: captions,
-          tracks: [
-            {
-              id: generateId(),
-              items: captions.map((item) => item.id),
-              type: "caption",
-              name: "Captions"
-            }
-          ]
-        }
-      });
+      setTranscriptResult(selectedMedia, transcriptResult);
     } catch (error) {
       console.error("Error generating captions:", error);
     } finally {
@@ -133,6 +131,7 @@ export const Captions = () => {
           selectedMedia={selectedMedia}
           onSelectChange={handleSelectChange}
           captionTrackItemsMap={captionTrackItemsMap}
+          transcriptResult={selectedMedia ? resultsByMedia[selectedMedia] : undefined}
           createCaptions={createCaptions}
           isGenerating={isGenerating}
         />
@@ -146,6 +145,7 @@ const MediaSection = ({
   selectedMedia,
   onSelectChange,
   captionTrackItemsMap,
+  transcriptResult,
   createCaptions,
   isGenerating
 }: {
@@ -153,6 +153,7 @@ const MediaSection = ({
   selectedMedia: string | undefined;
   onSelectChange: (value: string) => void;
   captionTrackItemsMap: Record<string, ITrackItem[]>;
+  transcriptResult?: TranscriptResult;
   createCaptions: (selectedMedia: string) => void;
   isGenerating: boolean;
 }) => (
@@ -171,35 +172,94 @@ const MediaSection = ({
     </Select>
 
     {selectedMedia ? (
-      captionTrackItemsMap[selectedMedia] ? (
-        <div className="h-[calc(100vh-29rem)]">
-          <ScrollArea className="h-full">
-            <MediaWithCaptions
-              captionTrackItems={captionTrackItemsMap[selectedMedia]}
-            />
-          </ScrollArea>
-        </div>
-      ) : (
-        <MediaWithNoCaptions
-          createCaptions={() => createCaptions(selectedMedia)}
-          isGenerating={isGenerating}
-        />
-      )
+      <div className="flex min-h-0 flex-1 flex-col gap-4">
+        {transcriptResult ? (
+          <TranscriptResultCard transcriptResult={transcriptResult} />
+        ) : null}
+
+        {captionTrackItemsMap[selectedMedia] ? (
+          <div className="min-h-0 flex-1">
+            <ScrollArea className="h-full">
+              <MediaWithCaptions
+                captionTrackItems={captionTrackItemsMap[selectedMedia]}
+              />
+            </ScrollArea>
+          </div>
+        ) : (
+          <MediaWithNoCaptions
+            createCaptions={() => createCaptions(selectedMedia)}
+            isGenerating={isGenerating}
+          />
+        )}
+      </div>
     ) : (
       <MediaNoSelected />
     )}
   </div>
 );
 
+const TranscriptResultCard = ({
+  transcriptResult
+}: {
+  transcriptResult: TranscriptResult;
+}) => (
+  <div className="rounded-lg border border-border/70 bg-card/60 p-3">
+    <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+      <span>
+        {transcriptResult.language?.toUpperCase() || "—"} ·{" "}
+        {transcriptResult.segment_count || transcriptResult.segments.length} segments
+      </span>
+      <span>Transcription</span>
+    </div>
+    <div className="mb-3 text-sm leading-6">
+      {transcriptResult.text || "No text found."}
+    </div>
+    {transcriptResult.segments.length > 0 ? (
+      <div className="space-y-2">
+        {transcriptResult.segments.map((segment, index) => (
+          <TranscriptSegmentItem
+            key={`${segment.start}-${segment.end}-${index}`}
+            segment={segment}
+          />
+        ))}
+      </div>
+    ) : null}
+  </div>
+);
+
+const TranscriptSegmentItem = ({
+  segment
+}: {
+  segment: TranscriptSegment;
+}) => {
+  const handleSeek = (timeSeconds: number) => {
+    dispatch(PLAYER_SEEK, { payload: { time: timeSeconds * 1000 } });
+  };
+
+  return (
+    <button
+      type="button"
+      className="flex w-full flex-col rounded-md bg-background/50 p-2 text-left hover:bg-background"
+      onClick={() => handleSeek(segment.start)}
+    >
+      <div className="text-[11px] text-muted-foreground">
+        {millisecondsToHHMMSS(segment.start * 1000)} -{" "}
+        {millisecondsToHHMMSS(segment.end * 1000)}
+      </div>
+      <div className="text-sm">{segment.text}</div>
+    </button>
+  );
+};
+
 const MediaNoSelected = () => (
   <div className="text-center text-sm text-muted-foreground">
-    Select video or audio and generate captions automatically.
+    Select video or audio and generate transcript guides automatically.
   </div>
 );
 
 const EmptyMediaTrackItems = () => (
   <div className="text-center text-sm text-muted-foreground">
-    Add video or audio and generate captions automatically.
+    Add video or audio and generate transcript guides automatically.
   </div>
 );
 
@@ -212,8 +272,8 @@ const MediaWithNoCaptions = ({
 }) => (
   <div className="flex flex-col gap-2 px-4">
     <div className="text-center text-sm text-muted-foreground">
-      Recognize speech in the selected video/audio and generate captions
-      automatically.
+      Recognize speech in the selected video/audio and generate an attached
+      timeline transcript guide automatically.
     </div>
     <Button
       onClick={createCaptions}
@@ -370,4 +430,46 @@ async function fetchJsonFromUrl(url: string) {
     console.error("Failed to fetch JSON data:", error);
     throw error; // Optionally rethrow to handle it in the caller
   }
+}
+
+function normalizeTranscriptResult(
+  input: any,
+  fallbackDurationSeconds: number
+): TranscriptResult {
+  const text = String(input?.text || "").trim();
+  const language = String(input?.language || "").trim();
+  const rawSegments = Array.isArray(input?.segments) ? input.segments : [];
+
+  const segments: TranscriptSegment[] =
+    rawSegments.length > 0
+      ? rawSegments
+          .map((segment: any) => ({
+            start: Number(segment?.start || 0),
+            end: Number(segment?.end || 0),
+            text: String(segment?.text || "").trim(),
+            words: Array.isArray(segment?.words)
+              ? segment.words.map((word: any) => ({
+                  word: String(word?.word || "").trim(),
+                  start: Number(word?.start || 0),
+                  end: Number(word?.end || 0)
+                }))
+              : undefined
+          }))
+          .filter((segment: TranscriptSegment) => segment.text)
+      : text
+        ? [
+            {
+              start: 0,
+              end: Math.max(1, fallbackDurationSeconds || 1),
+              text
+            }
+          ]
+        : [];
+
+  return {
+    text,
+    language,
+    segment_count: Number(input?.segment_count || segments.length || 0),
+    segments
+  };
 }

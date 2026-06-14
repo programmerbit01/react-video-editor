@@ -26,6 +26,10 @@ export default function Caption({
   item: ICaption;
   options: SequenceItemOptions;
 }) {
+  if ((item as any)?.metadata?.transcriptGuide || (item as any)?.details?.guideOnly) {
+    return <></>;
+  }
+
   const { fps, frame } = options;
   const { details, display, animations } = item as ICaption;
   const { animationIn, animationOut, animationTimed } = getAnimations(

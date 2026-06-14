@@ -7,11 +7,15 @@ interface CaptionsProps extends ResizableProps {
   tScale: number;
   display: IDisplay;
   text: string;
+  fontSize?: number;
+  guideOnly?: boolean;
 }
 
 class Caption extends Resizable {
   static type = "Caption";
   public text: string;
+  public fontSize?: number;
+  public guideOnly?: boolean;
 
   static createControls(): { controls: Record<string, Control> } {
     return { controls: createResizeControls() };
@@ -23,10 +27,15 @@ class Caption extends Resizable {
     this.tScale = props.tScale;
     this.display = props.display;
     this.text = props.text;
+    this.fontSize = props.fontSize;
+    this.guideOnly = props.guideOnly;
 
     this.borderColor = "transparent";
     this.stroke = "transparent";
     this.strokeWidth = 0;
+    if (props.guideOnly) {
+      this.fill = "#3A2F1D";
+    }
   }
 
   public _render(ctx: CanvasRenderingContext2D) {
@@ -42,12 +51,16 @@ class Caption extends Resizable {
     ctx.save();
     ctx.translate(-this.width / 2, -this.height / 2);
     ctx.translate(0, 8);
-    ctx.font = `400 12px ${SECONDARY_FONT}`;
+    const timelineFontSize = Math.max(
+      11,
+      Math.min(16, Math.round((this.fontSize || 22) / 1.5))
+    );
+    ctx.font = `400 ${timelineFontSize}px ${SECONDARY_FONT}`;
     ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
     ctx.textAlign = "left";
 
     // Calculate available width for text (full width minus icon space and right padding)
-    const iconSpace = 28; // space for the icon
+    const iconSpace = this.guideOnly ? 10 : 28; // space for the icon
     const rightPadding = 5; // 5px padding before ellipsis
     const availableWidth = this.width - iconSpace - rightPadding;
 
@@ -69,11 +82,13 @@ class Caption extends Resizable {
     }
 
     ctx.clip();
-    ctx.fillText(displayText, 28, 12);
+    ctx.fillText(displayText, this.guideOnly ? 10 : 28, 12);
 
-    ctx.translate(8, 1);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-    ctx.fill(textPath);
+    if (!this.guideOnly) {
+      ctx.translate(8, 1);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+      ctx.fill(textPath);
+    }
     ctx.restore();
   }
 

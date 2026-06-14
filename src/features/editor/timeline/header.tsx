@@ -9,7 +9,14 @@ import {
 import { PLAYER_PAUSE, PLAYER_PLAY } from "../constants/events";
 import { frameToTimeString, getCurrentTime, timeToString } from "../utils/time";
 import useStore from "../store/use-store";
-import { Magnet, SquareSplitHorizontal, Trash, ZoomIn, ZoomOut } from "lucide-react";
+import {
+  Captions,
+  Magnet,
+  SquareSplitHorizontal,
+  Trash,
+  ZoomIn,
+  ZoomOut
+} from "lucide-react";
 import {
   getFitZoomLevel,
   getNextZoomLevel,
@@ -23,6 +30,8 @@ import useUpdateAnsestors from "../hooks/use-update-ansestors";
 import { ITimelineScaleState } from "@designcombo/types";
 import { useIsLargeScreen } from "@/hooks/use-media-query";
 import { useTimelineOffsetX } from "../hooks/use-timeline-offset";
+import useLayoutStore from "../store/use-layout-store";
+import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 
 const IconPlayerPlayFilled = ({ size }: { size: number }) => (
   <svg
@@ -83,7 +92,18 @@ const IconPlayerSkipForward = ({ size }: { size: number }) => (
 );
 const Header = () => {
   const [playing, setPlaying] = useState(false);
-  const { duration, fps, scale, playerRef, activeIds, snapEnabled, setSnapEnabled } = useStore();
+  const {
+    duration,
+    fps,
+    scale,
+    playerRef,
+    activeIds,
+    snapEnabled,
+    setSnapEnabled,
+    trackItemsMap
+  } = useStore();
+  const { setActiveMenuItem, setShowMenuItem, setDrawerOpen } = useLayoutStore();
+  const { requestTranscription } = useCaptionTranscribeStore();
   const isLargeScreen = useIsLargeScreen();
   useUpdateAnsestors({ playing, playerRef });
 
@@ -116,6 +136,19 @@ const Header = () => {
 
   const handlePause = () => {
     dispatch(PLAYER_PAUSE);
+  };
+
+  const selectedMediaItem =
+    activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
+  const canTranscribeSelection =
+    selectedMediaItem?.type === "audio" || selectedMediaItem?.type === "video";
+
+  const handleTranscribeSelection = () => {
+    if (!canTranscribeSelection || !selectedMediaItem?.details?.src) return;
+    setActiveMenuItem("captions");
+    setShowMenuItem(true);
+    setDrawerOpen(true);
+    requestTranscription(selectedMediaItem.details.src);
   };
 
   useEffect(() => {
@@ -207,6 +240,17 @@ const Header = () => {
             >
               <Magnet size={15} />
               <span className="hidden lg:block">Magnet</span>
+            </Button>
+            <Button
+              disabled={!canTranscribeSelection}
+              onClick={handleTranscribeSelection}
+              variant={"ghost"}
+              size={isLargeScreen ? "sm" : "icon"}
+              className="flex items-center gap-1 px-2"
+              title="Generate transcription for selected clip"
+            >
+              <Captions size={15} />
+              <span className="hidden lg:block">Transcribe</span>
             </Button>
           </div>
           <div className="flex items-center justify-center">

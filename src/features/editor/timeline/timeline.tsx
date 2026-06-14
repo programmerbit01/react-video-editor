@@ -29,6 +29,9 @@ import PreviewTrackItem from "./items/preview-drag-item";
 import { useTimelineOffsetX } from "../hooks/use-timeline-offset";
 import { useStateManagerEvents } from "../hooks/use-state-manager-events";
 import { useResizbleTimeline } from "../hooks/use-resizable-timeline";
+import useLayoutStore from "../store/use-layout-store";
+import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import { Captions as CaptionsIcon } from "lucide-react";
 
 CanvasTimeline.registerItems({
   Text,
@@ -54,7 +57,16 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
   const canvasElRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = useRef<CanvasTimeline | null>(null);
   const horizontalScrollbarVpRef = useRef<HTMLDivElement>(null);
-  const { scale, playerRef, fps, duration, setState, timeline } = useStore();
+  const {
+    scale,
+    playerRef,
+    fps,
+    duration,
+    setState,
+    timeline,
+    activeIds,
+    trackItemsMap
+  } = useStore();
   const currentFrame = useCurrentPlayerFrame(playerRef);
   const [canvasSize, setCanvasSize] = useState(EMPTY_SIZE);
   const timelineOffsetX = useTimelineOffsetX();
@@ -68,6 +80,11 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
   const { theme } = useTheme();
 
   const { setTimeline } = useStore();
+  const { setActiveMenuItem, setShowMenuItem, setDrawerOpen } = useLayoutStore();
+  const { requestTranscription } = useCaptionTranscribeStore();
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
+    null
+  );
 
   // Use the extracted state manager events hook
   useStateManagerEvents(stateManager);
@@ -253,6 +270,39 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     }
   }, [scale]);
 
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu]);
+
+  const selectedMediaItem =
+    activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
+  const canTranscribeSelection =
+    selectedMediaItem?.type === "audio" || selectedMediaItem?.type === "video";
+
+  const handleTimelineContextMenu = (
+    event: React.MouseEvent<HTMLDivElement>
+  ) => {
+    if (!canTranscribeSelection || !selectedMediaItem?.details?.src) return;
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY });
+  };
+
+  const handleTranscribeSelection = () => {
+    if (!canTranscribeSelection || !selectedMediaItem?.details?.src) return;
+    requestTranscription(selectedMediaItem.details.src);
+    setActiveMenuItem("captions");
+    setShowMenuItem(true);
+    setDrawerOpen(true);
+    setContextMenu(null);
+  };
+
   return (
     <div
       ref={timelineContainerRef}
@@ -267,6 +317,7 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseOut={onMouseOut}
+      onContextMenu={handleTimelineContextMenu}
     >
       <Header />
       <Ruler
@@ -292,6 +343,17 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
           </div>
         </div>
       </div>
+      {contextMenu ? (
+        <button
+          type="button"
+          className="fixed z-[250] flex items-center gap-2 rounded-md border bg-popover px-3 py-2 text-sm shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={handleTranscribeSelection}
+        >
+          <CaptionsIcon size={14} />
+          Generate transcription
+        </button>
+      ) : null}
     </div>
   );
 };

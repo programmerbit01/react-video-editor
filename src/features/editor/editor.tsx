@@ -30,6 +30,7 @@ import useLayoutStore from "./store/use-layout-store";
 import ControlItemHorizontal from "./control-item-horizontal";
 import { design } from "./mock";
 import { Separator } from "@/components/ui/separator";
+import useTranscriptGuides from "./hooks/use-transcript-guides";
 
 const stateManager = new StateManager(
   {
@@ -106,6 +107,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
   const isLargeScreen = useIsLargeScreen();
 
   useTimelineEvents();
+  useTranscriptGuides(stateManager);
 
   const { setCompactFonts, setFonts } = useDataState();
   // useEffect(() => {
