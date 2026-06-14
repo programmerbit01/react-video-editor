@@ -27,11 +27,7 @@ class CanvasVideoClip {
   private ready: Promise<void>;
 
   constructor(src: string) {
-    // Canvas ctx.drawImage requires CORS headers. The higgs proxy always returns
-    // Access-Control-Allow-Origin: * so wrap direct CDN URLs with it.
-    this.src = src.includes("rpublic.tomtap.ai")
-      ? `/api/proxy?url=${encodeURIComponent(src)}`
-      : src;
+    this.src = src;
     this.ready = this.init();
   }
 

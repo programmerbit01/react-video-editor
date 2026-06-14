@@ -41,15 +41,16 @@ const getVappParams = () => {
 const toUploadItem = (item: any) => {
   const rawUrl = String(item.url || "");
   if (!rawUrl) return null;
-  // Direct CDN URL for display — HTML5 video/img don't need CORS for playback
-  // Canvas operations (timeline filmstrip) use proxy separately in CanvasVideoClip
+  // Remotion internally fetch()es the src URL (CORS-strict) — proxy is required for player.
+  // Grid display (<video>/<img>) doesn't need CORS so we store directUrl separately for speed.
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
   const entry: any = {
     id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
-    url: rawUrl,
-    filePath: rawUrl,
+    url: proxyUrl,         // Remotion player src — must be CORS-compliant
+    filePath: proxyUrl,
     fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
     type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-    metadata: { uploadedUrl: rawUrl, vappItem: true },
+    metadata: { uploadedUrl: proxyUrl, directUrl: rawUrl, vappItem: true },
     status: "uploaded",
     createdAt: item.createdAt || "",
   };
@@ -86,7 +87,8 @@ const VideoThumb = ({ src }: { src: string }) => {
 };
 
 const Thumb = ({ item }: { item: any }) => {
-  const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
+  // Use direct CDN URL for display — faster, no proxy hop, HTML tags don't need CORS
+  const src = normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
   if (isAudio(item)) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-white/5">
@@ -122,7 +124,7 @@ const UploadGridItem = ({
   setActivePreviewId: Dispatch<SetStateAction<string | null>>;
 }) => {
   const mediaId = String(item.id || item.url);
-  const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
+  const src = normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
