@@ -172,12 +172,7 @@ const toUploadItem = (item: any) => {
     metadata: { uploadedUrl: proxied },
     status: "uploaded",
   };
-  if (item.stt && typeof item.stt === "object") {
-    entry.stt = item.stt;
-    console.log("[uploads] stt found in API item", { url: proxied, segments: item.stt?.segments?.length });
-  } else {
-    console.log("[uploads] no stt in API item", { url: proxied, type: item.type, hasStt: !!item.stt });
-  }
+  if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
   return entry;
 };
 
@@ -197,14 +192,7 @@ export const Uploads = () => {
     console.log("[uploads] fetchPage url →", apiUrl);
     const res = await fetch(apiUrl);
     const data = await res.json();
-    console.log("[uploads] raw API response total:", data.total, "hasMore:", data.hasMore);
     const rawItems = data.items || [];
-    console.log("[uploads] all item urls + stt:", rawItems.map((it: any) => ({
-      url: String(it.url || "").slice(-60),
-      type: it.type || it.media,
-      hasStt: !!it.stt,
-      keys: Object.keys(it),
-    })));
     const items = rawItems.map(toUploadItem);
     const explicitHasMore = data.hasMore ?? data.pagination?.hasMore;
     const inferredHasMore =
@@ -213,12 +201,15 @@ export const Uploads = () => {
         : rawItems.length > 0;
     setHasMore(Boolean(explicitHasMore ?? inferredHasMore));
     setUploads((prev: any[]) => {
-      const base = replace ? prev.filter((u: any) => !isVappProxyItem(u)) : prev;
-      const existingUrls = new Set(base.map((u: any) => u.url));
-      const merged = [...base, ...items.filter((i: any) => !existingUrls.has(i.url))];
-      const localItems = merged.filter((u: any) => !isVappProxyItem(u));
-      const vappItems = merged.filter((u: any) => isVappProxyItem(u));
-      return [...localItems, ...vappItems];
+      const localItems = prev.filter((u: any) => !isVappProxyItem(u));
+      if (pageNum === 1) {
+        // page 1: always replace vapp items with fresh API order (newest first)
+        return [...localItems, ...items];
+      }
+      // load more: append new unique items only
+      const existingVappUrls = new Set(prev.filter((u: any) => isVappProxyItem(u)).map((u: any) => u.url));
+      const existingVapp = prev.filter((u: any) => isVappProxyItem(u));
+      return [...localItems, ...existingVapp, ...items.filter((i: any) => !existingVappUrls.has(i.url))];
     });
     setPage(pageNum);
   };
