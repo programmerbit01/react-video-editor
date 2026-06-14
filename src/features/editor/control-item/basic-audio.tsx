@@ -2,7 +2,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { IAudio, ITrackItem } from "@designcombo/types";
 import Volume from "./common/volume";
 import Speed from "./common/speed";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { dispatch } from "@designcombo/events";
 import { EDIT_OBJECT, LAYER_REPLACE } from "@designcombo/state";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,10 @@ const BasicAudio = ({
 }) => {
   const showAll = !type;
   const [properties, setProperties] = useState(trackItem);
+
+  useEffect(() => {
+    setProperties(trackItem);
+  }, [trackItem]);
 
   const handleChangeVolume = (v: number) => {
     dispatch(EDIT_OBJECT, {

@@ -14,6 +14,7 @@ import { createAudioControls } from "../controls";
 import { SECONDARY_FONT } from "../../constants/constants";
 import { PlaybackState } from "../../utils/playback-state";
 import { TranscriptOverlayStore } from "../../utils/transcript-overlay-store";
+import useTranscriptGuideStore from "../../store/use-transcript-guide-store";
 
 const TRANSCRIPT_ZONE_H = 16;
 
@@ -161,6 +162,42 @@ class Audio extends Trimmable {
 
         ctx.fillText(word.word, wordX, textY);
       }
+    }
+
+    const selectedGuide = useTranscriptGuideStore.getState().selectedGuide;
+    if (selectedGuide?.itemId === this.id) {
+      const startX = Math.max(
+        0,
+        Math.min(this.width, (selectedGuide.startMs - this.display!.from) * pxPerMs)
+      );
+      const endX = Math.max(
+        startX + 1,
+        Math.min(this.width, (selectedGuide.endMs - this.display!.from) * pxPerMs)
+      );
+
+      ctx.save();
+      ctx.fillStyle = "rgba(139, 92, 246, 0.10)";
+      ctx.fillRect(startX, zoneY, Math.max(2, endX - startX), TRANSCRIPT_ZONE_H);
+      ctx.strokeStyle = "rgba(168, 85, 247, 0.92)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(startX, zoneY - 6);
+      ctx.lineTo(startX, this.height);
+      ctx.stroke();
+
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = "rgba(245, 231, 190, 0.9)";
+      ctx.beginPath();
+      ctx.moveTo(endX, zoneY - 8);
+      ctx.lineTo(endX, this.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = "rgba(245, 231, 190, 0.95)";
+      ctx.beginPath();
+      ctx.roundRect(endX - 3, zoneY - 10, 6, 8, 3);
+      ctx.fill();
+      ctx.restore();
     }
 
     ctx.restore();

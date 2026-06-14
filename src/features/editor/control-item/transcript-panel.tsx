@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ITrackItem } from "@designcombo/types";
 import { dispatch } from "@designcombo/events";
+import { ACTIVE_SPLIT } from "@designcombo/state";
+import { ScissorsLineDashed, SquareSplitHorizontal } from "lucide-react";
 import useCaptionTranscribeStore, {
   TranscriptResult,
   TranscriptSegment
@@ -9,6 +11,7 @@ import useUploadStore from "../store/use-upload-store";
 import useStore from "../store/use-store";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
 import { PLAYER_SEEK } from "../constants/events";
+import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 
 const formatSeconds = (seconds: number) => {
   const safeSeconds = Math.max(0, Math.floor(seconds || 0));
@@ -22,6 +25,11 @@ const formatSeconds = (seconds: number) => {
 
 const formatRange = (segment: TranscriptSegment) =>
   `${formatSeconds(segment.start)} - ${formatSeconds(segment.end)}`;
+
+const formatSegmentDuration = (segment: TranscriptSegment) => {
+  const duration = Math.max(0, segment.end - segment.start);
+  return `${duration.toFixed(duration < 10 ? 1 : 0)}s`;
+};
 
 const getVappParams = () => {
   if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
@@ -53,6 +61,7 @@ export default function TranscriptPanel({
   const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
   const { uploads } = useUploadStore();
   const { playerRef, fps } = useStore();
+  const { selectedGuide, selectGuide } = useTranscriptGuideStore();
   const [loading, setLoading] = useState(false);
   const activeWordRef = useRef<HTMLSpanElement | null>(null);
 
@@ -136,11 +145,52 @@ export default function TranscriptPanel({
     dispatch(PLAYER_SEEK, { payload: { time: clipTimeMs } });
   };
 
+  const selectSegmentGuide = (segment: TranscriptSegment, segmentIndex: number) => {
+    if (!trackItem?.id) return;
+    const segmentStartMs = Math.max(
+      safeDisplayFrom,
+      safeDisplayFrom - safeTrimFrom + segment.start * 1000
+    );
+    const displayTo = Number((trackItem as any)?.display?.to || segmentStartMs);
+    const segmentEndMs = Math.min(
+      displayTo,
+      safeDisplayFrom - safeTrimFrom + segment.end * 1000
+    );
+
+    selectGuide({
+      itemId: trackItem.id,
+      segmentIndex,
+      startMs: segmentStartMs,
+      endMs: segmentEndMs,
+      defaultEndMs: segmentEndMs
+    });
+  };
+
+  const splitAtSegmentEnd = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    segment: TranscriptSegment,
+    segmentIndex: number
+  ) => {
+    event.stopPropagation();
+    selectSegmentGuide(segment, segmentIndex);
+    const segmentEndMs = Math.min(
+      Number((trackItem as any)?.display?.to || 0),
+      safeDisplayFrom - safeTrimFrom + segment.end * 1000
+    );
+    dispatch(PLAYER_SEEK, { payload: { time: segmentEndMs } });
+    dispatch(ACTIVE_SPLIT, {
+      payload: {},
+      options: {
+        time: segmentEndMs
+      }
+    });
+  };
+
   if (!trackItem) return null;
 
   if (loading && !transcript) {
     return (
-      <div className="border-t border-border/70 px-5 py-4">
+      <div className="px-4 py-4">
         <p className="text-xs text-muted-foreground">Loading transcript…</p>
       </div>
     );
@@ -149,38 +199,73 @@ export default function TranscriptPanel({
   if (!transcript?.segments?.length) return null;
 
   return (
-    <div className="border-t border-border/70 px-5 py-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">Transcript</h3>
-          <p className="text-xs text-muted-foreground">
-            {transcript.language?.toUpperCase() || "—"} ·{" "}
+    <div className="px-4 py-4">
+      <div className="mb-3 flex items-center justify-between gap-3 px-1 py-1">
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-background/60 text-muted-foreground">
+            <ScissorsLineDashed className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-semibold text-foreground">Guided Text</h3>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
+          <span className="rounded-full bg-background/55 px-2.5 py-1">
+            {transcript.language?.toUpperCase() || "—"}
+          </span>
+          <span className="rounded-full bg-background/55 px-2.5 py-1">
             {transcript.segment_count || transcript.segments.length} segments
-          </p>
+          </span>
         </div>
       </div>
 
-      <div className="mb-3 rounded-md border border-border/60 bg-card/40 p-3 text-sm leading-6 text-foreground/90">
+      <div className="mb-3 rounded-2xl bg-card/30 px-4 py-3 text-sm leading-6 text-foreground/90">
         {transcript.text}
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {transcript.segments.map((segment, si) => {
           const isActiveSegment = si === activeSegmentIdx;
+          const isSelectedGuide =
+            selectedGuide?.itemId === trackItem.id &&
+            selectedGuide?.segmentIndex === si;
           const hasWords = segment.words && segment.words.length > 0;
 
           return (
             <div
               key={`${trackItem.id}-segment-${si}`}
-              className={`rounded-md border p-3 cursor-pointer transition-colors ${
-                isActiveSegment
-                  ? "border-violet-500/60 bg-violet-500/10"
-                  : "border-border/50 bg-card/30 hover:bg-card/50"
+              className={`cursor-pointer rounded-2xl px-3 py-3 transition-all ${
+                isActiveSegment || isSelectedGuide
+                  ? "bg-violet-500/10 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.7)]"
+                  : "bg-card/20 hover:bg-card/35"
               }`}
-              onClick={() => seekToSegment(segment)}
+              onClick={() => {
+                selectSegmentGuide(segment, si);
+                seekToSegment(segment);
+              }}
             >
-              <div className="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground">
-                {formatRange(segment)}
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-background/60 text-muted-foreground transition hover:bg-background/80 hover:text-foreground"
+                    onClick={(event) => splitAtSegmentEnd(event, segment, si)}
+                    title="Split clip at guided text end"
+                  >
+                    <SquareSplitHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                  <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground">
+                    {formatRange(segment)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] font-medium text-muted-foreground">
+                  <span className="rounded-full bg-background/60 px-2 py-0.5">
+                    {formatSegmentDuration(segment)}
+                  </span>
+                  {hasWords && (
+                    <span className="rounded-full bg-background/60 px-2 py-0.5">
+                      {segment.words!.length} words
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="text-sm leading-6">
                 {hasWords ? (
@@ -190,9 +275,9 @@ export default function TranscriptPanel({
                       <span
                         key={wi}
                         ref={isActiveWord ? activeWordRef : null}
-                        className={`transition-colors ${
+                        className={`rounded-md px-0.5 py-0.5 transition-colors ${
                           isActiveWord
-                            ? "bg-violet-500 text-white rounded px-0.5"
+                            ? "bg-violet-500 text-white"
                             : isActiveSegment
                             ? "text-foreground/90"
                             : "text-foreground/60"

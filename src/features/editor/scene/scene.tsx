@@ -10,8 +10,8 @@ import { SceneRef } from "./scene.types";
 import { dispatch } from "@designcombo/events";
 
 const CANVAS_OPTIONS = [
-  { label: "9:16", width: 1080, height: 1920 },
   { label: "16:9", width: 1920, height: 1080 },
+  { label: "9:16", width: 1080, height: 1920 },
   { label: "1:1", width: 1080, height: 1080 },
   { label: "4:5", width: 1080, height: 1350 },
   { label: "3:4", width: 1080, height: 1440 },

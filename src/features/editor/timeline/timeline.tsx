@@ -33,6 +33,7 @@ import { useResizbleTimeline } from "../hooks/use-resizable-timeline";
 import useLayoutStore from "../store/use-layout-store";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import { Captions as CaptionsIcon } from "lucide-react";
+import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 
 CanvasTimeline.registerItems({
   Text,
@@ -50,6 +51,7 @@ CanvasTimeline.registerItems({
 });
 
 const EMPTY_SIZE = { width: 0, height: 0 };
+const TRANSCRIPT_ZONE_H = 16;
 const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
   // prevent duplicate scroll events
   const canScrollRef = useRef(false);
@@ -240,6 +242,71 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
       canvas.purge();
     };
   }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current as any;
+    if (!canvas?.on) return;
+
+    const handleMouseDown = (opt: any) => {
+      const { selectedGuide, startDragging } = useTranscriptGuideStore.getState();
+      const target = opt?.target as any;
+      if (!selectedGuide || !target || target.id !== selectedGuide.itemId) return;
+
+      const pointer = canvas.getPointer(opt.e);
+      const localX = pointer.x - (target.left - target.width / 2);
+      const localY = pointer.y - (target.top - target.height / 2);
+      const clipDuration = Number(target.display?.to || 0) - Number(target.display?.from || 0);
+      if (clipDuration <= 0) return;
+
+      const pxPerMs = target.width / clipDuration;
+      const endX = (selectedGuide.endMs - Number(target.display.from || 0)) * pxPerMs;
+      const zoneY = target.height - TRANSCRIPT_ZONE_H;
+      const nearHandle = Math.abs(localX - endX) <= 8;
+      const insideZone = localY >= zoneY - 10 && localY <= target.height + 2;
+
+      if (nearHandle && insideZone) {
+        startDragging(target.id);
+      }
+    };
+
+    const handleMouseMove = (opt: any) => {
+      const { selectedGuide, draggingItemId, setGuideEnd } = useTranscriptGuideStore.getState();
+      const target = opt?.target as any;
+      if (!selectedGuide || !draggingItemId || !target || target.id !== draggingItemId) return;
+
+      const pointer = canvas.getPointer(opt.e);
+      const localX = pointer.x - (target.left - target.width / 2);
+      const clipFrom = Number(target.display?.from || 0);
+      const clipTo = Number(target.display?.to || clipFrom);
+      const clipDuration = clipTo - clipFrom;
+      if (clipDuration <= 0) return;
+
+      const pxPerMs = target.width / clipDuration;
+      const minEnd = selectedGuide.startMs + 100;
+      const nextEnd = clipFrom + Math.max(0, Math.min(target.width, localX)) / pxPerMs;
+      setGuideEnd(Math.max(minEnd, Math.min(clipTo, nextEnd)));
+      canvas.defaultCursor = "ew-resize";
+      canvas.requestRenderAll();
+    };
+
+    const handleMouseUp = () => {
+      const { draggingItemId, stopDragging } = useTranscriptGuideStore.getState();
+      if (!draggingItemId) return;
+      stopDragging();
+      canvas.defaultCursor = "default";
+      canvas.requestRenderAll();
+    };
+
+    canvas.on("mouse:down", handleMouseDown);
+    canvas.on("mouse:move", handleMouseMove);
+    canvas.on("mouse:up", handleMouseUp);
+
+    return () => {
+      canvas.off("mouse:down", handleMouseDown);
+      canvas.off("mouse:move", handleMouseMove);
+      canvas.off("mouse:up", handleMouseUp);
+    };
+  }, [timeline]);
 
   const onClickRuler = (units: number) => {
     const canvas = canvasRef.current;
