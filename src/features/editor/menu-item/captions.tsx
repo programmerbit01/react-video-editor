@@ -22,11 +22,12 @@ import useCaptionTranscribeStore, {
 } from "../store/use-caption-transcribe-store";
 
 const getVappParams = () => {
-  if (typeof window === "undefined") return { token: "", baseUrl: "" };
+  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
   const p = new URLSearchParams(window.location.search);
   return {
+    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.host}`,
     token: p.get("token") || "",
-    baseUrl: p.get("baseUrl") || ""
+    baseUrl: p.get("baseUrl") || "https://api.muapi.ai"
   };
 };
 
@@ -105,18 +106,51 @@ export const Captions = () => {
       const trackItem = mediaTrackItems.find(
         (m) => m.details.src === selectedMedia
       );
+      if (!trackItem) throw new Error("Track item not found");
 
-      if (!trackItem) {
-        throw new Error("Track item not found");
+      const { vappHost, token, baseUrl } = getVappParams();
+
+      // Fire job — returns {job_id} immediately
+      const fireRes = await fetch(withEditorBase("/api/transcribe"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: selectedMedia, timestamp_type: "word", token, baseUrl })
+      });
+      if (!fireRes.ok) throw new Error("Failed to queue transcription");
+
+      // Poll job status via vapp higgs /api/vapp/jobs/[id] — direct to vapp server, no proxy chain
+      const fireData = await fireRes.json().catch(() => ({}));
+      const jobId = String(fireData?.job_id || "").trim();
+      if (!jobId) throw new Error("No job_id returned");
+
+      let sttData: TranscriptResult | null = null;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const pollRes = await fetch(
+            `${vappHost}/api/vapp/jobs/${jobId}?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
+          );
+          const pollData = await pollRes.json().catch(() => ({}));
+          if (pollData?.failed) throw new Error("Transcription job failed");
+          if (pollData?.done) {
+            const gd = pollData?.generation_details || {};
+            // Handle both {stt: {...}} and flat {segments: [...]} formats
+            const raw = gd?.stt || gd;
+            if (Array.isArray(raw?.segments) && raw.segments.length) {
+              sttData = raw as TranscriptResult;
+            }
+            break;
+          }
+        } catch (e: any) {
+          if (String(e?.message || "").includes("failed")) throw e;
+          // transient — keep polling
+        }
       }
 
-      const { url, result } = await transcribeMedia(selectedMedia, "");
-      const jsonData = result || (url ? await fetchJsonFromUrl(url) : null);
-      if (!jsonData) {
-        throw new Error("Transcription result missing");
-      }
+      if (!sttData?.segments?.length) throw new Error("No transcript segments found");
+
       const transcriptResult = normalizeTranscriptResult(
-        jsonData,
+        sttData,
         Math.max(1, (trackItem.display.to - trackItem.display.from) / 1000)
       );
       setTranscriptResult(selectedMedia, transcriptResult);
@@ -397,50 +431,6 @@ const withEditorBase = (path: string) => {
   return window.location.pathname.startsWith("/editor") ? `/editor${path}` : path;
 };
 
-async function transcribeMedia(
-  mediaUrl: string,
-  targetLanguage: string
-): Promise<{ url: string; result?: any }> {
-  const { token, baseUrl } = getVappParams();
-  const transcribeResponse = await fetch(withEditorBase("/api/transcribe"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      url: mediaUrl,
-      timestamp_type: "word",
-      targetLanguage,
-      token,
-      baseUrl
-    })
-  });
-
-  if (!transcribeResponse.ok) {
-    throw new Error("Failed to initiate transcription.");
-  }
-
-  const transcribeData = await transcribeResponse.json();
-  const { transcribe } = transcribeData;
-
-  return { url: transcribe.url, result: transcribe.result };
-}
-
-async function fetchJsonFromUrl(url: string) {
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      throw new Error(`Error fetching JSON: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch JSON data:", error);
-    throw error; // Optionally rethrow to handle it in the caller
-  }
-}
 
 function normalizeTranscriptResult(
   input: any,
