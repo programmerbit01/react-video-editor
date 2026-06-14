@@ -13,14 +13,16 @@ export async function GET(
     return NextResponse.json({ message: "render not ready" }, { status: 404 });
   }
 
-  const outputPath = path.join(process.cwd(), "public", "exports", `${id}.mp4`);
+  const isJson = (job as any).url?.endsWith(".json");
+  const ext = isJson ? "json" : "mp4";
+  const outputPath = path.join(process.cwd(), "public", "exports", `${id}.${ext}`);
   try {
     const buf = await readFile(outputPath);
     return new NextResponse(buf, {
       status: 200,
       headers: {
-        "Content-Type": "video/mp4",
-        "Content-Disposition": `attachment; filename="untitled.mp4"`,
+        "Content-Type": isJson ? "application/json" : "video/mp4",
+        "Content-Disposition": `attachment; filename="untitled.${ext}"`,
         "Cache-Control": "no-store",
       },
     });
