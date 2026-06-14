@@ -15,12 +15,11 @@ const getLabel = (item: any) =>
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
 
-// Vapp items come through the editor proxy
 const isVappItem = (u: any) =>
   Boolean(
     u?.metadata?.vappItem ||
-    u?.url?.includes("/api/proxy?url=") ||
-    u?.filePath?.includes("/api/proxy?url=")
+    u?.url?.includes("rpublic.tomtap.ai") ||
+    u?.url?.includes("/api/proxy?url=") // legacy items
   );
 
 const normalizeMediaSrc = (src?: string) => {
@@ -42,16 +41,16 @@ const getVappParams = () => {
 const toUploadItem = (item: any) => {
   const rawUrl = String(item.url || "");
   if (!rawUrl) return null;
-  const finalUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
+  // Direct CDN URL — R2 CORS is configured at startup, no proxy hop needed for reads
   const entry: any = {
     id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
-    url: finalUrl,
-    filePath: finalUrl,
+    url: rawUrl,
+    filePath: rawUrl,
     fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
     type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-    metadata: { uploadedUrl: finalUrl, vappItem: true },
+    metadata: { uploadedUrl: rawUrl, vappItem: true },
     status: "uploaded",
-    createdAt: item.createdAt || "",   // preserve for client-side sort
+    createdAt: item.createdAt || "",
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
   return entry;
@@ -302,24 +301,46 @@ export const Uploads = () => {
 
     if (isVideo(item)) {
       let duration = 10000, width = 1920, height = 1080;
+      let previewUrl = "";
       try {
-        const meta = await new Promise<{ duration: number; width: number; height: number }>(
-          (resolve, reject) => {
+        const result = await new Promise<{ duration: number; width: number; height: number; previewUrl: string }>(
+          (resolve) => {
             const el = document.createElement("video");
+            el.crossOrigin = "anonymous";
             el.preload = "metadata";
-            el.onloadedmetadata = () => resolve({
+            el.muted = true;
+            const done = (extra: Partial<typeof result> = {}) => resolve({
               duration: Math.round(el.duration * 1000) || 10000,
               width: el.videoWidth || 1920,
               height: el.videoHeight || 1080,
+              previewUrl: "",
+              ...extra,
             });
-            el.onerror = reject;
+            el.onloadedmetadata = () => {
+              el.currentTime = Math.min(0.5, (el.duration || 10) * 0.05);
+              const timer = setTimeout(() => done(), 4000);
+              el.onseeked = () => {
+                clearTimeout(timer);
+                try {
+                  const tw = Math.min(el.videoWidth || 320, 320);
+                  const th = Math.round(tw * (el.videoHeight || 180) / (el.videoWidth || 320));
+                  const canvas = document.createElement("canvas");
+                  canvas.width = tw; canvas.height = th;
+                  const ctx = canvas.getContext("2d");
+                  if (ctx) { ctx.drawImage(el, 0, 0, tw, th); }
+                  done({ previewUrl: canvas.toDataURL("image/jpeg", 0.7) });
+                } catch { done(); }
+              };
+            };
+            el.onerror = () => done();
             el.src = src;
             el.load();
           }
         );
-        duration = meta.duration; width = meta.width; height = meta.height;
+        duration = result.duration; width = result.width; height = result.height;
+        previewUrl = result.previewUrl;
       } catch {}
-      const videoMeta: Record<string, any> = { previewUrl: "" };
+      const videoMeta: Record<string, any> = { previewUrl };
       if (item.stt && typeof item.stt === "object") {
         videoMeta.transcriptData = item.stt;
         setTranscriptResult(src, item.stt);
