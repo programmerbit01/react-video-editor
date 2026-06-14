@@ -42,8 +42,6 @@ const getVappParams = () => {
 const toUploadItem = (item: any) => {
   const rawUrl = String(item.url || "");
   if (!rawUrl) return null;
-  // Always proxy — R2 CORS is unreliable across production domains.
-  // The proxy has disk cache + range request support so latency is acceptable.
   const finalUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
   const entry: any = {
     id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
@@ -53,6 +51,7 @@ const toUploadItem = (item: any) => {
     type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
     metadata: { uploadedUrl: finalUrl, vappItem: true },
     status: "uploaded",
+    createdAt: item.createdAt || "",   // preserve for client-side sort
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
   return entry;
@@ -232,13 +231,15 @@ export const Uploads = () => {
 
     const data = await res.json();
     const rawItems: any[] = data.items || [];
-    console.log(`[uploads] rawItems: ${rawItems.length}, total: ${data.total}, totalPages: ${data.totalPages || data.pages}`);
-    console.log(`[uploads] first 5 items:`, rawItems.slice(0, 5).map((i: any) => ({ name: i.name, type: i.type, media: i.media, mtime: i.mtime, url: String(i.url || "").slice(-40) })));
+    console.log(`[uploads] rawItems: ${rawItems.length}, total: ${data.total}, hasMore: ${data.hasMore}`);
+    console.log(`[uploads] first 5 items:`, rawItems.slice(0, 5).map((i: any) => ({ name: i.name, type: i.type, createdAt: i.createdAt, url: String(i.url || "").slice(-50) })));
 
-    const items = rawItems.map(toUploadItem).filter(Boolean);
+    const items = (rawItems.map(toUploadItem).filter(Boolean) as any[])
+      // client-side safety sort: newest first by ISO date string (lexicographic = correct for ISO)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
-    const totalPages = data.totalPages || data.pages || 1;
-    setHasMore(pageNum < totalPages);
+    // higgs returns hasMore as a boolean directly
+    setHasMore(Boolean(data.hasMore));
 
     setUploads((prev: any[]) => {
       const locals = prev.filter((u: any) => !isVappItem(u));
