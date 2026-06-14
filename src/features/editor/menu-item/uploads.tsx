@@ -191,19 +191,13 @@ export const Uploads = () => {
 
   const fetchPage = async (pageNum: number, replace = false) => {
     const { vappHost, token, baseUrl } = getVappParams();
-    const res = await fetch(
-      `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`
-    );
+    const apiUrl = `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`;
+    console.log("[uploads] fetchPage url →", apiUrl);
+    const res = await fetch(apiUrl);
     const data = await res.json();
+    console.log("[uploads] raw API response", JSON.stringify(data).slice(0, 800));
     const rawItems = data.items || [];
-    console.log("[uploads] raw API items", rawItems.slice(0, 5).map((it: any) => ({
-      url: it.url,
-      media: it.media,
-      type: it.type,
-      hasStt: !!it.stt,
-      sttSegments: it.stt?.segments?.length ?? 0,
-      recordId: it.record_id,
-    })));
+    console.log("[uploads] rawItems count", rawItems.length, "first item keys:", rawItems[0] ? Object.keys(rawItems[0]) : []);
     const items = rawItems.map(toUploadItem);
     const explicitHasMore = data.hasMore ?? data.pagination?.hasMore;
     const inferredHasMore =
