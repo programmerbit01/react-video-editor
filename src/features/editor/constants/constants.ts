@@ -6,7 +6,7 @@ export const TIMELINE_OFFSET_CANVAS_LEFT = 16;
 export const TIMELINE_OFFSET_CANVAS_RIGHT = 80;
 export const DEFAULT_FONT = "Roboto";
 export const DEFAULT_WEIGHT = "Regular";
-export const SECONDARY_FONT_URL = "/Geist-SemiBold.ttf";
+export const SECONDARY_FONT_URL = `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/Geist-SemiBold.ttf`;
 export const SECONDARY_FONT = "geist-regular";
 
 export const LARGER_FONT_SIZE = 30;
