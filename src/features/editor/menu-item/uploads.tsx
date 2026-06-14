@@ -223,27 +223,34 @@ export const Uploads = () => {
     const { vappHost, token, baseUrl } = getVappParams();
     const apiUrl = `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`;
 
+    console.log(`[uploads] fetchPage(${pageNum}) →`, apiUrl);
+    console.log(`[uploads] params: vappHost=${vappHost} baseUrl=${baseUrl} token=${token ? token.slice(0,20)+"…" : "MISSING"}`);
+
     const res = await fetch(apiUrl);
+    console.log(`[uploads] response status:`, res.status, res.ok ? "OK" : "FAIL");
     if (!res.ok) throw new Error(`Server returned ${res.status}`);
 
     const data = await res.json();
     const rawItems: any[] = data.items || [];
+    console.log(`[uploads] rawItems: ${rawItems.length}, total: ${data.total}, totalPages: ${data.totalPages || data.pages}`);
+    console.log(`[uploads] first 5 items:`, rawItems.slice(0, 5).map((i: any) => ({ name: i.name, type: i.type, media: i.media, mtime: i.mtime, url: String(i.url || "").slice(-40) })));
+
     const items = rawItems.map(toUploadItem).filter(Boolean);
 
     const totalPages = data.totalPages || data.pages || 1;
     setHasMore(pageNum < totalPages);
 
     setUploads((prev: any[]) => {
-      // In-session local uploads (user uploaded in this session, not from server)
       const locals = prev.filter((u: any) => !isVappItem(u));
       if (pageNum === 1) {
-        // Full replace of vapp items with fresh server data (newest first)
+        console.log(`[uploads] setUploads page1: locals=${locals.length} vapp=${items.length}`);
         return [...locals, ...items];
       }
-      // Load more: append only new items not already in list
       const existing = new Set(prev.filter((u: any) => isVappItem(u)).map((u: any) => u.url));
       const vapp = prev.filter((u: any) => isVappItem(u));
-      return [...locals, ...vapp, ...items.filter((i: any) => !existing.has(i.url))];
+      const newItems = items.filter((i: any) => !existing.has(i.url));
+      console.log(`[uploads] setUploads loadMore: existing=${vapp.length} new=${newItems.length}`);
+      return [...locals, ...vapp, ...newItems];
     });
     setPage(pageNum);
     setFetchError(null);
