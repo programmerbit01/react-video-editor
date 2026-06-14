@@ -7,6 +7,7 @@ import useStore from "../store/use-store";
 import Playhead from "./playhead";
 import { useTheme } from "next-themes";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
+import { PlaybackState } from "../utils/playback-state";
 import {
   Audio,
   Image,
@@ -103,6 +104,9 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
   }, [playerRef?.current?.isPlaying()]);
 
   useEffect(() => {
+    PlaybackState.currentMs = (currentFrame / fps) * 1000;
+    timeline?.requestRenderAll();
+
     const position = timeMsToUnits((currentFrame / fps) * 1000, scale.zoom);
     const canvasEl = canvasElRef.current;
     const horizontalScrollbar = horizontalScrollbarVpRef.current;

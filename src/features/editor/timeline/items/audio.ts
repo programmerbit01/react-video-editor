@@ -12,6 +12,10 @@ import {
 import { IMetadata, ITrim } from "@designcombo/types";
 import { createAudioControls } from "../controls";
 import { SECONDARY_FONT } from "../../constants/constants";
+import { PlaybackState } from "../../utils/playback-state";
+import { TranscriptOverlayStore } from "../../utils/transcript-overlay-store";
+
+const TRANSCRIPT_ZONE_H = 16;
 
 const MAX_CANVAS_WIDTH = 12000; // Keep canvas size reasonable
 const CANVAS_SAFE_DRAWING = 2000;
@@ -35,6 +39,7 @@ class Audio extends Trimmable {
 
   public scrollLeft = 0;
   private isDirty = true;
+  private lastHadTranscript = false;
   declare playbackRate: number;
   public bars: any[] = [];
 
@@ -61,6 +66,13 @@ class Audio extends Trimmable {
     super._render(ctx);
     this.drawTextIdentity(ctx);
     this.updateSelected(ctx);
+
+    // Re-render waveform when transcript becomes available or disappears
+    const hasTranscript = Boolean(TranscriptOverlayStore[this.id]?.length);
+    if (hasTranscript !== this.lastHadTranscript) {
+      this.lastHadTranscript = hasTranscript;
+      this.isDirty = true;
+    }
 
     ctx.save();
     ctx.translate(-this.width / 2, -this.height / 2);
@@ -89,7 +101,70 @@ class Audio extends Trimmable {
     );
 
     ctx.restore();
+    this.drawTranscriptZone(ctx);
     this.canvas?.requestRenderAll();
+  }
+
+  private drawTranscriptZone(ctx: CanvasRenderingContext2D) {
+    const segments = TranscriptOverlayStore[this.id];
+    if (!segments?.length) return;
+
+    const clipDurMs = this.display!.to - this.display!.from;
+    if (clipDurMs <= 0 || this.width <= 0) return;
+
+    const pxPerMs = this.width / clipDurMs;
+    const trimFromMs = this.trim?.from ?? 0;
+    const sourceMs = PlaybackState.currentMs - this.display!.from + trimFromMs;
+
+    ctx.save();
+    ctx.translate(-this.width / 2, -this.height / 2);
+    ctx.beginPath();
+    ctx.rect(0, 0, this.width, this.height);
+    ctx.clip();
+
+    const zoneY = this.height - TRANSCRIPT_ZONE_H;
+
+    // Full-width solid bar with rounded bottom corners
+    ctx.fillStyle = "rgba(8, 4, 20, 0.93)";
+    ctx.beginPath();
+    ctx.roundRect(0, zoneY, this.width, TRANSCRIPT_ZONE_H, [0, 0, this.rx, this.rx]);
+    ctx.fill();
+
+    // Top separator
+    ctx.fillStyle = "rgba(100, 70, 200, 0.5)";
+    ctx.fillRect(0, zoneY, this.width, 1);
+
+    // Words positioned at actual timeline x (aligns with playhead)
+    ctx.font = `500 11px ${SECONDARY_FONT}`;
+    ctx.textBaseline = "middle";
+    const textY = zoneY + TRANSCRIPT_ZONE_H / 2;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(2, zoneY + 1, this.width - 4, TRANSCRIPT_ZONE_H - 1);
+    ctx.clip();
+
+    for (const seg of segments) {
+      for (const word of seg.words) {
+        const wordTimeFromClipStart = word.startMs - trimFromMs;
+        if (wordTimeFromClipStart < 0) continue;
+        const wordX = wordTimeFromClipStart * pxPerMs;
+        if (wordX >= this.width) break;
+
+        const isActive = sourceMs >= word.startMs && sourceMs < word.endMs;
+        const isPast = sourceMs >= word.endMs;
+        ctx.fillStyle = isActive
+          ? "#F5E7BE"
+          : isPast
+            ? "rgba(255,255,255,0.6)"
+            : "rgba(255,255,255,0.7)";
+
+        ctx.fillText(word.word, wordX, textY);
+      }
+    }
+
+    ctx.restore();
+    ctx.restore();
   }
 
   private async initialize() {
@@ -230,14 +305,26 @@ class Audio extends Trimmable {
     // Clear the offscreen canvas
     ctx.clearRect(0, 0, this.offscreenCanvas!.width, this.height);
 
-    // Clip with rounded corners
+    // When transcript data exists, reserve the bottom TRANSCRIPT_ZONE_H pixels for text
+    const hasTranscript = Boolean(TranscriptOverlayStore[this.id]?.length);
+    const waveH = hasTranscript
+      ? Math.max(10, this.height - TRANSCRIPT_ZONE_H)
+      : this.height;
+
     ctx.beginPath();
-    ctx.roundRect(0, 0, this.offscreenCanvas!.width, this.height, this.rx);
+    if (hasTranscript && waveH < this.height) {
+      ctx.roundRect(0, 0, this.offscreenCanvas!.width, waveH, [this.rx, this.rx, 0, 0]);
+    } else {
+      ctx.roundRect(0, 0, this.offscreenCanvas!.width, this.height, this.rx);
+    }
     ctx.clip();
 
-    // Draw waveform
+    // Draw waveform scaled to the available height
     ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
     ctx.imageSmoothingEnabled = false;
+
+    const maxBarH = Math.round(waveH * 0.7);
+    const centerY = Math.round(waveH / 2);
 
     // Calculate which bars are visible
     const barWidth = 4; // 1px bar + 3px space
@@ -251,9 +338,9 @@ class Audio extends Trimmable {
         const x = Math.round(i * barWidth - visibleStart);
         if (x >= 0 && x < this.offscreenCanvas!.width) {
           const amplitude = bar.amplitude || 0;
-          const height = Math.round(amplitude * 15);
-          const y = Math.round((20 - height) / 2 + 8);
-          ctx.rect(x, y, 1, height);
+          const barH = Math.round(amplitude * maxBarH);
+          const y = centerY - Math.round(barH / 2);
+          ctx.rect(x, y, 1, barH);
         }
       }
     }
