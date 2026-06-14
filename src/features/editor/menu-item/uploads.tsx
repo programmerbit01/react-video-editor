@@ -171,7 +171,12 @@ const toUploadItem = (item: any) => {
     metadata: { uploadedUrl: proxied },
     status: "uploaded",
   };
-  if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
+  if (item.stt && typeof item.stt === "object") {
+    entry.stt = item.stt;
+    console.log("[uploads] stt found in API item", { url: proxied, segments: item.stt?.segments?.length });
+  } else {
+    console.log("[uploads] no stt in API item", { url: proxied, type: item.type, hasStt: !!item.stt });
+  }
   return entry;
 };
 
@@ -259,7 +264,12 @@ export const Uploads = () => {
         duration = meta.duration; width = meta.width; height = meta.height;
       } catch {}
       const videoMeta: Record<string, any> = { previewUrl: "" };
-      if (item.stt && typeof item.stt === "object") videoMeta.transcriptData = item.stt;
+      if (item.stt && typeof item.stt === "object") {
+        videoMeta.transcriptData = item.stt;
+        console.log("[uploads] setting transcriptData on ADD_VIDEO", { segments: item.stt?.segments?.length });
+      } else {
+        console.log("[uploads] ADD_VIDEO without transcriptData", { hasStt: !!item.stt });
+      }
       dispatch(ADD_VIDEO, {
         payload: { id: generateId(), duration, details: { src, width, height }, metadata: videoMeta },
         options: { resourceId: "main", scaleMode: "fit" },

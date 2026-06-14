@@ -44,17 +44,35 @@ export default function TranscriptPanel({
 
   let transcript = getTrackTranscript(trackItem, resultsByMedia);
 
+  const mediaSrc = String((trackItem as any)?.details?.src || "").trim();
+
   // Fallback: look up stt from upload store by matching src URL
   if (!transcript && trackItem) {
-    const mediaSrc = String((trackItem as any)?.details?.src || "").trim();
     if (mediaSrc) {
       const match = uploads.find((u: any) => {
         const uUrl = u.metadata?.uploadedUrl || u.url || "";
         return uUrl === mediaSrc;
       });
+      console.log("[TranscriptPanel] upload store lookup", {
+        mediaSrc,
+        uploadsCount: uploads.length,
+        matchFound: !!match,
+        matchHasStt: !!(match?.stt),
+        matchSttSegments: match?.stt?.segments?.length ?? 0,
+        uploadUrls: uploads.slice(0, 5).map((u: any) => u.metadata?.uploadedUrl || u.url),
+      });
       if (match?.stt?.segments?.length) transcript = match.stt as TranscriptResult;
     }
   }
+
+  console.log("[TranscriptPanel] render", {
+    trackItemId: trackItem?.id,
+    mediaSrc,
+    metadataTranscriptData: (trackItem as any)?.metadata?.transcriptData,
+    runtimeResult: !!resultsByMedia?.[mediaSrc],
+    transcriptFound: !!transcript,
+    segments: transcript?.segments?.length ?? 0,
+  });
 
   if (!trackItem || !transcript?.segments?.length) {
     return null;
