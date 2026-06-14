@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ITrackItem } from "@designcombo/types";
 import useCaptionTranscribeStore, {
   TranscriptResult,
@@ -18,17 +19,23 @@ const formatSeconds = (seconds: number) => {
 const formatRange = (segment: TranscriptSegment) =>
   `${formatSeconds(segment.start)} - ${formatSeconds(segment.end)}`;
 
+const getVappParams = () => {
+  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
+  const p = new URLSearchParams(window.location.search);
+  return {
+    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
+    token: p.get("token") || "",
+    baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
+  };
+};
+
 export const getTrackTranscript = (
   trackItem?: ITrackItem | null,
   runtimeResults?: Record<string, TranscriptResult>
 ) => {
   if (!trackItem) return null;
-
   const mediaSrc = String(trackItem?.details?.src || "").trim();
-  const metadataTranscript = trackItem?.metadata?.transcriptData as
-    | TranscriptResult
-    | undefined;
-
+  const metadataTranscript = trackItem?.metadata?.transcriptData as TranscriptResult | undefined;
   if (mediaSrc && runtimeResults?.[mediaSrc]) return runtimeResults[mediaSrc];
   if (metadataTranscript?.segments?.length) return metadataTranscript;
   return null;
@@ -41,42 +48,54 @@ export default function TranscriptPanel({
 }) {
   const { resultsByMedia } = useCaptionTranscribeStore();
   const { uploads } = useUploadStore();
-
-  let transcript = getTrackTranscript(trackItem, resultsByMedia);
+  const [fetchedStt, setFetchedStt] = useState<TranscriptResult | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const mediaSrc = String((trackItem as any)?.details?.src || "").trim();
 
-  // Fallback: look up stt from upload store by matching src URL
-  if (!transcript && trackItem) {
-    if (mediaSrc) {
-      const match = uploads.find((u: any) => {
-        const uUrl = u.metadata?.uploadedUrl || u.url || "";
-        return uUrl === mediaSrc;
-      });
-      console.log("[TranscriptPanel] upload store lookup", {
-        mediaSrc,
-        uploadsCount: uploads.length,
-        matchFound: !!match,
-        matchHasStt: !!(match?.stt),
-        matchSttSegments: match?.stt?.segments?.length ?? 0,
-        uploadUrls: uploads.slice(0, 5).map((u: any) => u.metadata?.uploadedUrl || u.url),
-      });
-      if (match?.stt?.segments?.length) transcript = match.stt as TranscriptResult;
-    }
+  // Check runtime + metadata first
+  let transcript = getTrackTranscript(trackItem, resultsByMedia);
+
+  // Check upload store by URL match
+  if (!transcript && mediaSrc) {
+    const match = uploads.find((u: any) => {
+      const uUrl = u.metadata?.uploadedUrl || u.url || "";
+      return uUrl === mediaSrc;
+    });
+    if (match?.stt?.segments?.length) transcript = match.stt as TranscriptResult;
   }
 
-  console.log("[TranscriptPanel] render", {
-    trackItemId: trackItem?.id,
-    mediaSrc,
-    metadataTranscriptData: (trackItem as any)?.metadata?.transcriptData,
-    runtimeResult: !!resultsByMedia?.[mediaSrc],
-    transcriptFound: !!transcript,
-    segments: transcript?.segments?.length ?? 0,
-  });
+  // Use directly fetched stt as last fallback
+  if (!transcript && fetchedStt?.segments?.length) transcript = fetchedStt;
 
-  if (!trackItem || !transcript?.segments?.length) {
-    return null;
+  // Fetch from /api/vapp/stt when no transcript found and mediaSrc is a proxy URL
+  useEffect(() => {
+    if (transcript || !mediaSrc || !mediaSrc.includes("/api/proxy?url=")) return;
+    const { vappHost, token, baseUrl } = getVappParams();
+    setLoading(true);
+    fetch(
+      `${vappHost}/api/vapp/stt?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&url=${encodeURIComponent(mediaSrc)}`
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        console.log("[TranscriptPanel] /api/vapp/stt response", data);
+        if (data?.stt?.segments?.length) setFetchedStt(data.stt);
+      })
+      .catch((e) => console.warn("[TranscriptPanel] stt fetch failed", e))
+      .finally(() => setLoading(false));
+  }, [mediaSrc]);
+
+  if (!trackItem) return null;
+
+  if (loading) {
+    return (
+      <div className="border-t border-border/70 px-5 py-4">
+        <p className="text-xs text-muted-foreground">Loading transcript…</p>
+      </div>
+    );
   }
+
+  if (!transcript?.segments?.length) return null;
 
   return (
     <div className="border-t border-border/70 px-5 py-4">
