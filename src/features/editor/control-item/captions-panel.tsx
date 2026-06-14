@@ -1,12 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ITrackItem } from "@designcombo/types";
-import { CheckCircle2 } from "lucide-react";
+import { Loader2, CheckCircle2 } from "lucide-react";
 import useCaptionTranscribeStore, { TranscriptResult } from "../store/use-caption-transcribe-store";
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import useStore from "../store/use-store";
+import { millisecondsToHHMMSS } from "../utils/format";
+
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 const CAPTION_TRACK_PREFIX = "captions-track--";
 
@@ -25,6 +28,38 @@ const POSITION_TOP: Record<string, string> = {
   bottom: "80%"
 };
 
+const getVappParams = () => {
+  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
+  const p = new URLSearchParams(window.location.search);
+  return {
+    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.host}`,
+    token: p.get("token") || "",
+    baseUrl: p.get("baseUrl") || "https://api.muapi.ai"
+  };
+};
+
+const withEditorBase = (path: string) => {
+  if (typeof window === "undefined") return path;
+  return window.location.pathname.startsWith("/editor") ? `/editor${path}` : path;
+};
+
+function normalizeTranscriptResult(input: any, fallbackDuration: number): TranscriptResult {
+  const text = String(input?.text || "").trim();
+  const language = String(input?.language || "").trim();
+  const rawSegs = Array.isArray(input?.segments) ? input.segments : [];
+  const segments = rawSegs.length > 0
+    ? rawSegs.map((s: any) => ({
+        start: Number(s?.start || 0),
+        end: Number(s?.end || 0),
+        text: String(s?.text || "").trim(),
+        words: Array.isArray(s?.words)
+          ? s.words.map((w: any) => ({ word: String(w?.word || "").trim(), start: Number(w?.start || 0), end: Number(w?.end || 0) }))
+          : undefined
+      })).filter((s: any) => s.text)
+    : text ? [{ start: 0, end: Math.max(1, fallbackDuration), text }] : [];
+  return { text, language, segment_count: Number(input?.segment_count || segments.length || 0), segments };
+}
+
 function buildWords(segment: any, overlapStart: number, overlapEnd: number) {
   if (!segment.words?.length) {
     return [{ word: segment.text, start: segment.start * 1000, end: segment.end * 1000, confidence: 1 }];
@@ -40,19 +75,13 @@ function buildWords(segment: any, overlapStart: number, overlapEnd: number) {
   }));
 }
 
-function buildCaptionItem(
-  trackItem: ITrackItem,
-  segment: any,
-  segIdx: number,
-  style: typeof DEFAULT_STYLE
-) {
+function buildCaptionItem(trackItem: ITrackItem, segment: any, segIdx: number, style: typeof DEFAULT_STYLE) {
   const trimFrom = Number((trackItem as any)?.trim?.from || 0) / 1000;
-  const trimTo =
-    Number(
-      (trackItem as any)?.trim?.to ||
-        (trackItem as any)?.duration ||
-        Math.max(0, (trackItem as any).display.to - (trackItem as any).display.from)
-    ) / 1000;
+  const trimTo = Number(
+    (trackItem as any)?.trim?.to ||
+    (trackItem as any)?.duration ||
+    Math.max(0, (trackItem as any).display.to - (trackItem as any).display.from)
+  ) / 1000;
   const clipDisplayFrom = Number((trackItem as any).display.from || 0);
 
   const overlapStart = Math.max(trimFrom, Number(segment.start || 0));
@@ -92,11 +121,7 @@ function buildCaptionItem(
   };
 }
 
-function applyCaption(
-  trackItem: ITrackItem,
-  transcript: TranscriptResult,
-  style: typeof DEFAULT_STYLE
-) {
+function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style: typeof DEFAULT_STYLE) {
   const sm = getStateManagerRef();
   if (!sm || !transcript?.segments) return;
 
@@ -106,7 +131,6 @@ function applyCaption(
   const currentMap = { ...(currentState?.trackItemsMap || {}) };
   const currentIds: string[] = Array.isArray(currentState?.trackItemIds) ? [...currentState.trackItemIds] : [];
 
-  // Remove existing captions for this source track
   const oldIds = Object.keys(currentMap).filter(
     (id) => currentMap[id]?.metadata?.sourceTrackItemId === trackItem.id && currentMap[id]?.metadata?.addedCaption
   );
@@ -117,7 +141,6 @@ function applyCaption(
   const newItems = transcript.segments
     .map((seg, i) => buildCaptionItem(trackItem, seg, i, style))
     .filter(Boolean) as any[];
-
   if (!newItems.length) return;
 
   newItems.forEach((item) => { currentMap[item.id] = item; });
@@ -139,14 +162,16 @@ function applyCaption(
     metadata: { captionTrack: true, sourceTrackItemId: trackItem.id }
   };
 
-  const newTracks = [
-    ...filteredTracks.slice(0, insertAfter + 1),
-    newTrack,
-    ...filteredTracks.slice(insertAfter + 1)
-  ];
-
   sm.updateState(
-    { tracks: newTracks, trackItemIds: newIds, trackItemsMap: currentMap },
+    {
+      tracks: [
+        ...filteredTracks.slice(0, insertAfter + 1),
+        newTrack,
+        ...filteredTracks.slice(insertAfter + 1)
+      ],
+      trackItemIds: newIds,
+      trackItemsMap: currentMap
+    },
     { updateHistory: true }
   );
 }
@@ -169,10 +194,14 @@ function ColorSwatch({ label, value, onChange }: { label: string; value: string;
   );
 }
 
+// ── main component ────────────────────────────────────────────────────────────
+
 export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) {
-  const { resultsByMedia } = useCaptionTranscribeStore();
+  const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
   const { tracks } = useStore();
   const [style, setStyle] = useState(DEFAULT_STYLE);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   const src = (trackItem as any)?.details?.src as string | undefined;
   const transcript: TranscriptResult | undefined =
@@ -183,80 +212,147 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
   const captionTrack = (tracks as any[]).find((t) => t.id === captionTrackId);
   const captionCount = captionTrack?.items?.length ?? 0;
 
-  const handleApply = () => {
-    if (!transcript) return;
-    applyCaption(trackItem, transcript, style);
+  const handleGenerate = async () => {
+    if (!src) return;
+    setIsGenerating(true);
+    setGenerateError(null);
+    try {
+      const { vappHost, token, baseUrl } = getVappParams();
+
+      const fireRes = await fetch(withEditorBase("/api/transcribe"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: src, timestamp_type: "word", token, baseUrl })
+      });
+      if (!fireRes.ok) throw new Error("Failed to queue transcription");
+
+      const fireData = await fireRes.json().catch(() => ({}));
+      const jobId = String(fireData?.job_id || "").trim();
+      if (!jobId) throw new Error("No job_id returned");
+
+      let sttData: TranscriptResult | null = null;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const pollRes = await fetch(
+            `${vappHost}/api/vapp/jobs/${jobId}?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
+          );
+          const pollData = await pollRes.json().catch(() => ({}));
+          if (pollData?.failed) throw new Error("Transcription job failed");
+          if (pollData?.done) {
+            const gd = pollData?.generation_details || {};
+            const raw = gd?.stt || gd;
+            if (Array.isArray(raw?.segments) && raw.segments.length) {
+              sttData = raw as TranscriptResult;
+            }
+            break;
+          }
+        } catch (e: any) {
+          if (String(e?.message || "").includes("failed")) throw e;
+        }
+      }
+
+      if (!sttData?.segments?.length) throw new Error("No transcript segments found");
+
+      const result = normalizeTranscriptResult(
+        sttData,
+        Math.max(1, ((trackItem as any).display.to - (trackItem as any).display.from) / 1000)
+      );
+      setTranscriptResult(src, result);
+    } catch (err: any) {
+      setGenerateError(String(err?.message || "Generation failed"));
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
-    <div className="flex flex-col gap-4 p-3">
-      {/* Transcript status */}
+    <div className="flex flex-col gap-3 p-3">
+      {/* ── Transcript section ── */}
       {transcript ? (
-        <div className="flex items-center gap-2 rounded-xl bg-card/40 px-3 py-2">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
-          <span className="text-xs text-muted-foreground">
-            {transcript.segments.length} segments ready
-          </span>
-        </div>
-      ) : (
-        <div className="rounded-xl bg-card/30 px-3 py-2 text-xs text-muted-foreground">
-          Generate transcript first via the Guided Text tab.
-        </div>
-      )}
-
-      {/* Style controls */}
-      <div className="space-y-4 rounded-2xl bg-card/30 p-4">
-        <p className="text-xs font-semibold text-foreground">Style</p>
-
-        {/* Font size */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs text-muted-foreground">Font size</Label>
-            <span className="text-xs font-medium tabular-nums">{style.fontSize}px</span>
+        <div className="rounded-xl border border-border/50 bg-card/40 p-3">
+          <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+              {transcript.language?.toUpperCase() || "—"} · {transcript.segments.length} segments
+            </span>
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={isGenerating}
+              className="text-[11px] text-primary hover:underline disabled:opacity-50"
+            >
+              {isGenerating ? "Regenerating…" : "Regenerate"}
+            </button>
           </div>
-          <Slider
-            min={14} max={56} step={1}
-            value={[style.fontSize]}
-            onValueChange={([v]) => setStyle((s) => ({ ...s, fontSize: v }))}
-          />
-        </div>
-
-        {/* Colors */}
-        <ColorSwatch label="Text color" value={style.color} onChange={(v) => setStyle((s) => ({ ...s, color: v }))} />
-        <ColorSwatch label="Active word color" value={style.activeColor} onChange={(v) => setStyle((s) => ({ ...s, activeColor: v }))} />
-        <ColorSwatch label="Active word highlight" value={style.activeFillColor} onChange={(v) => setStyle((s) => ({ ...s, activeFillColor: v }))} />
-
-        {/* Position */}
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Position</Label>
-          <div className="grid grid-cols-3 gap-1">
-            {(["top", "center", "bottom"] as const).map((pos) => (
-              <button
-                key={pos}
-                type="button"
-                onClick={() => setStyle((s) => ({ ...s, position: pos }))}
-                className={`rounded-lg py-1.5 text-xs font-medium capitalize transition-colors ${
-                  style.position === pos
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background/60 text-muted-foreground hover:bg-background"
-                }`}
-              >
-                {pos}
-              </button>
+          <p className="mb-2 text-xs leading-relaxed text-foreground/80">{transcript.text}</p>
+          <div className="space-y-1">
+            {transcript.segments.map((seg, i) => (
+              <div key={i} className="rounded-lg bg-background/50 px-2 py-1.5">
+                <span className="mr-2 text-[10px] text-muted-foreground">
+                  {millisecondsToHHMMSS(seg.start * 1000)} – {millisecondsToHHMMSS(seg.end * 1000)}
+                </span>
+                <span className="text-xs">{seg.text}</span>
+              </div>
             ))}
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p className="text-center text-xs text-muted-foreground">No captions found</p>
+          {generateError && (
+            <p className="text-center text-xs text-destructive">{generateError}</p>
+          )}
+          <Button onClick={handleGenerate} disabled={isGenerating || !src} className="w-full">
+            {isGenerating ? (
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generating…</>
+            ) : "Generate"}
+          </Button>
+        </div>
+      )}
 
-      {/* Action button */}
-      <Button
-        onClick={handleApply}
-        disabled={!transcript}
-        className="w-full"
-        variant={captionCount > 0 ? "outline" : "default"}
-      >
-        {captionCount > 0 ? `Update Captions (${captionCount})` : "Add Captions to Video"}
-      </Button>
+      {/* ── Style controls (always visible once transcript exists) ── */}
+      {transcript && (
+        <>
+          <div className="space-y-3 rounded-2xl bg-card/30 p-3">
+            <p className="text-xs font-semibold text-foreground">Caption Style</p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-muted-foreground">Font size</Label>
+                <span className="text-xs font-medium tabular-nums">{style.fontSize}px</span>
+              </div>
+              <Slider min={14} max={56} step={1} value={[style.fontSize]}
+                onValueChange={([v]) => setStyle((s) => ({ ...s, fontSize: v }))} />
+            </div>
+            <ColorSwatch label="Text color" value={style.color} onChange={(v) => setStyle((s) => ({ ...s, color: v }))} />
+            <ColorSwatch label="Active word color" value={style.activeColor} onChange={(v) => setStyle((s) => ({ ...s, activeColor: v }))} />
+            <ColorSwatch label="Highlight color" value={style.activeFillColor} onChange={(v) => setStyle((s) => ({ ...s, activeFillColor: v }))} />
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Position</Label>
+              <div className="grid grid-cols-3 gap-1">
+                {(["top", "center", "bottom"] as const).map((pos) => (
+                  <button key={pos} type="button"
+                    onClick={() => setStyle((s) => ({ ...s, position: pos }))}
+                    className={`rounded-lg py-1.5 text-xs font-medium capitalize transition-colors ${
+                      style.position === pos
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background/60 text-muted-foreground hover:bg-background"
+                    }`}
+                  >{pos}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <Button
+            onClick={() => applyCaption(trackItem, transcript, style)}
+            className="w-full"
+            variant={captionCount > 0 ? "outline" : "default"}
+          >
+            {captionCount > 0 ? `Update Captions (${captionCount})` : "Add Captions to Video"}
+          </Button>
+        </>
+      )}
     </div>
   );
 }

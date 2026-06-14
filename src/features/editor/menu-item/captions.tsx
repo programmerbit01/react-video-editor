@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -15,30 +14,14 @@ import { groupBy } from "lodash";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PLAYER_SEEK } from "../constants/events";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
-import { Loader2 } from "lucide-react";
 import useCaptionTranscribeStore, {
   TranscriptResult,
   TranscriptSegment
 } from "../store/use-caption-transcribe-store";
 
-const getVappParams = () => {
-  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
-  const p = new URLSearchParams(window.location.search);
-  return {
-    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.host}`,
-    token: p.get("token") || "",
-    baseUrl: p.get("baseUrl") || "https://api.muapi.ai"
-  };
-};
-
 export const Captions = () => {
   const { trackItemsMap } = useStore();
-  const {
-    pendingMediaSrc,
-    clearPendingRequest,
-    setTranscriptResult,
-    resultsByMedia
-  } = useCaptionTranscribeStore();
+  const { resultsByMedia } = useCaptionTranscribeStore();
   const [selectMediaItems, setSelectMediaItems] = useState<
     { label: string; value: string }[]
   >([]);
@@ -47,7 +30,6 @@ export const Captions = () => {
     Record<string, ITrackItem[]>
   >({});
   const [mediaTrackItems, setMediaTrackItems] = useState<ITrackItem[]>([]);
-  const [isGenerating, setIsGenerating] = useState(false);
   const selectedTrackItem = mediaTrackItems.find(
     (item) => item.details.src === selectedMedia
   );
@@ -58,108 +40,16 @@ export const Captions = () => {
   useEffect(() => {
     const mediaTrackItems = fetchMediaTrackItems(trackItemsMap);
     setMediaTrackItems(mediaTrackItems);
-
-    const selectMediaOptions = createSelectMediaOptions(mediaTrackItems);
-    setSelectMediaItems(selectMediaOptions);
+    setSelectMediaItems(createSelectMediaOptions(mediaTrackItems));
 
     const groupedCaptions = groupCaptionItems(trackItemsMap);
-
     for (const key of Object.keys(groupedCaptions)) {
-      const captions = groupedCaptions[key];
-      const orderedCaptionByDisplayFrom = captions.sort(
+      groupedCaptions[key] = (groupedCaptions[key] as ITrackItem[]).sort(
         (a, b) => a.display.from - b.display.from
-      );
-      console.log({ orderedCaptionByDisplayFrom });
-      groupedCaptions[key] = orderedCaptionByDisplayFrom as ITrackItem[];
+      ) as ITrackItem[];
     }
     setCaptionTrackItemsMap(groupedCaptions);
   }, [trackItemsMap]);
-
-  useEffect(() => {
-    if (!pendingMediaSrc) return;
-    const matchedItem = mediaTrackItems.find(
-      (item) => item.details.src === pendingMediaSrc
-    );
-    if (!matchedItem) return;
-
-    setSelectedMedia(pendingMediaSrc);
-    clearPendingRequest();
-
-    if (!resultsByMedia[pendingMediaSrc] && !captionTrackItemsMap[pendingMediaSrc]) {
-      void createCaptions(pendingMediaSrc);
-    }
-  }, [
-    pendingMediaSrc,
-    mediaTrackItems,
-    clearPendingRequest,
-    resultsByMedia,
-    captionTrackItemsMap
-  ]);
-
-  const handleSelectChange = (value: string) => {
-    setSelectedMedia(value);
-  };
-
-  const createCaptions = async (selectedMedia: string) => {
-    setIsGenerating(true);
-    try {
-      const trackItem = mediaTrackItems.find(
-        (m) => m.details.src === selectedMedia
-      );
-      if (!trackItem) throw new Error("Track item not found");
-
-      const { vappHost, token, baseUrl } = getVappParams();
-
-      // Fire job — returns {job_id} immediately
-      const fireRes = await fetch(withEditorBase("/api/transcribe"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: selectedMedia, timestamp_type: "word", token, baseUrl })
-      });
-      if (!fireRes.ok) throw new Error("Failed to queue transcription");
-
-      // Poll job status via vapp higgs /api/vapp/jobs/[id] — direct to vapp server, no proxy chain
-      const fireData = await fireRes.json().catch(() => ({}));
-      const jobId = String(fireData?.job_id || "").trim();
-      if (!jobId) throw new Error("No job_id returned");
-
-      let sttData: TranscriptResult | null = null;
-      for (let attempt = 0; attempt < 60; attempt++) {
-        await new Promise((r) => setTimeout(r, 5000));
-        try {
-          const pollRes = await fetch(
-            `${vappHost}/api/vapp/jobs/${jobId}?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
-          );
-          const pollData = await pollRes.json().catch(() => ({}));
-          if (pollData?.failed) throw new Error("Transcription job failed");
-          if (pollData?.done) {
-            const gd = pollData?.generation_details || {};
-            // Handle both {stt: {...}} and flat {segments: [...]} formats
-            const raw = gd?.stt || gd;
-            if (Array.isArray(raw?.segments) && raw.segments.length) {
-              sttData = raw as TranscriptResult;
-            }
-            break;
-          }
-        } catch (e: any) {
-          if (String(e?.message || "").includes("failed")) throw e;
-          // transient — keep polling
-        }
-      }
-
-      if (!sttData?.segments?.length) throw new Error("No transcript segments found");
-
-      const transcriptResult = normalizeTranscriptResult(
-        sttData,
-        Math.max(1, (trackItem.display.to - trackItem.display.from) / 1000)
-      );
-      setTranscriptResult(selectedMedia, transcriptResult);
-    } catch (error) {
-      console.error("Error generating captions:", error);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4">
@@ -169,14 +59,12 @@ export const Captions = () => {
         <MediaSection
           selectMediaItems={selectMediaItems}
           selectedMedia={selectedMedia}
-          onSelectChange={handleSelectChange}
+          onSelectChange={setSelectedMedia}
           captionTrackItemsMap={captionTrackItemsMap}
           transcriptResult={
             (selectedMedia ? resultsByMedia[selectedMedia] : undefined) ||
             selectedStoredTranscript
           }
-          createCaptions={createCaptions}
-          isGenerating={isGenerating}
         />
       )}
     </div>
@@ -188,17 +76,13 @@ const MediaSection = ({
   selectedMedia,
   onSelectChange,
   captionTrackItemsMap,
-  transcriptResult,
-  createCaptions,
-  isGenerating
+  transcriptResult
 }: {
   selectMediaItems: { label: string; value: string }[];
   selectedMedia: string | undefined;
   onSelectChange: (value: string) => void;
   captionTrackItemsMap: Record<string, ITrackItem[]>;
   transcriptResult?: TranscriptResult;
-  createCaptions: (selectedMedia: string) => void;
-  isGenerating: boolean;
 }) => (
   <div className="flex h-[calc(100%-4.5rem)] flex-col gap-4 px-4">
     <Select value={selectedMedia} onValueChange={onSelectChange}>
@@ -229,10 +113,7 @@ const MediaSection = ({
             </ScrollArea>
           </div>
         ) : (
-          <MediaWithNoCaptions
-            createCaptions={() => createCaptions(selectedMedia)}
-            isGenerating={isGenerating}
-          />
+          <MediaNoCaptions />
         )}
       </div>
     ) : (
@@ -306,33 +187,10 @@ const EmptyMediaTrackItems = () => (
   </div>
 );
 
-const MediaWithNoCaptions = ({
-  createCaptions,
-  isGenerating
-}: {
-  createCaptions: () => void;
-  isGenerating: boolean;
-}) => (
-  <div className="flex flex-col gap-2 px-4">
-    <div className="text-center text-sm text-muted-foreground">
-      Recognize speech in the selected video/audio and generate an attached
-      timeline transcript guide automatically.
-    </div>
-    <Button
-      onClick={createCaptions}
-      variant="default"
-      className="w-full"
-      disabled={isGenerating}
-    >
-      {isGenerating ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Generating...
-        </>
-      ) : (
-        "Generate"
-      )}
-    </Button>
+const MediaNoCaptions = () => (
+  <div className="px-4 text-center text-sm text-muted-foreground">
+    No captions yet. Select the clip on the timeline and use its{" "}
+    <span className="font-medium text-foreground">Captions</span> tab to generate.
   </div>
 );
 
@@ -426,50 +284,3 @@ const groupCaptionItems = (trackItemsMap: ITrackItemsMap) => {
   return groupBy(captionTrackItems, "metadata.sourceUrl");
 };
 
-const withEditorBase = (path: string) => {
-  if (typeof window === "undefined") return path;
-  return window.location.pathname.startsWith("/editor") ? `/editor${path}` : path;
-};
-
-
-function normalizeTranscriptResult(
-  input: any,
-  fallbackDurationSeconds: number
-): TranscriptResult {
-  const text = String(input?.text || "").trim();
-  const language = String(input?.language || "").trim();
-  const rawSegments = Array.isArray(input?.segments) ? input.segments : [];
-
-  const segments: TranscriptSegment[] =
-    rawSegments.length > 0
-      ? rawSegments
-          .map((segment: any) => ({
-            start: Number(segment?.start || 0),
-            end: Number(segment?.end || 0),
-            text: String(segment?.text || "").trim(),
-            words: Array.isArray(segment?.words)
-              ? segment.words.map((word: any) => ({
-                  word: String(word?.word || "").trim(),
-                  start: Number(word?.start || 0),
-                  end: Number(word?.end || 0)
-                }))
-              : undefined
-          }))
-          .filter((segment: TranscriptSegment) => segment.text)
-      : text
-        ? [
-            {
-              start: 0,
-              end: Math.max(1, fallbackDurationSeconds || 1),
-              text
-            }
-          ]
-        : [];
-
-  return {
-    text,
-    language,
-    segment_count: Number(input?.segment_count || segments.length || 0),
-    segments
-  };
-}
