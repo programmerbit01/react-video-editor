@@ -1,6 +1,6 @@
 import { ADD_AUDIO, ADD_IMAGE, ADD_VIDEO } from "@designcombo/state";
 import { dispatch } from "@designcombo/events";
-import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause } from "lucide-react";
+import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause, AlertCircle } from "lucide-react";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
@@ -14,7 +14,8 @@ const getLabel = (item: any) =>
 
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
-// Vapp items are either proxied OR direct CDN urls (rpublic.*) — used for sort/display separation
+
+// Vapp items = direct CDN (rpublic.*) or old-style proxied URLs
 const VAPP_CDN_HOST = "rpublic.tomtap.ai";
 const isVappItem = (u: any) =>
   Boolean(
@@ -23,13 +24,71 @@ const isVappItem = (u: any) =>
     u?.filePath?.includes("/api/proxy?url=") ||
     u?.url?.includes(VAPP_CDN_HOST)
   );
-// keep old name as alias so all callsites work unchanged
-const isVappProxyItem = isVappItem;
 
 const normalizeMediaSrc = (src?: string) => {
   if (!src) return "";
   if (src.startsWith("/uploads/")) return `/editor${src}`;
   return src;
+};
+
+const getVappParams = () => {
+  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
+  const p = new URLSearchParams(window.location.search);
+  return {
+    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
+    token: p.get("token") || "",
+    baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
+  };
+};
+
+const toUploadItem = (item: any) => {
+  const rawUrl = String(item.url || "");
+  // Direct URL for public CDN — CORS is configured on R2 for editor origins
+  const finalUrl = rawUrl.includes(VAPP_CDN_HOST)
+    ? rawUrl
+    : rawUrl
+    ? `/api/proxy?url=${encodeURIComponent(rawUrl)}`
+    : "";
+  if (!finalUrl) return null;
+  const entry: any = {
+    id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
+    url: finalUrl,
+    filePath: finalUrl,
+    fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
+    type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
+    metadata: { uploadedUrl: finalUrl, vappItem: true },
+    status: "uploaded",
+  };
+  if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
+  return entry;
+};
+
+// ── Thumbnail ────────────────────────────────────────────────────────────────
+
+const VideoThumb = ({ src }: { src: string }) => {
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const ref = useRef<HTMLVideoElement>(null);
+
+  return (
+    <div className="w-full h-full bg-white/5 flex items-center justify-center">
+      {!ready && !failed && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
+      {failed && <div className="text-[10px] text-muted-foreground">no preview</div>}
+      <video
+        ref={ref}
+        src={src}
+        className={`w-full h-full object-cover absolute inset-0 transition-opacity ${ready ? "opacity-100" : "opacity-0"}`}
+        muted
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={() => {
+          if (ref.current) ref.current.currentTime = 1;
+        }}
+        onSeeked={() => setReady(true)}
+        onError={() => { setFailed(true); }}
+      />
+    </div>
+  );
 };
 
 const Thumb = ({ item }: { item: any }) => {
@@ -42,19 +101,20 @@ const Thumb = ({ item }: { item: any }) => {
     );
   }
   if (isVideo(item)) {
-    return (
-      <video
-        src={src}
-        className="w-full h-full object-cover"
-        muted
-        playsInline
-        preload="metadata"
-        onLoadedMetadata={(e) => { (e.currentTarget as HTMLVideoElement).currentTime = 0.5; }}
-      />
-    );
+    return <VideoThumb src={src} />;
   }
-  return <img src={src} className="w-full h-full object-cover" alt="" loading="lazy" />;
+  return (
+    <img
+      src={src}
+      className="w-full h-full object-cover"
+      alt=""
+      loading="lazy"
+      onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = "0.3"; }}
+    />
+  );
 };
+
+// ── Grid item ─────────────────────────────────────────────────────────────────
 
 const UploadGridItem = ({
   item,
@@ -67,7 +127,7 @@ const UploadGridItem = ({
   activePreviewId: string | null;
   setActivePreviewId: Dispatch<SetStateAction<string | null>>;
 }) => {
-  const mediaId = String(item.id || item.url || item.fileName || Math.random());
+  const mediaId = String(item.id || item.url);
   const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -80,7 +140,7 @@ const UploadGridItem = ({
     if (videoRef.current) videoRef.current.currentTime = 0;
     if (audioRef.current) audioRef.current.currentTime = 0;
     setIsPlaying(false);
-    setActivePreviewId((current) => (current === mediaId ? null : current));
+    setActivePreviewId((curr) => (curr === mediaId ? null : curr));
   };
 
   useEffect(() => {
@@ -97,10 +157,7 @@ const UploadGridItem = ({
     e.preventDefault();
     e.stopPropagation();
     if (!previewable) return;
-    if (isPlaying) {
-      stopPreview();
-      return;
-    }
+    if (isPlaying) { stopPreview(); return; }
     setActivePreviewId(mediaId);
     try {
       if (isVideo(item) && videoRef.current) {
@@ -130,24 +187,18 @@ const UploadGridItem = ({
             src={src}
             className={`absolute inset-0 h-full w-full object-cover transition-opacity ${isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}
             playsInline
-            preload="metadata"
+            preload="none"
             onEnded={stopPreview}
           />
         )}
         {isAudio(item) && (
-          <audio
-            ref={audioRef}
-            src={src}
-            preload="metadata"
-            onEnded={stopPreview}
-          />
+          <audio ref={audioRef} src={src} preload="none" onEnded={stopPreview} />
         )}
         {previewable && (
           <button
             type="button"
             onClick={handleTogglePreview}
             className="absolute top-1.5 right-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/75 text-white/90 hover:bg-black/90"
-            title={isPlaying ? "Stop preview" : "Play preview"}
           >
             {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
           </button>
@@ -160,89 +211,61 @@ const UploadGridItem = ({
   );
 };
 
-const getVappParams = () => {
-  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
-  const p = new URLSearchParams(window.location.search);
-  return {
-    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
-    token: p.get("token") || "",
-    baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
-  };
-};
-
-const toUploadItem = (item: any) => {
-  const rawUrl = String(item.url || "");
-  // Use direct URL for public CDN files — CORS is configured on R2 for editor origins.
-  // Only proxy URLs we can't serve directly (e.g. private storage, missing CORS).
-  const finalUrl = rawUrl.includes(VAPP_CDN_HOST)
-    ? rawUrl
-    : `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
-  const entry: any = {
-    id: Math.random().toString(36).slice(2),
-    url: finalUrl,
-    filePath: finalUrl,
-    fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
-    type: item.type === "video" ? "video/mp4" : item.type === "audio" ? "audio/mp3" : "image/jpeg",
-    metadata: { uploadedUrl: finalUrl, vappItem: true },
-    status: "uploaded",
-  };
-  if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
-  return entry;
-};
+// ── Main component ────────────────────────────────────────────────────────────
 
 export const Uploads = () => {
   const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads } = useUploadStore();
   const { setTranscriptResult } = useCaptionTranscribeStore();
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
-  const initialLoaded = useRef(false);
 
-  const fetchPage = async (pageNum: number, replace = false) => {
+  const fetchPage = async (pageNum: number) => {
     const { vappHost, token, baseUrl } = getVappParams();
     const apiUrl = `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`;
-    console.log("[uploads] fetchPage url →", apiUrl);
+
     const res = await fetch(apiUrl);
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+
     const data = await res.json();
-    const rawItems = data.items || [];
-    const items = rawItems.map(toUploadItem);
-    const explicitHasMore = data.hasMore ?? data.pagination?.hasMore;
-    const inferredHasMore =
-      typeof data.total === "number" && rawItems.length > 0
-        ? pageNum * rawItems.length < data.total
-        : rawItems.length > 0;
-    setHasMore(Boolean(explicitHasMore ?? inferredHasMore));
+    const rawItems: any[] = data.items || [];
+    const items = rawItems.map(toUploadItem).filter(Boolean);
+
+    const totalPages = data.totalPages || data.pages || 1;
+    setHasMore(pageNum < totalPages);
+
     setUploads((prev: any[]) => {
-      // Keep only in-progress local uploads (status !== "uploaded").
-      // Completed local uploads accumulate in localStorage and mess up the sort order
-      // by appearing before the server's newest-first vapp list.
-      const inProgressLocals = prev.filter(
-        (u: any) => !isVappProxyItem(u) && u.status !== "uploaded"
-      );
+      // In-session local uploads (user uploaded in this session, not from server)
+      const locals = prev.filter((u: any) => !isVappItem(u));
       if (pageNum === 1) {
-        // page 1: fresh server order (newest first) + any still-uploading local items
-        return [...inProgressLocals, ...items];
+        // Full replace of vapp items with fresh server data (newest first)
+        return [...locals, ...items];
       }
-      // load more: append new unique vapp items after existing ones
-      const existingVappUrls = new Set(prev.filter((u: any) => isVappProxyItem(u)).map((u: any) => u.url));
-      const existingVapp = prev.filter((u: any) => isVappProxyItem(u));
-      return [...inProgressLocals, ...existingVapp, ...items.filter((i: any) => !existingVappUrls.has(i.url))];
+      // Load more: append only new items not already in list
+      const existing = new Set(prev.filter((u: any) => isVappItem(u)).map((u: any) => u.url));
+      const vapp = prev.filter((u: any) => isVappItem(u));
+      return [...locals, ...vapp, ...items.filter((i: any) => !existing.has(i.url))];
     });
     setPage(pageNum);
+    setFetchError(null);
   };
 
+  // Fetch on every mount — safe since uploads is no longer persisted in localStorage
   useEffect(() => {
-    if (!initialLoaded.current) {
-      initialLoaded.current = true;
-      fetchPage(1).catch(() => {});
-    }
+    setLoading(true);
+    fetchPage(1)
+      .catch((err) => setFetchError(String(err?.message || "Failed to load media")))
+      .finally(() => setLoading(false));
   }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    try { await fetchPage(1, true); } catch {}
+    setFetchError(null);
+    try { await fetchPage(1); } catch (err: any) { setFetchError(String(err?.message || "Refresh failed")); }
     setRefreshing(false);
   };
 
@@ -261,11 +284,10 @@ export const Uploads = () => {
         audioMeta.transcriptData = item.stt;
         setTranscriptResult(src, item.stt);
       } else {
-        // fetch STT in background for audio clips too
         const { vappHost, token, baseUrl } = getVappParams();
         fetch(`${vappHost}/api/vapp/stt?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&url=${encodeURIComponent(src)}`)
           .then((r) => r.json())
-          .then((data) => { if (data?.stt?.segments?.length) setTranscriptResult(src, data.stt); })
+          .then((d) => { if (d?.stt?.segments?.length) setTranscriptResult(src, d.stt); })
           .catch(() => {});
       }
       dispatch(ADD_AUDIO, {
@@ -299,11 +321,10 @@ export const Uploads = () => {
         videoMeta.transcriptData = item.stt;
         setTranscriptResult(src, item.stt);
       } else {
-        // no stt in store yet — fetch in background immediately on add
         const { vappHost, token, baseUrl } = getVappParams();
         fetch(`${vappHost}/api/vapp/stt?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&url=${encodeURIComponent(src)}`)
           .then((r) => r.json())
-          .then((data) => { if (data?.stt?.segments?.length) setTranscriptResult(src, data.stt); })
+          .then((d) => { if (d?.stt?.segments?.length) setTranscriptResult(src, d.stt); })
           .catch(() => {});
       }
       dispatch(ADD_VIDEO, {
@@ -329,9 +350,8 @@ export const Uploads = () => {
     });
   };
 
-  const hasItems = uploads.length > 0 || pendingUploads.length > 0 || activeUploads.length > 0;
-  const localUploads = uploads.filter((u: any) => !isVappProxyItem(u));
-  const vappUploads = uploads.filter((u: any) => isVappProxyItem(u));
+  const allItems = uploads;
+  const hasItems = allItems.length > 0 || pendingUploads.length > 0 || activeUploads.length > 0;
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-y-auto">
@@ -353,13 +373,31 @@ export const Uploads = () => {
         </Button>
       </div>
 
-      {!hasItems && (
+      {/* Loading state */}
+      {loading && (
+        <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">
+          <Loader2 className="w-6 h-6 animate-spin" />
+          <span className="text-xs">Loading media…</span>
+        </div>
+      )}
+
+      {/* Error state */}
+      {!loading && fetchError && (
+        <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{fetchError}</span>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && !hasItems && !fetchError && (
         <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
           <Upload size={32} className="opacity-50" />
           <span className="text-sm">No uploads yet</span>
         </div>
       )}
 
+      {/* Active uploads progress */}
       {(pendingUploads.length > 0 || activeUploads.length > 0) && (
         <div className="px-4 pb-2">
           <div className="font-medium text-sm mb-2 flex items-center gap-2">
@@ -375,39 +413,20 @@ export const Uploads = () => {
         </div>
       )}
 
-      {uploads.length > 0 && (
+      {/* Media grid — single unified list, server order (newest first) */}
+      {!loading && allItems.length > 0 && (
         <div className="px-4 pb-2">
-          {localUploads.length > 0 && (
-            <div className="grid grid-cols-3 gap-2">
-              {localUploads.map((item, idx) => (
-                <UploadGridItem
-                  key={item.id || `local-${idx}`}
-                  item={item}
-                  onAdd={handleAdd}
-                  activePreviewId={activePreviewId}
-                  setActivePreviewId={setActivePreviewId}
-                />
-              ))}
-            </div>
-          )}
-
-          {localUploads.length > 0 && vappUploads.length > 0 && (
-            <div className="my-3 border-t border-white/10" />
-          )}
-
-          {vappUploads.length > 0 && (
-            <div className="grid grid-cols-3 gap-2">
-              {vappUploads.map((item, idx) => (
-                <UploadGridItem
-                  key={item.id || `vapp-${idx}`}
-                  item={item}
-                  onAdd={handleAdd}
-                  activePreviewId={activePreviewId}
-                  setActivePreviewId={setActivePreviewId}
-                />
-              ))}
-            </div>
-          )}
+          <div className="grid grid-cols-3 gap-2">
+            {allItems.map((item, idx) => (
+              <UploadGridItem
+                key={item.id || `item-${idx}`}
+                item={item}
+                onAdd={handleAdd}
+                activePreviewId={activePreviewId}
+                setActivePreviewId={setActivePreviewId}
+              />
+            ))}
+          </div>
         </div>
       )}
 

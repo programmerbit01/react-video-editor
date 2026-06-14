@@ -139,14 +139,11 @@ const useUploadStore = create<IUploadStore>()(
             callbacks
           )
             .then((uploadData) => {
-              // Add the complete upload data to the uploads array
               if (uploadData) {
                 if (Array.isArray(uploadData)) {
-                  // URL uploads return an array
-                  setUploads((prev) => [...prev, ...uploadData]);
+                  setUploads((prev) => [...uploadData, ...prev]);
                 } else {
-                  // File uploads return a single object
-                  setUploads((prev) => [...prev, uploadData]);
+                  setUploads((prev) => [uploadData, ...prev]);
                 }
               }
             })
@@ -186,7 +183,7 @@ const useUploadStore = create<IUploadStore>()(
     }),
     {
       name: "upload-store",
-      partialize: (state) => ({ uploads: state.uploads })
+      partialize: () => ({})
     }
   )
 );
