@@ -31,6 +31,7 @@ import ControlItemHorizontal from "./control-item-horizontal";
 import { design } from "./mock";
 import { Separator } from "@/components/ui/separator";
 import useTranscriptGuides from "./hooks/use-transcript-guides";
+import { setStateManagerRef } from "./utils/state-manager-ref";
 
 const stateManager = new StateManager(
   {
@@ -108,6 +109,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
 
   useTimelineEvents();
   useTranscriptGuides(stateManager);
+  setStateManagerRef(stateManager);
 
   const { setCompactFonts, setFonts } = useDataState();
   // useEffect(() => {

@@ -17,6 +17,7 @@ import { MenuItem } from "../menu-item";
 import useStore from "../store/use-store";
 import useLayoutStore from "../store/use-layout-store";
 import TranscriptPanel from "./transcript-panel";
+import CaptionsPanel from "./captions-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { AudioLines, Captions, ImageIcon, Type, Video } from "lucide-react";
@@ -26,6 +27,7 @@ type TabDefinition = {
   label: string;
   features?: string[];
   transcript?: boolean;
+  captions?: boolean;
 };
 
 const TAB_CONFIG: Record<string, TabDefinition[]> = {
@@ -51,11 +53,13 @@ const TAB_CONFIG: Record<string, TabDefinition[]> = {
     { value: "adjust", label: "Adjust", features: ["crop", "basic"] },
     { value: "motion", label: "Motion", features: ["animations"] },
     { value: "style", label: "Style", features: ["outline", "shadow"] },
-    { value: "transcript", label: "Guided Text", transcript: true }
+    { value: "transcript", label: "Guided Text", transcript: true },
+    { value: "captions", label: "Captions", captions: true }
   ],
   audio: [
     { value: "audio", label: "Audio", features: ["volume", "speed"] },
-    { value: "transcript", label: "Guided Text", transcript: true }
+    { value: "transcript", label: "Guided Text", transcript: true },
+    { value: "captions", label: "Captions", captions: true }
   ]
 };
 
@@ -102,10 +106,15 @@ const TranscriptTab = ({ trackItem }: { trackItem: ITrackItem }) => (
   </div>
 );
 
+const CaptionsTab = ({ trackItem }: { trackItem: ITrackItem }) => (
+  <div className="rounded-[18px] bg-background/25 p-2">
+    <CaptionsPanel trackItem={trackItem} />
+  </div>
+);
+
 const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => {
   const tabs = TAB_CONFIG[trackItem.type] ?? [];
-  const getDefaultTab = () =>
-    tabs.find((tab) => tab.transcript)?.value ?? tabs[0]?.value ?? "content";
+  const getDefaultTab = () => tabs[0]?.value ?? "content";
   const [activeTab, setActiveTab] = useState(getDefaultTab());
 
   useEffect(() => {
@@ -174,6 +183,8 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
               <div className="h-full overflow-y-auto rounded-[18px] bg-transparent">
                 {tab.transcript ? (
                   <TranscriptTab trackItem={trackItem} />
+                ) : tab.captions ? (
+                  <CaptionsTab trackItem={trackItem} />
                 ) : (
                   <div className="space-y-0">
                     {tab.features?.map((feature) => renderFeature(trackItem, feature))}
