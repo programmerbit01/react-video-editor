@@ -15,14 +15,12 @@ const getLabel = (item: any) =>
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
 
-// Vapp items = direct CDN (rpublic.*) or old-style proxied URLs
-const VAPP_CDN_HOST = "rpublic.tomtap.ai";
+// Vapp items come through the editor proxy
 const isVappItem = (u: any) =>
   Boolean(
     u?.metadata?.vappItem ||
     u?.url?.includes("/api/proxy?url=") ||
-    u?.filePath?.includes("/api/proxy?url=") ||
-    u?.url?.includes(VAPP_CDN_HOST)
+    u?.filePath?.includes("/api/proxy?url=")
   );
 
 const normalizeMediaSrc = (src?: string) => {
@@ -43,13 +41,10 @@ const getVappParams = () => {
 
 const toUploadItem = (item: any) => {
   const rawUrl = String(item.url || "");
-  // Direct URL for public CDN — CORS is configured on R2 for editor origins
-  const finalUrl = rawUrl.includes(VAPP_CDN_HOST)
-    ? rawUrl
-    : rawUrl
-    ? `/api/proxy?url=${encodeURIComponent(rawUrl)}`
-    : "";
-  if (!finalUrl) return null;
+  if (!rawUrl) return null;
+  // Always proxy — R2 CORS is unreliable across production domains.
+  // The proxy has disk cache + range request support so latency is acceptable.
+  const finalUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
   const entry: any = {
     id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
     url: finalUrl,

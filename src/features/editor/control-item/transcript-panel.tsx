@@ -71,7 +71,6 @@ export default function TranscriptPanel({
 
   // 3. fetch on-demand from /api/vapp/stt
   useEffect(() => {
-    // Fetch STT for any vapp media URL — either direct CDN or proxied
     const isVappMedia = mediaSrc.includes("/api/proxy?url=") || mediaSrc.includes("rpublic.tomtap.ai");
     if (transcript || !mediaSrc || !isVappMedia) return;
     const { vappHost, token, baseUrl } = getVappParams();
