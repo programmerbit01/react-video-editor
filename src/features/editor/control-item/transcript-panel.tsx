@@ -46,29 +46,22 @@ export default function TranscriptPanel({
 }: {
   trackItem?: ITrackItem | null;
 }) {
-  const { resultsByMedia } = useCaptionTranscribeStore();
+  const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
   const { uploads } = useUploadStore();
-  const [fetchedStt, setFetchedStt] = useState<TranscriptResult | null>(null);
   const [loading, setLoading] = useState(false);
 
   const mediaSrc = String((trackItem as any)?.details?.src || "").trim();
 
-  // Check runtime + metadata first
+  // 1. runtime (manual Transcribe button) or metadata.transcriptData
   let transcript = getTrackTranscript(trackItem, resultsByMedia);
 
-  // Check upload store by URL match
+  // 2. upload store match by URL
   if (!transcript && mediaSrc) {
-    const match = uploads.find((u: any) => {
-      const uUrl = u.metadata?.uploadedUrl || u.url || "";
-      return uUrl === mediaSrc;
-    });
+    const match = uploads.find((u: any) => (u.metadata?.uploadedUrl || u.url || "") === mediaSrc);
     if (match?.stt?.segments?.length) transcript = match.stt as TranscriptResult;
   }
 
-  // Use directly fetched stt as last fallback
-  if (!transcript && fetchedStt?.segments?.length) transcript = fetchedStt;
-
-  // Fetch from /api/vapp/stt when no transcript found and mediaSrc is a proxy URL
+  // 3. fetch on-demand from /api/vapp/stt — stores into runtimeResults so existing UI picks it up
   useEffect(() => {
     if (transcript || !mediaSrc || !mediaSrc.includes("/api/proxy?url=")) return;
     const { vappHost, token, baseUrl } = getVappParams();
@@ -78,24 +71,15 @@ export default function TranscriptPanel({
     )
       .then((r) => r.json())
       .then((data) => {
-        console.log("[TranscriptPanel] /api/vapp/stt response", data);
-        if (data?.stt?.segments?.length) setFetchedStt(data.stt);
+        if (data?.stt?.segments?.length) setTranscriptResult(mediaSrc, data.stt);
       })
-      .catch((e) => console.warn("[TranscriptPanel] stt fetch failed", e))
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [mediaSrc]);
 
-  console.log("[TP render]", {
-    hasTrackItem: !!trackItem,
-    loading,
-    fetchedSttSegments: fetchedStt?.segments?.length ?? "null",
-    transcriptSegments: transcript?.segments?.length ?? "null",
-    mediaSrc: mediaSrc.slice(-40),
-  });
-
   if (!trackItem) return null;
 
-  if (loading) {
+  if (loading && !transcript) {
     return (
       <div className="border-t border-border/70 px-5 py-4">
         <p className="text-xs text-muted-foreground">Loading transcript…</p>
