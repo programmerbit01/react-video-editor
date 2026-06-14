@@ -21,6 +21,15 @@ import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
 import { generateId } from "@designcombo/timeline";
 import { Loader2 } from "lucide-react";
 
+const getVappParams = () => {
+  if (typeof window === "undefined") return { token: "", baseUrl: "" };
+  const p = new URLSearchParams(window.location.search);
+  return {
+    token: p.get("token") || "",
+    baseUrl: p.get("baseUrl") || ""
+  };
+};
+
 export const Captions = () => {
   const { trackItemsMap } = useStore();
   const [selectMediaItems, setSelectMediaItems] = useState<
@@ -68,8 +77,11 @@ export const Captions = () => {
         throw new Error("Track item not found");
       }
 
-      const { url } = await transcribeMedia(selectedMedia, "ES");
-      const jsonData = await fetchJsonFromUrl(url);
+      const { url, result } = await transcribeMedia(selectedMedia, "ES");
+      const jsonData = result || (url ? await fetchJsonFromUrl(url) : null);
+      if (!jsonData) {
+        throw new Error("Transcription result missing");
+      }
       const fontInfo = {
         fontFamily: "theboldfont",
         fontUrl: "https://cdn.designcombo.dev/fonts/the-bold-font.ttf",
@@ -314,7 +326,8 @@ const groupCaptionItems = (trackItemsMap: ITrackItemsMap) => {
 async function transcribeMedia(
   mediaUrl: string,
   targetLanguage: string
-): Promise<{ url: string }> {
+): Promise<{ url: string; result?: any }> {
+  const { token, baseUrl } = getVappParams();
   const transcribeResponse = await fetch("/api/transcribe", {
     method: "POST",
     headers: {
@@ -322,7 +335,9 @@ async function transcribeMedia(
     },
     body: JSON.stringify({
       url: mediaUrl,
-      targetLanguage
+      targetLanguage,
+      token,
+      baseUrl
     })
   });
 
@@ -333,7 +348,7 @@ async function transcribeMedia(
   const transcribeData = await transcribeResponse.json();
   const { transcribe } = transcribeData;
 
-  return { url: transcribe.url };
+  return { url: transcribe.url, result: transcribe.result };
 }
 
 async function fetchJsonFromUrl(url: string) {
