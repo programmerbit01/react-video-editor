@@ -5,11 +5,23 @@ import Audio from "./audio";
 import { TimelineOptions } from "@designcombo/timeline";
 import { ITimelineScaleState } from "@designcombo/types";
 
-// 1 frame at 30 fps in milliseconds
+// 1 frame at 30 fps in milliseconds — minimum allowed clip duration
 const MIN_CLIP_MS = 1000 / 30;
+
+interface ClipSnapshot {
+  width: number;
+  left: number;
+  trimFrom: number;
+  trimTo: number;
+}
 
 class Timeline extends TimelineBase {
   public isShiftKey: boolean = false;
+
+  // Stores the last valid (≥ 1 frame) state for each Fabric object being resized.
+  // WeakMap so entries are GC'd when clips are removed from the canvas.
+  private _lastValidClipState = new WeakMap<object, ClipSnapshot>();
+
   constructor(
     canvasEl: HTMLCanvasElement,
     options: Partial<TimelineOptions> & {
@@ -24,15 +36,19 @@ class Timeline extends TimelineBase {
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
 
-    // Enforce minimum 1-frame clip duration on every resize tick
+    // Enforce minimum 1-frame clip duration on every resize tick.
+    // Using object:resizing (not wrapping action handlers) so we run after
+    // Fabric's wrapWithFixedAnchor has finished adjusting position.
     this.on("object:resizing", this.enforceMinDuration as any);
   }
 
   /**
-   * Runs after each resize tick (Fabric fires this after wrapWithFixedAnchor
-   * has finished), so the target's width/left/trim are already in their final
-   * position for this tick.  If the resulting duration is < 1 frame we nudge
-   * width/left/trim back so the clip can never go below 1 frame.
+   * After each resize tick, if duration < 1 frame, snap back to the last saved
+   * valid state.  When duration is valid, we save a snapshot for future rollback.
+   *
+   * We save state rather than computing a correction because when width reaches 0
+   * there is no mathematical way to recover the correct pixel size from the
+   * violated state alone.
    */
   private enforceMinDuration = (e: any) => {
     const target = e.target;
@@ -43,24 +59,28 @@ class Timeline extends TimelineBase {
     ) return;
 
     const durMs = target.trim.to - target.trim.from;
-    if (durMs >= MIN_CLIP_MS || durMs <= 0) return;
 
-    // Compute how many pixels correspond to the missing ms using the current
-    // width/duration ratio (avoids hardcoding internal library constants).
-    const widthDelta = target.width * (MIN_CLIP_MS / durMs - 1);
-    const excessMs   = MIN_CLIP_MS - durMs;
-    const corner     = e.transform?.corner;
-
-    if (corner === "mr") {
-      // Right handle dragged too far left — push trim.to and width back
-      target.trim.to += excessMs;
-      target.set("width", target.width + widthDelta);
-    } else if (corner === "ml") {
-      // Left handle dragged too far right — push trim.from and left back
-      target.trim.from -= excessMs;
-      target.set("width", target.width + widthDelta);
-      target.left -= widthDelta;
+    if (durMs >= MIN_CLIP_MS) {
+      // Valid state — save a snapshot we can roll back to on the next tick
+      this._lastValidClipState.set(target, {
+        width:    target.width,
+        left:     target.left,
+        trimFrom: target.trim.from,
+        trimTo:   target.trim.to,
+      });
+      return;
     }
+
+    // Duration is below 1 frame — restore the last valid snapshot
+    const snap = this._lastValidClipState.get(target);
+    if (!snap) return;
+
+    target.set("width", snap.width);
+    target.left     = snap.left;
+    target.trim.from = snap.trimFrom;
+    target.trim.to   = snap.trimTo;
+    target.setCoords();
+    this.requestRenderAll();
   };
 
   private handleKeyDown = (event: KeyboardEvent) => {
