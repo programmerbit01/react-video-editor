@@ -114,7 +114,7 @@ const CaptionsTab = ({ trackItem }: { trackItem: ITrackItem }) => (
 
 const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => {
   const tabs = TAB_CONFIG[trackItem.type] ?? [];
-  const getDefaultTab = () => tabs[0]?.value ?? "content";
+  const getDefaultTab = () => (tabs.find((t) => t.transcript)?.value ?? tabs[0]?.value) ?? "content";
   const [activeTab, setActiveTab] = useState(getDefaultTab());
 
   useEffect(() => {

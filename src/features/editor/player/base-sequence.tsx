@@ -14,6 +14,7 @@ export interface SequenceItemOptions {
   size?: ISize;
   frame?: number;
   isTransition?: boolean;
+  isMuted?: boolean;
 }
 
 export const BaseSequence = ({

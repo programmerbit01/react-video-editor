@@ -34,6 +34,7 @@ import useLayoutStore from "../store/use-layout-store";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import { Captions as CaptionsIcon } from "lucide-react";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
+import TrackControlsOverlay from "./track-controls-overlay";
 
 CanvasTimeline.registerItems({
   Text,
@@ -152,7 +153,7 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     if (!canvasEl || !timelineContainerEl) return;
 
     const containerWidth =
-      (document.getElementById("timeline-header")?.clientWidth || 0) - 70;
+      (document.getElementById("timeline-header")?.clientWidth || 0) - 62;
     const containerHeight =
       (document.getElementById("playhead")?.clientHeight || 0) -
       (document.getElementById("playhead-handle")?.clientHeight || 0) -
@@ -399,11 +400,11 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
       <Playhead scrollLeft={scrollLeft} />
       <div className="flex">
         <div
-          style={{
-            width: timelineOffsetX
-          }}
+          style={{ width: timelineOffsetX, height: canvasSize.height }}
           className="relative flex-none"
-        />
+        >
+          <TrackControlsOverlay />
+        </div>
         <div style={{ height: canvasSize.height }} className="relative flex-1">
           <div
             style={{ height: canvasSize.height }}

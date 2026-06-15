@@ -1,5 +1,5 @@
 import { SequenceItem } from "./sequence-item";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { dispatch, filter, subject } from "@designcombo/events";
 import { EDIT_OBJECT, ENTER_EDIT_MODE } from "@designcombo/state";
 import { groupTrackItems } from "../utils/track-items";
@@ -7,6 +7,8 @@ import { TransitionSeries, Transitions } from "@designcombo/transitions";
 import { calculateTextHeight } from "../utils/text";
 import { useCurrentFrame } from "remotion";
 import useStore from "../store/use-store";
+import useTrackVisibilityStore from "../store/use-track-visibility-store";
+import { ITrack } from "@designcombo/types";
 
 const Composition = () => {
   const [editableTextId, setEditableTextId] = useState<string | null>(null);
@@ -18,9 +20,22 @@ const Composition = () => {
     size,
     transitionsMap,
     structure,
-    activeIds
+    activeIds,
+    tracks
   } = useStore();
+  const { hidden, muted } = useTrackVisibilityStore();
   const frame = useCurrentFrame();
+
+  // Build itemId → trackId lookup for hidden/muted checks
+  const itemTrackMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    (tracks as ITrack[]).forEach((track) => {
+      track.items.forEach((itemId) => {
+        map[itemId] = track.id;
+      });
+    });
+    return map;
+  }, [tracks]);
 
   const groupedItems = groupTrackItems({
     trackItemIds,
@@ -193,6 +208,9 @@ const Composition = () => {
       {groupedItems.map((group, index) => {
         if (group.length === 1) {
           const item = trackItemsMap[group[0].id];
+          const trackId = itemTrackMap[item.id];
+          if (trackId && hidden[trackId]) return null;
+          const isMuted = !!(trackId && muted[trackId]);
           return SequenceItem[item.type](item, {
             fps,
             handleTextChange,
@@ -200,10 +218,14 @@ const Composition = () => {
             editableTextId,
             frame,
             size,
-            isTransition: false
+            isTransition: false,
+            isMuted
           });
         }
         const firstItem = trackItemsMap[group[0].id];
+        const groupTrackId = itemTrackMap[firstItem.id];
+        if (groupTrackId && hidden[groupTrackId]) return null;
+        const groupMuted = !!(groupTrackId && muted[groupTrackId]);
         const from = (firstItem.display.from / 1000) * fps;
         return (
           <TransitionSeries from={from} key={index}>
@@ -222,7 +244,8 @@ const Composition = () => {
                 handleTextChange,
                 editableTextId,
                 isTransition: true,
-                size
+                size,
+                isMuted: groupMuted
               });
             })}
           </TransitionSeries>

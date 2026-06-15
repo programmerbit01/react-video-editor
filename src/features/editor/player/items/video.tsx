@@ -57,7 +57,7 @@ export const Video = ({
               endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
               playbackRate={playbackRate}
               src={details.src}
-              volume={(details.volume ?? 100) / 100}
+              volume={options.isMuted ? 0 : (details.volume ?? 100) / 100}
             />
           </div>
         </MaskAnim>
