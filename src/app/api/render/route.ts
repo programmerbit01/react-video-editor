@@ -142,14 +142,6 @@ function toFFmpegColor(color: string): string {
   return "#ffffff";
 }
 
-/** Format milliseconds as SRT timestamp. */
-function toSRTTime(ms: number): string {
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  const s = Math.floor((ms % 60_000) / 1_000);
-  const f = ms % 1_000;
-  return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":") + "," + String(f).padStart(3, "0");
-}
 
 const QUALITY_PRESETS: Record<string, { crf: string; preset: string }> = {
   high:   { crf: "18", preset: "slow" },
@@ -374,7 +366,7 @@ async function runExport(
     }
   }
 
-  // ── Burn captions via SRT subtitle file (avoids all drawtext escaping issues) ──
+  // ── Burn captions via drawtext+textfile (no libass required) ──────────────
   const captionItems = allItems
     .filter((it: any) =>
       it.type === "caption" &&
@@ -388,37 +380,37 @@ async function runExport(
 
   if (captionItems.length > 0) {
     try {
-      // Write SRT file — no escaping headaches
-      const srtLines: string[] = [];
-      captionItems.forEach((item: any, i: number) => {
-        const text = String(item.details?.text || "").trim();
-        if (!text) return;
-        const fromMs = Number(item.display?.from || 0);
-        const toMs   = Number(item.display?.to   || 0);
-        srtLines.push(`${i + 1}\n${toSRTTime(fromMs)} --> ${toSRTTime(toMs)}\n${text}\n`);
-      });
+      const validCaptions = captionItems.filter(
+        (it: any) => String(it.details?.text || "").trim()
+      );
 
-      if (srtLines.length > 0) {
-        const srtPath = path.join(tmpDir, "captions.srt");
-        await writeFile(srtPath, srtLines.join("\n"), "utf-8");
+      if (validCaptions.length > 0) {
+        let prevLabel = "vout";
+        for (let i = 0; i < validCaptions.length; i++) {
+          const item = validCaptions[i];
+          const text = String(item.details?.text || "").trim();
+          const fromS  = Number(item.display?.from || 0) / 1000;
+          const toS    = Number(item.display?.to   || 0) / 1000;
+          const fontSize = Math.max(8, Math.round(Number(item.details?.fontSize || 22) * outW / canvasW));
 
-        // subtitles filter burns them into the video
-        // Use force_style to approximate caption styling (position bottom-centre)
-        const firstItem = captionItems[0];
-        const fontSize = Math.round(Number(firstItem?.details?.fontSize || 22) * outW / canvasW);
-        const fontColor = toFFmpegColor(firstItem?.details?.color || "#ffffff");
-        const hexColor = fontColor.replace("#", "");
+          // Write text to a file — avoids ALL quoting/escaping in filter_complex
+          const txtPath = path.join(tmpDir, `cap_${i}.txt`);
+          await writeFile(txtPath, text, "utf-8");
+          // Escape path for FFmpeg: backslash first, then colon
+          const esc = txtPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
 
-        // Escape the SRT path for filter_complex (backslash-colon)
-        const escapedSrt = srtPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
-        filterParts.push(
-          `[vout]subtitles='${escapedSrt}':force_style='FontSize=${fontSize},PrimaryColour=&H00${hexColor},Alignment=2,MarginV=40'[vcap]`
-        );
+          const isLast  = i === validCaptions.length - 1;
+          const outLabel = isLast ? "vcap" : `capt${i}`;
+          filterParts.push(
+            `[${prevLabel}]drawtext=textfile='${esc}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=h-text_h-40:enable='between(t,${fromS},${toS})'[${outLabel}]`
+          );
+          prevLabel = outLabel;
+        }
         finalVideoLabel = "vcap";
       }
     } catch (captionErr) {
-      // Caption burn failed — log and continue without captions
       console.error("[render] caption burn skipped:", captionErr);
+      finalVideoLabel = "vout";
     }
   }
 

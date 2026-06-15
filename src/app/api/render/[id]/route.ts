@@ -15,6 +15,7 @@ export async function GET(
       id,
       status: job.status,
       progress: job.progress,
+      error: job.error,
       presigned_url:
         job.status === "COMPLETED" ? `/api/render/${id}/download` : undefined,
     }
