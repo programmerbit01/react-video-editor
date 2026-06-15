@@ -279,28 +279,29 @@ export const Videos = () => {
             })}
           </div>
           {pexelsLoading && <ImageLoading message="Searching for videos..." />}
-          {/* Pagination */}
-          {hasNextPage && (
-            <div className="flex items-center justify-center p-4">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleLoadMore}
-                disabled={pexelsLoading}
-              >
-                {pexelsLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  "Load More"
-                )}
-              </Button>
-            </div>
-          )}
         </div>
       </ScrollArea>
+
+      {hasNextPage && (
+        <div className="flex-none border-t border-border/40 px-4 py-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            onClick={handleLoadMore}
+            disabled={pexelsLoading}
+          >
+            {pexelsLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              "Load More"
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
