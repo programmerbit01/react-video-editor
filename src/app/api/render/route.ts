@@ -7,7 +7,7 @@ import { randomBytes } from "crypto";
 import { createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
-import { createCanvas } from "@napi-rs/canvas";
+
 import { jobs } from "./jobs";
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +117,8 @@ async function generateCaptionOverlay(
   fontSize: number,
   outputPath: string,
 ): Promise<void> {
+  // Dynamic import so a missing native binary doesn't crash the whole server
+  const { createCanvas } = await import("@napi-rs/canvas");
   const canvas = createCanvas(videoWidth, videoHeight);
   const ctx = canvas.getContext("2d");
 
