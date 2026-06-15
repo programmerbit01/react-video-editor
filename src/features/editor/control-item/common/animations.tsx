@@ -9,9 +9,28 @@ import useStore from "../../store/use-store";
 import { createPresetButtons } from "../floating-controls/animation-picker";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AnimationDuration } from "./animation-duration";
+import { presets } from "../../player/animated";
+import type { PresetName } from "../../player/animated/presets";
+
 interface PresetTextProps {
   trackItem: ITrackItem & any;
   properties: any;
+}
+
+function getAnimationLabel(animations: any): string {
+  if (!animations) return "None";
+  const parts: string[] = [];
+  const types = ["in", "loop", "out"] as const;
+  for (const t of types) {
+    const name = animations[t]?.name as PresetName | undefined;
+    if (name && presets[name]) {
+      const displayName = presets[name].name;
+      parts.push(`${displayName} ${t.charAt(0).toUpperCase() + t.slice(1)}`);
+    }
+  }
+  if (parts.length === 0) return "None";
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} +${parts.length - 1}`;
 }
 
 export const Animations = ({ properties, trackItem }: PresetTextProps) => {
@@ -28,52 +47,65 @@ const SelectaAnimation = ({ trackItem }: { trackItem: ITrackItem & IText }) => {
   const isLargeScreen = useIsLargeScreen();
   const { activeIds, trackItemsMap } = useStore();
 
+  const currentItem = trackItemsMap[activeIds[0]];
+  const animationLabel = getAnimationLabel(currentItem?.animations);
+  const hasAnimation = animationLabel !== "None";
+
+  const animationType = trackItem.type === "text" ? "text" : "media";
+
   const presetInButtons = createPresetButtons(
     (key) => key.includes("In"),
     "in",
     activeIds,
-    trackItem.type === "text" ? "text" : "media",
+    animationType,
     trackItemsMap
   );
   const presetOutButtons = createPresetButtons(
     (key) => key.includes("Out"),
     "out",
     activeIds,
-    trackItem.type === "text" ? "text" : "media",
+    animationType,
     trackItemsMap
   );
   const presetLoopButtons = createPresetButtons(
     (key) => key.includes("Loop"),
     "loop",
     activeIds,
-    trackItem.type === "text" ? "text" : "media",
+    animationType,
     trackItemsMap
   );
+
   return (
     <div className="flex gap-2 py-0 flex-col lg:flex-row">
-      <div className=" flex-1 items-center text-sm text-muted-foreground hidden lg:flex">
+      <div className="flex-1 items-center text-sm text-muted-foreground hidden lg:flex">
         Animation
       </div>
       {isLargeScreen ? (
         <div className="relative w-32">
           <Button
             className="flex h-8 w-full items-center justify-between text-sm"
-            variant="secondary"
+            variant={hasAnimation ? "default" : "secondary"}
             onClick={() => setFloatingControl("animation-picker")}
           >
             <div className="w-full text-left">
-              <p className="truncate">None</p>
+              <p className="truncate text-xs">{animationLabel}</p>
             </div>
-            <ChevronDown className="text-muted-foreground" size={14} />
+            <ChevronDown className="text-muted-foreground shrink-0" size={14} />
           </Button>
         </div>
       ) : (
-        <div className="flex w-full  flex-col gap-6">
+        <div className="flex w-full flex-col gap-6">
           <Tabs defaultValue="in" className="w-full">
             <TabsList className="p-0 grid w-full grid-cols-3">
-              <TabsTrigger value="in">In</TabsTrigger>
-              <TabsTrigger value="loop">Loop</TabsTrigger>
-              <TabsTrigger value="out">Out</TabsTrigger>
+              <TabsTrigger value="in">
+                In{currentItem?.animations?.in ? " ●" : ""}
+              </TabsTrigger>
+              <TabsTrigger value="loop">
+                Loop{currentItem?.animations?.loop ? " ●" : ""}
+              </TabsTrigger>
+              <TabsTrigger value="out">
+                Out{currentItem?.animations?.out ? " ●" : ""}
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="in">
               <ScrollArea className="h-[300px]">

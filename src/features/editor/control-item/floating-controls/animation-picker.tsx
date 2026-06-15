@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ADD_ANIMATION } from "@designcombo/state";
+import { ADD_ANIMATION, EDIT_OBJECT } from "@designcombo/state";
 import { dispatch } from "@designcombo/events";
 import useStore from "../../store/use-store";
 import { Animation, presets } from "../../player/animated";
@@ -72,6 +72,46 @@ export const createPresetButtons = (
       );
     });
 
+const removeAnimation = (
+  type: "in" | "out" | "loop",
+  activeIds: string[]
+) => {
+  if (!activeIds.length) return;
+  dispatch(EDIT_OBJECT, {
+    payload: {
+      [activeIds[0]]: {
+        animations: { [type]: null }
+      }
+    }
+  });
+};
+
+const NoneButton = ({
+  type,
+  activeIds,
+  isActive,
+}: {
+  type: "in" | "out" | "loop";
+  activeIds: string[];
+  isActive: boolean;
+}) => (
+  <div
+    className={`flex cursor-pointer flex-col gap-2 text-center text-xs items-center justify-center border rounded-md p-2 transition-colors ${
+      isActive ? "border-border text-muted-foreground" : "border-[#006239] text-foreground bg-accent/30"
+    }`}
+    onClick={() => removeAnimation(type, activeIds)}
+    title="Remove animation"
+  >
+    <div
+      style={{ width: "60px", height: "60px", borderRadius: "8px" }}
+      className="bg-muted/40 flex items-center justify-center text-lg text-muted-foreground"
+    >
+      ✕
+    </div>
+    <div>None</div>
+  </div>
+);
+
 const applyAnimation = (
   presetName: PresetName,
   type: "in" | "out" | "loop",
@@ -141,6 +181,12 @@ export default function AnimationPicker({
   animationType?: "text" | "media";
 }) {
   const { activeIds, trackItemsMap } = useStore();
+  const currentItem = trackItemsMap[activeIds[0]];
+  const animations = currentItem?.animations;
+
+  const hasIn   = !!animations?.in?.name;
+  const hasLoop = !!animations?.loop?.name;
+  const hasOut  = !!animations?.out?.name;
 
   const presetInButtons = createPresetButtons(
     (key) => key.includes("In"),
@@ -169,6 +215,7 @@ export default function AnimationPicker({
   useClickOutside(floatingRef as React.RefObject<HTMLElement>, () =>
     setFloatingControl("")
   );
+
   return (
     <div
       ref={floatingRef}
@@ -183,19 +230,29 @@ export default function AnimationPicker({
 
       <Tabs defaultValue="in" className="w-full px-2">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="in">In</TabsTrigger>
-          <TabsTrigger value="loop">Loop</TabsTrigger>
-          <TabsTrigger value="out">Out</TabsTrigger>
+          <TabsTrigger value="in" className="relative">
+            In{hasIn && <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-green-500" />}
+          </TabsTrigger>
+          <TabsTrigger value="loop" className="relative">
+            Loop{hasLoop && <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-green-500" />}
+          </TabsTrigger>
+          <TabsTrigger value="out" className="relative">
+            Out{hasOut && <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-green-500" />}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="in">
           <ScrollArea className="h-[400px] w-full py-2">
-            <div className="grid grid-cols-3 gap-2 py-4">{presetInButtons}</div>
+            <div className="grid grid-cols-3 gap-2 py-4">
+              <NoneButton type="in" activeIds={activeIds} isActive={!hasIn} />
+              {presetInButtons}
+            </div>
           </ScrollArea>
         </TabsContent>
         <TabsContent value="loop">
           <ScrollArea className="h-[400px] w-full py-2">
             <div className="grid grid-cols-3 gap-2 py-4">
+              <NoneButton type="loop" activeIds={activeIds} isActive={!hasLoop} />
               {presetLoopButtons}
             </div>
           </ScrollArea>
@@ -203,6 +260,7 @@ export default function AnimationPicker({
         <TabsContent value="out">
           <ScrollArea className="h-[400px] w-full py-2">
             <div className="grid grid-cols-3 gap-2 py-4">
+              <NoneButton type="out" activeIds={activeIds} isActive={!hasOut} />
               {presetOutButtons}
             </div>
           </ScrollArea>
