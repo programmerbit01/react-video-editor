@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { dispatch } from "@designcombo/events";
-import { HISTORY_UNDO, HISTORY_REDO, DESIGN_RESIZE } from "@designcombo/state";
+import { HISTORY_UNDO, HISTORY_REDO, DESIGN_RESIZE, DESIGN_LOAD } from "@designcombo/state";
 import { Icons } from "@/components/shared/icons";
 import {
   Popover,
@@ -13,7 +13,9 @@ import {
   Download,
   Keyboard,
   ProportionsIcon,
-  ShareIcon
+  Save,
+  ShareIcon,
+  Trash2
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
@@ -35,6 +37,14 @@ import { LogoIcons } from "@/components/shared/logos";
 import Link from "next/link";
 import { ShortcutsModal } from "./shortcuts-modal";
 import { ModeToggle } from "@/components/ui/mode-toggle";
+import { SaveProjectModal } from "./save-project-modal";
+import {
+  getSavedProjects,
+  saveProject,
+  updateProject,
+  deleteProject,
+  type SavedProject,
+} from "./utils/project-storage";
 
 export default function Navbar({
   user,
@@ -52,33 +62,69 @@ export default function Navbar({
   const isMediumScreen = useIsMediumScreen();
   const isSmallScreen = useIsSmallScreen();
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
+  const [isProjectsOpen, setIsProjectsOpen] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  // tracks which saved project is currently loaded (null = unsaved / new)
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
-  const handleUndo = () => {
-    dispatch(HISTORY_UNDO);
-  };
+  useEffect(() => {
+    setSavedProjects(getSavedProjects());
+  }, [isProjectsOpen]);
 
-  const handleRedo = () => {
-    dispatch(HISTORY_REDO);
-  };
+  const handleUndo = () => dispatch(HISTORY_UNDO);
+  const handleRedo = () => dispatch(HISTORY_REDO);
 
-  const handleCreateProject = async () => {};
-
-  // Create a debounced function for setting the project name
   const debouncedSetProjectName = useCallback(
     debounce((name: string) => {
-      console.log("Debounced setProjectName:", name);
       setProjectName(name);
-    }, 2000), // 2 seconds delay
+    }, 2000),
     []
   );
 
-  // Update the debounced function whenever the title changes
   useEffect(() => {
     debouncedSetProjectName(title);
   }, [title, debouncedSetProjectName]);
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);
+  };
+
+  const triggerSaveSuccess = () => {
+    setSaveSuccess(true);
+    setSavedProjects(getSavedProjects());
+    setTimeout(() => setSaveSuccess(false), 2000);
+  };
+
+  const handleSaveProject = (name: string) => {
+    const data = stateManager.toJSON() as Record<string, unknown>;
+    if (currentProjectId) {
+      // update existing project
+      updateProject(currentProjectId, name, data);
+    } else {
+      // create new project and remember its id
+      const saved = saveProject(name, data);
+      setCurrentProjectId(saved.id);
+    }
+    setTitle(name);
+    setProjectName(name);
+    triggerSaveSuccess();
+  };
+
+  const handleLoadProject = (project: SavedProject) => {
+    dispatch(DESIGN_LOAD, { payload: project.data });
+    setTitle(project.name);
+    setProjectName(project.name);
+    setCurrentProjectId(project.id);
+    setIsProjectsOpen(false);
+  };
+
+  const handleDeleteProject = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    deleteProject(id);
+    if (currentProjectId === id) setCurrentProjectId(null);
+    setSavedProjects(getSavedProjects());
   };
 
   return (
@@ -91,47 +137,115 @@ export default function Navbar({
     >
       <DownloadProgressModal />
 
+      {/* Left: logo + undo/redo */}
       <div className="flex items-center gap-2">
         <div className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-md invert dark:invert-0">
           <LogoIcons.scenify />
         </div>
-
-        <div className=" pointer-events-auto flex h-10 items-center px-1.5">
-          <Button
-            onClick={handleUndo}
-            className="text-muted-foreground"
-            variant="ghost"
-            size="icon"
-          >
+        <div className="pointer-events-auto flex h-10 items-center px-1.5">
+          <Button onClick={handleUndo} className="text-muted-foreground" variant="ghost" size="icon">
             <Icons.undo width={20} />
           </Button>
-          <Button
-            onClick={handleRedo}
-            className="text-muted-foreground"
-            variant="ghost"
-            size="icon"
-          >
+          <Button onClick={handleRedo} className="text-muted-foreground" variant="ghost" size="icon">
             <Icons.redo width={20} />
           </Button>
         </div>
       </div>
 
+      {/* Center: editable title + saved-projects dropdown arrow + save button */}
       <div className="flex h-13 items-center justify-center gap-2">
         {!isSmallScreen && (
-          <div className=" pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
-            <AutosizeInput
-              name="title"
-              value={title}
-              onChange={handleTitleChange}
-              width={200}
-              inputClassName="border-none outline-none px-1 text-sm font-medium"
-            />
-          </div>
+          <Popover open={isProjectsOpen} onOpenChange={setIsProjectsOpen}>
+            <div className="pointer-events-auto flex h-9 items-center gap-0.5 rounded-md border border-transparent px-1 hover:border-border/60 transition-colors">
+              <AutosizeInput
+                name="title"
+                value={title}
+                onChange={handleTitleChange}
+                width={160}
+                inputClassName="border-none outline-none px-1 text-sm font-medium bg-transparent"
+              />
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-muted-foreground hover:text-foreground shrink-0"
+                  title="Saved projects"
+                >
+                  <ChevronDown className="size-3.5" />
+                </Button>
+              </PopoverTrigger>
+            </div>
+
+            <PopoverContent align="center" className="z-[250] w-72 p-2" sideOffset={6}>
+              <p className="mb-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Saved Projects
+              </p>
+              {savedProjects.length === 0 ? (
+                <p className="px-2 py-4 text-center text-sm text-muted-foreground">
+                  No saved projects yet
+                </p>
+              ) : (
+                <div className="flex flex-col gap-0.5 max-h-72 overflow-y-auto">
+                  {savedProjects.map((project) => {
+                    const isActive = project.id === currentProjectId;
+                    return (
+                      <div
+                        key={project.id}
+                        onClick={() => handleLoadProject(project)}
+                        className={`group flex items-center justify-between rounded-md px-2 py-2 cursor-pointer transition-colors ${
+                          isActive ? "bg-accent" : "hover:bg-accent"
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className={`truncate text-sm font-medium ${isActive ? "text-foreground" : ""}`}>
+                            {project.name}
+                            {isActive && (
+                              <span className="ml-2 text-xs text-muted-foreground font-normal">(current)</span>
+                            )}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(project.savedAt).toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                          onClick={(e) => handleDeleteProject(e, project.id)}
+                          title="Delete"
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        )}
+        {!isSmallScreen && (
+          <Button
+            variant={saveSuccess ? "default" : "outline"}
+            size="sm"
+            className="pointer-events-auto h-8 gap-1.5 border border-border rounded-full transition-colors"
+            onClick={() => setIsSaveModalOpen(true)}
+            title="Save project"
+          >
+            <Save className="size-3.5" />
+            {saveSuccess ? "Saved!" : "Save Project"}
+          </Button>
         )}
       </div>
 
+      {/* Right: theme + shortcuts + download */}
       <div className="flex h-13 items-center justify-end gap-2">
-        <div className=" pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
+        <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
           <div className="rounded-full border border-border/70 bg-background/80 p-0.5 shadow-sm">
             <ModeToggle />
           </div>
@@ -144,21 +258,16 @@ export default function Navbar({
             <Keyboard className="size-5" />
           </Button>
 
-          {/* <Button
-            className="flex h-8 gap-1 border border-border"
-            variant="outline"
-            size={isMediumScreen ? "sm" : "icon"}
-          >
-            <ShareIcon width={18} />{" "}
-            <span className="hidden md:block">Share</span>
-          </Button> */}
-
           <DownloadPopover stateManager={stateManager} />
         </div>
       </div>
-      <ShortcutsModal
-        open={isShortcutsModalOpen}
-        onOpenChange={setIsShortcutsModalOpen}
+
+      <ShortcutsModal open={isShortcutsModalOpen} onOpenChange={setIsShortcutsModalOpen} />
+      <SaveProjectModal
+        open={isSaveModalOpen}
+        onOpenChange={setIsSaveModalOpen}
+        defaultName={title}
+        onSave={handleSaveProject}
       />
     </div>
   );
