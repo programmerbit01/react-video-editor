@@ -266,7 +266,7 @@ export const Videos = () => {
 
       <ScrollArea className="flex-1 px-4 max-h-full">
         <div className="max-h-full">
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {pexelsVideos.map((video, index) => {
               return (
                 <VideoItem
@@ -373,7 +373,7 @@ const VideoItem = ({
         }
         onMouseEnter={() => { void startPreview(); }}
         onMouseLeave={stopPreview}
-        className="relative aspect-square flex w-full items-center justify-center overflow-hidden bg-background pb-2 group cursor-pointer"
+        className="relative aspect-video flex w-full items-center justify-center overflow-hidden bg-background pb-2 group cursor-pointer"
       >
         <img
           draggable={false}
