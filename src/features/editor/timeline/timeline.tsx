@@ -35,6 +35,7 @@ import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import { Captions as CaptionsIcon } from "lucide-react";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 import TrackControlsOverlay from "./track-controls-overlay";
+import TransitionSlotsOverlay from "./transition-slots-overlay";
 
 CanvasTimeline.registerItems({
   Text,
@@ -413,6 +414,7 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
           >
             <canvas id="designcombo-timeline-canvas" ref={canvasElRef} />
           </div>
+          <TransitionSlotsOverlay />
         </div>
       </div>
       {contextMenu ? (
