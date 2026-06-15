@@ -14,7 +14,7 @@ import { useTimelineOffsetX } from "../hooks/use-timeline-offset";
 import { useTheme } from "next-themes";
 const Playhead = ({ scrollLeft }: { scrollLeft: number }) => {
   const playheadRef = useRef<HTMLDivElement>(null);
-  const { playerRef, fps, scale } = useStore();
+  const { playerRef, fps, scale, duration } = useStore();
   const currentFrame = useCurrentPlayerFrame(playerRef);
   const position =
     timeMsToUnits((currentFrame / fps) * 1000, scale.zoom) - scrollLeft;
@@ -36,6 +36,35 @@ const Playhead = ({ scrollLeft }: { scrollLeft: number }) => {
   const color = useMemo(() => {
     return currentTheme === "dark" ? "#ffffff" : "#000000";
   }, [currentTheme]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+
+      // Don't intercept while the user is typing
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      )
+        return;
+
+      e.preventDefault();
+
+      const totalFrames = Math.round((duration / 1000) * fps);
+      const step = e.shiftKey ? 10 : 1;
+      const direction = e.key === "ArrowRight" ? 1 : -1;
+      const next = Math.max(
+        0,
+        Math.min(totalFrames - 1, currentFrame + direction * step)
+      );
+      playerRef?.current?.seekTo(next);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentFrame, fps, duration, playerRef]);
   const handleMouseUp = () => {
     setIsDragging(false);
   };

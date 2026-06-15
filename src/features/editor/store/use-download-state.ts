@@ -1,20 +1,21 @@
 import { IDesign } from "@designcombo/types";
 import { create } from "zustand";
 
+export type ExportQuality = "high" | "medium" | "low";
+export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
+
+// Longest-side max dimension — server uses canvas AR to compute actual W×H
+const RESOLUTION_MAX_DIM: Record<ExportResolution, number> = {
+  "540p":  960,
+  "720p":  1280,
+  "1080p": 1920,
+  "2k":    2560,
+};
+
 interface Output {
   url: string;
   type: string;
 }
-
-export type ExportQuality = "high" | "medium" | "low";
-export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
-
-const RESOLUTION_MAP: Record<ExportResolution, { w: number; h: number }> = {
-  "540p":  { w: 540,  h: 960  },
-  "720p":  { w: 720,  h: 1280 },
-  "1080p": { w: 1080, h: 1920 },
-  "2k":    { w: 1440, h: 2560 },
-};
 
 interface DownloadState {
   projectId: string;
@@ -23,6 +24,7 @@ interface DownloadState {
   exportQuality: ExportQuality;
   exportResolution: ExportResolution;
   progress: number;
+  error: string | null;
   output?: Output;
   payload?: IDesign;
   displayProgressModal: boolean;
@@ -47,6 +49,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
   exportQuality: "high",
   exportResolution: "1080p",
   progress: 0,
+  error: null,
   displayProgressModal: false,
   actions: {
     setProjectId: (projectId) => set({ projectId }),
@@ -61,9 +64,9 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
       set({ displayProgressModal }),
     startExport: async () => {
       try {
-        set({ exporting: true, displayProgressModal: true });
+        set({ exporting: true, displayProgressModal: true, progress: 0, error: null });
         const { payload, exportQuality, exportResolution, exportType } = get();
-        const res = RESOLUTION_MAP[exportResolution] ?? RESOLUTION_MAP["1080p"];
+        const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
         if (!payload) throw new Error("Payload is not defined");
 
         const response = await fetch(`/api/render`, {
@@ -73,7 +76,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             design: payload,
             options: {
               fps: 30,
-              size: { width: res.w, height: res.h },
+              maxDim,
               format: exportType,
               quality: exportQuality,
             },
@@ -86,28 +89,32 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         const jobId = jobInfo.render.id;
 
         const checkStatus = async () => {
-          const statusResponse = await fetch(`/api/render/${jobId}`, {
-            headers: { "Content-Type": "application/json" },
-          });
-          if (!statusResponse.ok) throw new Error("Failed to fetch export status.");
+          try {
+            const statusResponse = await fetch(`/api/render/${jobId}`, {
+              headers: { "Content-Type": "application/json" },
+            });
+            if (!statusResponse.ok) throw new Error("Failed to fetch export status.");
 
-          const statusInfo = await statusResponse.json();
-          const { status, progress, presigned_url: url } = statusInfo.render;
-          set({ progress });
+            const statusInfo = await statusResponse.json();
+            const { status, progress, presigned_url: url, error } = statusInfo.render;
+            set({ progress });
 
-          if (status === "COMPLETED") {
-            set({ exporting: false, output: { url, type: get().exportType } });
-          } else if (status === "PROCESSING" || status === "PENDING") {
-            setTimeout(checkStatus, 2500);
-          } else if (status === "FAILED") {
-            set({ exporting: false });
+            if (status === "COMPLETED") {
+              set({ exporting: false, output: { url, type: get().exportType } });
+            } else if (status === "PROCESSING" || status === "PENDING") {
+              setTimeout(checkStatus, 2500);
+            } else if (status === "FAILED") {
+              set({ exporting: false, error: error || "Export failed. Check server logs." });
+            }
+          } catch (pollErr) {
+            set({ exporting: false, error: String(pollErr) });
           }
         };
 
         checkStatus();
       } catch (error) {
         console.error(error);
-        set({ exporting: false });
+        set({ exporting: false, error: String(error) });
       }
     },
   },

@@ -15,9 +15,9 @@ export const createResizeControls = () => ({
     actionHandler: resize.common,
     cursorStyleHandler: scaleSkewCursorStyleHandler,
     actionName: "resizing",
-    sizeX: 20,
+    sizeX: 14,
     sizeY: 32,
-    offsetX: 10
+    offsetX: 0
   }),
   ml: new Control({
     x: -0.5,
@@ -26,9 +26,9 @@ export const createResizeControls = () => ({
     cursorStyleHandler: scaleSkewCursorStyleHandler,
     actionName: "resizing",
     render: drawVerticalLeftIcon,
-    sizeX: 20,
+    sizeX: 14,
     sizeY: 32,
-    offsetX: -10
+    offsetX: 0
   })
 });
 
@@ -40,9 +40,9 @@ export const createAudioControls = () => ({
     actionHandler: resize.audio,
     cursorStyleHandler: scaleSkewCursorStyleHandler,
     actionName: "resizing",
-    sizeX: 20,
+    sizeX: 14,
     sizeY: 32,
-    offsetX: 10
+    offsetX: 0
   }),
   ml: new Control({
     x: -0.5,
@@ -51,9 +51,9 @@ export const createAudioControls = () => ({
     actionHandler: resize.audio,
     cursorStyleHandler: scaleSkewCursorStyleHandler,
     actionName: "resizing",
-    sizeX: 20,
+    sizeX: 14,
     sizeY: 32,
-    offsetX: -10
+    offsetX: 0
   })
 });
 
@@ -65,21 +65,20 @@ export const createMediaControls = () => ({
     render: drawVerticalRightIcon,
     cursorStyleHandler: scaleSkewCursorStyleHandler,
     actionName: "resizing",
-    sizeX: 20,
+    sizeX: 14,
     sizeY: 32,
-    offsetX: 10
+    offsetX: 0
   }),
   ml: new Control({
     x: -0.5,
     y: 0,
     render: drawVerticalLeftIcon,
-
     actionHandler: resize.media,
     cursorStyleHandler: scaleSkewCursorStyleHandler,
     actionName: "resizing",
-    sizeX: 20,
+    sizeX: 14,
     sizeY: 32,
-    offsetX: -10
+    offsetX: 0
   })
 });
 

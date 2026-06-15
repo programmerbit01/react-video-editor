@@ -1,21 +1,22 @@
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useDownloadState } from "./store/use-download-state";
 import { Button } from "@/components/ui/button";
-import { CircleCheckIcon, XIcon } from "lucide-react";
+import { CircleCheckIcon, XCircleIcon, XIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
 
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, output, actions } =
+  const { progress, displayProgressModal, output, error, actions } =
     useDownloadState();
-  const isCompleted = progress === 100;
+  const isCompleted = progress === 100 && !!output;
+  const isFailed = !!error;
 
   const handleDownload = async () => {
     if (output?.url) {
       await download(output.url, "untitled.mp4");
-      console.log("downloading");
     }
   };
+
   return (
     <Dialog
       open={displayProgressModal}
@@ -31,18 +32,33 @@ const DownloadProgressModal = () => {
         <div className="flex h-16 items-center border-b px-4 font-medium">
           Download
         </div>
+
         {isCompleted ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 space-y-4">
             <div className="flex flex-col items-center space-y-1 text-center">
-              <div className="font-semibold">
-                <CircleCheckIcon />
-              </div>
+              <CircleCheckIcon className="h-10 w-10 text-green-500" />
               <div className="font-bold">Exported</div>
               <div className="text-muted-foreground">
                 You can download the video to your device.
               </div>
             </div>
             <Button onClick={handleDownload}>Download</Button>
+          </div>
+        ) : isFailed ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6">
+            <XCircleIcon className="h-10 w-10 text-red-500" />
+            <div className="font-bold text-red-500">Export Failed</div>
+            <div className="max-h-40 w-full overflow-auto rounded-md bg-zinc-900 px-4 py-3 text-xs text-zinc-300 font-mono whitespace-pre-wrap">
+              {error}
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                actions.setDisplayProgressModal(false);
+              }}
+            >
+              Close
+            </Button>
           </div>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-4">
@@ -54,7 +70,9 @@ const DownloadProgressModal = () => {
               <div>Closing the browser will not cancel the export.</div>
               <div>The video will be saved in your space.</div>
             </div>
-            <Button variant={"outline"}>Cancel</Button>
+            <Button variant={"outline"} onClick={() => actions.setDisplayProgressModal(false)}>
+              Cancel
+            </Button>
           </div>
         )}
       </DialogContent>

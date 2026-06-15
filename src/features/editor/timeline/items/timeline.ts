@@ -42,6 +42,34 @@ class Timeline extends TimelineBase {
     window.removeEventListener("keyup", this.handleKeyUp);
   }
 
+  // Boost hit area for clips that are too narrow to click at current zoom level.
+  // We temporarily inflate padding on narrow objects, re-run the hit test,
+  // then restore padding — invisible to rendering, only affects selection.
+  public findTarget(e: any): any {
+    const target = super.findTarget(e);
+    if (target) return target;
+
+    const zoom = this.getZoom();
+    const MIN_SCREEN_PX = 14;
+    const viewportPoint = this.getViewportPoint(e);
+
+    const objects = this.getObjects() as any[];
+    for (let i = objects.length - 1; i >= 0; i--) {
+      const obj = objects[i];
+      if (!obj?.selectable || !obj.visible || !obj.evented) continue;
+      const widthPx = (obj.width || 0) * zoom;
+      if (widthPx >= MIN_SCREEN_PX) continue;
+
+      const savedPadding = obj.padding;
+      obj.padding = Math.max(obj.padding, (MIN_SCREEN_PX / zoom - obj.width) / 2 + 2);
+      const hit = (this as any)._checkTarget(obj, viewportPoint);
+      obj.padding = savedPadding;
+      if (hit) return obj;
+    }
+
+    return undefined;
+  }
+
   public setViewportPos(posX: number, posY: number) {
     const limitedPos = this.getViewportPos(posX, posY);
     const vt = this.viewportTransform;

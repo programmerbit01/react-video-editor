@@ -25,10 +25,15 @@ export async function POST(request: Request) {
       design,
       options?.quality ?? "high",
       options?.format ?? "mp4",
-      options?.size,
+      options?.maxDim,
     ).catch((err) => {
       console.error(`[render] job ${jobId} failed:`, err);
-      jobs.set(jobId, { status: "FAILED", progress: 0, error: err.message });
+      const current = jobs.get(jobId);
+      jobs.set(jobId, {
+        status: "FAILED",
+        progress: current?.progress ?? 0,
+        error: err.message,
+      });
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });
@@ -47,6 +52,7 @@ export async function GET(request: Request) {
       id,
       status: job.status,
       progress: job.progress,
+      error: job.error,
       presigned_url: job.status === "COMPLETED" ? `/api/render/${id}/download` : undefined,
     },
   });
@@ -102,6 +108,49 @@ async function hasAudioStream(inputPath: string): Promise<boolean> {
   }
 }
 
+/** Compute even output dimensions from canvas size + max long-side target. */
+function computeOutputSize(
+  canvasW: number,
+  canvasH: number,
+  maxLongSide: number,
+): { outW: number; outH: number } {
+  const longerSide = Math.max(canvasW, canvasH);
+  const scale = Math.min(1, maxLongSide / longerSide); // never upscale
+  const raw = { w: Math.round(canvasW * scale), h: Math.round(canvasH * scale) };
+  // libx264 requires even dimensions
+  return {
+    outW: raw.w % 2 === 0 ? raw.w : raw.w + 1,
+    outH: raw.h % 2 === 0 ? raw.h : raw.h + 1,
+  };
+}
+
+/** Convert any CSS colour string to a hex string FFmpeg accepts. */
+function toFFmpegColor(color: string): string {
+  const s = (color ?? "#ffffff").trim();
+  // already hex
+  if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s.slice(0, 7);
+  // rgba(r,g,b,a) or rgb(r,g,b)
+  const m = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (m) {
+    return (
+      "#" +
+      [m[1], m[2], m[3]]
+        .map((n) => Number(n).toString(16).padStart(2, "0"))
+        .join("")
+    );
+  }
+  return "#ffffff";
+}
+
+/** Format milliseconds as SRT timestamp. */
+function toSRTTime(ms: number): string {
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const s = Math.floor((ms % 60_000) / 1_000);
+  const f = ms % 1_000;
+  return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":") + "," + String(f).padStart(3, "0");
+}
+
 const QUALITY_PRESETS: Record<string, { crf: string; preset: string }> = {
   high:   { crf: "18", preset: "slow" },
   medium: { crf: "23", preset: "medium" },
@@ -132,7 +181,7 @@ async function runExport(
   design: any,
   quality = "high",
   format = "mp4",
-  sizeOverride?: { width: number; height: number },
+  maxDim?: number,
 ) {
   const exportsDir = path.join(process.cwd(), "public", "exports");
   const tmpDir = path.join(exportsDir, `tmp_${jobId}`);
@@ -150,10 +199,21 @@ async function runExport(
   const { crf, preset } = QUALITY_PRESETS[quality] ?? QUALITY_PRESETS.high;
   const { trackItemsMap, trackItemIds, size } = design;
   const platformPreset = PLATFORM_PRESETS[format];
-  const baseW = sizeOverride?.width ?? size?.width ?? 1080;
-  const baseH = sizeOverride?.height ?? size?.height ?? 1920;
-  const outW = platformPreset?.w ?? baseW;
-  const outH = platformPreset?.h ?? baseH;
+
+  // ── Output dimensions: use canvas AR, scale to requested quality ──────────
+  const canvasW = size?.width ?? 1080;
+  const canvasH = size?.height ?? 1920;
+
+  let outW: number;
+  let outH: number;
+
+  if (platformPreset) {
+    outW = platformPreset.w;
+    outH = platformPreset.h;
+  } else {
+    const targetMaxDim = maxDim ?? 1920;
+    ({ outW, outH } = computeOutputSize(canvasW, canvasH, targetMaxDim));
+  }
 
   const allItems: any[] = (trackItemIds ?? [])
     .map((id: string) => trackItemsMap?.[id])
@@ -217,7 +277,8 @@ async function runExport(
   }
 
   if (entries.length === 0) {
-    jobs.set(jobId, { status: "FAILED", progress: 0, error: "Could not download any media files" });
+    const cur = jobs.get(jobId);
+    jobs.set(jobId, { status: "FAILED", progress: cur?.progress ?? 0, error: "Could not download any media files" });
     return;
   }
 
@@ -227,13 +288,13 @@ async function runExport(
 
   const ffmpegArgs: string[] = ["-y"];
 
-  // Input 0: base black canvas for the full timeline duration
+  // Input 0: base black canvas
   ffmpegArgs.push(
     "-f", "lavfi",
     "-i", `color=black:size=${outW}x${outH}:r=30:d=${totalSec}`,
   );
 
-  // Add all media inputs (images get -loop 1 + -t so they are pre-limited)
+  // Add all media inputs
   for (const entry of entries) {
     if (entry.isImage) {
       const clipDurS = Math.max(
@@ -265,12 +326,10 @@ async function runExport(
 
     if (entry.kind === "video") {
       if (entry.isImage) {
-        // Image: input is already clipped to clipDurS by -t; just position it
         filterParts.push(
           `[${inputIdx}:v]setpts=PTS-STARTPTS+${displayFromS}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
         );
       } else {
-        // Video: trim to the source window, then position on the timeline
         filterParts.push(
           `[${inputIdx}:v]trim=start=${trimFromS}:end=${trimToS},setpts=PTS-STARTPTS+${displayFromS}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
         );
@@ -315,38 +374,52 @@ async function runExport(
     }
   }
 
-  // Burn captions via drawtext filters
+  // ── Burn captions via SRT subtitle file (avoids all drawtext escaping issues) ──
   const captionItems = allItems
-    .filter((it: any) => it.type === "caption" && !it.metadata?.transcriptGuide && !it.details?.guideOnly)
+    .filter((it: any) =>
+      it.type === "caption" &&
+      !it.metadata?.transcriptGuide &&
+      !it.details?.guideOnly &&
+      String(it.details?.text || "").trim()
+    )
     .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
 
   let finalVideoLabel = "vout";
 
   if (captionItems.length > 0) {
-    const escDT = (t: string) =>
-      t.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/:/g, "\\:");
+    try {
+      // Write SRT file — no escaping headaches
+      const srtLines: string[] = [];
+      captionItems.forEach((item: any, i: number) => {
+        const text = String(item.details?.text || "").trim();
+        if (!text) return;
+        const fromMs = Number(item.display?.from || 0);
+        const toMs   = Number(item.display?.to   || 0);
+        srtLines.push(`${i + 1}\n${toSRTTime(fromMs)} --> ${toSRTTime(toMs)}\n${text}\n`);
+      });
 
-    let prev = "vout";
-    captionItems.forEach((item: any, i: number) => {
-      const rawText = String(item.details?.text || "").trim();
-      if (!rawText) return;
+      if (srtLines.length > 0) {
+        const srtPath = path.join(tmpDir, "captions.srt");
+        await writeFile(srtPath, srtLines.join("\n"), "utf-8");
 
-      const outLabel = i === captionItems.length - 1 ? "vcap" : `vdt${i}`;
-      const fontSize = Math.round(Number(item.details?.fontSize || 22) * outW / baseW);
-      const fontColor = String(item.details?.color || "#FFFFFF");
-      const topStr = String(item.details?.top || "80%");
-      const topFrac = topStr.endsWith("%") ? parseFloat(topStr) / 100 : 0.8;
-      const startS = (Number(item.display?.from || 0) / 1000).toFixed(3);
-      const endS   = (Number(item.display?.to   || 0) / 1000).toFixed(3);
+        // subtitles filter burns them into the video
+        // Use force_style to approximate caption styling (position bottom-centre)
+        const firstItem = captionItems[0];
+        const fontSize = Math.round(Number(firstItem?.details?.fontSize || 22) * outW / canvasW);
+        const fontColor = toFFmpegColor(firstItem?.details?.color || "#ffffff");
+        const hexColor = fontColor.replace("#", "");
 
-      filterParts.push(
-        `[${prev}]drawtext=text='${escDT(rawText)}':fontsize=${fontSize}:fontcolor='${fontColor}':` +
-        `x=(w-text_w)/2:y=h*${topFrac.toFixed(3)}-text_h:` +
-        `enable='between(t,${startS},${endS})'[${outLabel}]`
-      );
-      prev = outLabel;
-      finalVideoLabel = outLabel;
-    });
+        // Escape the SRT path for filter_complex (backslash-colon)
+        const escapedSrt = srtPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
+        filterParts.push(
+          `[vout]subtitles='${escapedSrt}':force_style='FontSize=${fontSize},PrimaryColour=&H00${hexColor},Alignment=2,MarginV=40'[vcap]`
+        );
+        finalVideoLabel = "vcap";
+      }
+    } catch (captionErr) {
+      // Caption burn failed — log and continue without captions
+      console.error("[render] caption burn skipped:", captionErr);
+    }
   }
 
   // Mix all audio tracks
@@ -390,10 +463,18 @@ async function runExport(
 
   jobs.set(jobId, { status: "PROCESSING", progress: 60 });
 
-  await execFileAsync("ffmpeg", ffmpegArgs, {
-    maxBuffer: 256 * 1024 * 1024,
-    timeout: 900_000,
-  });
+  try {
+    await execFileAsync("ffmpeg", ffmpegArgs, {
+      maxBuffer: 256 * 1024 * 1024,
+      timeout: 900_000,
+    });
+  } catch (ffErr: any) {
+    const cur = jobs.get(jobId);
+    const stderr = ffErr?.stderr ? String(ffErr.stderr).slice(-2000) : "";
+    const msg = stderr || ffErr?.message || "FFmpeg failed";
+    jobs.set(jobId, { status: "FAILED", progress: cur?.progress ?? 60, error: msg });
+    return;
+  }
 
   jobs.set(jobId, { status: "COMPLETED", progress: 100, url: `/exports/${jobId}.mp4` });
 

@@ -18,6 +18,7 @@ import {
 import { Label } from "@/components/ui/label";
 
 import type StateManager from "@designcombo/state";
+import useStore from "./store/use-store";
 import { generateId } from "@designcombo/timeline";
 import type { IDesign } from "@designcombo/types";
 import { useDownloadState } from "./store/use-download-state";
@@ -176,15 +177,16 @@ const QUALITY_LABELS = {
   low:    "Low — CRF 28 (fast, small file)",
 };
 const RESOLUTION_LABELS = {
-  "1080p": "1080p  (1080 × 1920)",
-  "720p":  "720p   (720 × 1280)",
-  "540p":  "540p   (540 × 960)",
-  "2k":    "2K     (1440 × 2560)",
+  "1080p": "1080p — High quality",
+  "720p":  "720p — Standard",
+  "540p":  "540p — Small file",
+  "2k":    "2K — Ultra quality",
 };
 
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const isMediumScreen = useIsMediumScreen();
   const { actions, exportType, exportQuality, exportResolution } = useDownloadState();
+  const { size } = useStore();
   const [isExportTypeOpen, setIsExportTypeOpen] = useState(false);
   const [isQualityOpen, setIsQualityOpen] = useState(false);
   const [isResolutionOpen, setIsResolutionOpen] = useState(false);
@@ -215,7 +217,12 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
         align="end"
         className="bg-sidebar z-[250] flex w-60 flex-col gap-4"
       >
-        <Label>Export settings</Label>
+        <div className="flex items-center justify-between">
+          <Label>Export settings</Label>
+          <span className="text-xs text-muted-foreground">
+            Canvas: {size.width}×{size.height}
+          </span>
+        </div>
 
         <Popover open={isExportTypeOpen} onOpenChange={setIsExportTypeOpen}>
           <PopoverTrigger asChild>
