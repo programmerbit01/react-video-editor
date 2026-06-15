@@ -1,5 +1,4 @@
 import Draggable from "@/components/shared/draggable";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { dispatch } from "@designcombo/events";
 import { ADD_VIDEO } from "@designcombo/state";
 import { generateId } from "@designcombo/timeline";
@@ -264,23 +263,19 @@ export const Videos = () => {
         </div>
       )}
 
-      <ScrollArea className="flex-1 px-4 max-h-full">
-        <div className="max-h-full">
-          <div className="grid grid-cols-3 gap-2">
-            {pexelsVideos.map((video, index) => {
-              return (
-                <VideoItem
-                  key={video.id || index}
-                  video={video}
-                  shouldDisplayPreview={!isDraggingOverTimeline}
-                  handleAddImage={handleAddVideo}
-                />
-              );
-            })}
-          </div>
-          {pexelsLoading && <ImageLoading message="Searching for videos..." />}
+      <div className="flex-1 overflow-y-auto min-h-0 px-4">
+        <div className="grid grid-cols-3 gap-2 pb-2">
+          {pexelsVideos.map((video, index) => (
+            <VideoItem
+              key={video.id || index}
+              video={video}
+              shouldDisplayPreview={!isDraggingOverTimeline}
+              handleAddImage={handleAddVideo}
+            />
+          ))}
         </div>
-      </ScrollArea>
+        {pexelsLoading && <ImageLoading message="Searching for videos..." />}
+      </div>
 
       {hasNextPage && (
         <div className="flex-none border-t border-border/40 px-4 py-2">
