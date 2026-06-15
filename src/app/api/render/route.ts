@@ -93,6 +93,18 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
   await writeFile(dest, buf);
 }
 
+let _drawtextAvailable: boolean | null = null;
+async function hasDrawtext(): Promise<boolean> {
+  if (_drawtextAvailable !== null) return _drawtextAvailable;
+  try {
+    const { stdout } = await execFileAsync("ffmpeg", ["-filters"], { timeout: 5000 });
+    _drawtextAvailable = stdout.includes("drawtext");
+  } catch {
+    _drawtextAvailable = false;
+  }
+  return _drawtextAvailable;
+}
+
 async function hasAudioStream(inputPath: string): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync("ffprobe", [
@@ -379,38 +391,43 @@ async function runExport(
   let finalVideoLabel = "vout";
 
   if (captionItems.length > 0) {
-    try {
-      const validCaptions = captionItems.filter(
-        (it: any) => String(it.details?.text || "").trim()
-      );
+    const drawtextOk = await hasDrawtext();
+    if (!drawtextOk) {
+      console.warn("[render] drawtext filter not available — captions skipped. Run: brew reinstall ffmpeg");
+    } else {
+      try {
+        const validCaptions = captionItems.filter(
+          (it: any) => String(it.details?.text || "").trim()
+        );
 
-      if (validCaptions.length > 0) {
-        let prevLabel = "vout";
-        for (let i = 0; i < validCaptions.length; i++) {
-          const item = validCaptions[i];
-          const text = String(item.details?.text || "").trim();
-          const fromS  = Number(item.display?.from || 0) / 1000;
-          const toS    = Number(item.display?.to   || 0) / 1000;
-          const fontSize = Math.max(8, Math.round(Number(item.details?.fontSize || 22) * outW / canvasW));
+        if (validCaptions.length > 0) {
+          let prevLabel = "vout";
+          for (let i = 0; i < validCaptions.length; i++) {
+            const item = validCaptions[i];
+            const text = String(item.details?.text || "").trim();
+            const fromS  = Number(item.display?.from || 0) / 1000;
+            const toS    = Number(item.display?.to   || 0) / 1000;
+            const fontSize = Math.max(8, Math.round(Number(item.details?.fontSize || 22) * outW / canvasW));
 
-          // Write text to a file — avoids ALL quoting/escaping in filter_complex
-          const txtPath = path.join(tmpDir, `cap_${i}.txt`);
-          await writeFile(txtPath, text, "utf-8");
-          // Escape path for FFmpeg: backslash first, then colon
-          const esc = txtPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
+            // Write text to a file — avoids ALL quoting/escaping in filter_complex
+            const txtPath = path.join(tmpDir, `cap_${i}.txt`);
+            await writeFile(txtPath, text, "utf-8");
+            // Escape path for FFmpeg: backslash first, then colon
+            const esc = txtPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
 
-          const isLast  = i === validCaptions.length - 1;
-          const outLabel = isLast ? "vcap" : `capt${i}`;
-          filterParts.push(
-            `[${prevLabel}]drawtext=textfile='${esc}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=h-text_h-40:enable='between(t,${fromS},${toS})'[${outLabel}]`
-          );
-          prevLabel = outLabel;
+            const isLast  = i === validCaptions.length - 1;
+            const outLabel = isLast ? "vcap" : `capt${i}`;
+            filterParts.push(
+              `[${prevLabel}]drawtext=textfile='${esc}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=h-text_h-40:enable='between(t,${fromS},${toS})'[${outLabel}]`
+            );
+            prevLabel = outLabel;
+          }
+          finalVideoLabel = "vcap";
         }
-        finalVideoLabel = "vcap";
+      } catch (captionErr) {
+        console.error("[render] caption burn skipped:", captionErr);
+        finalVideoLabel = "vout";
       }
-    } catch (captionErr) {
-      console.error("[render] caption burn skipped:", captionErr);
-      finalVideoLabel = "vout";
     }
   }
 
