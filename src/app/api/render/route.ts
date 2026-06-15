@@ -7,6 +7,7 @@ import { randomBytes } from "crypto";
 import { createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
+import { createCanvas } from "@napi-rs/canvas";
 import { jobs } from "./jobs";
 
 const execFileAsync = promisify(execFile);
@@ -93,18 +94,6 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
   await writeFile(dest, buf);
 }
 
-let _drawtextAvailable: boolean | null = null;
-async function hasDrawtext(): Promise<boolean> {
-  if (_drawtextAvailable !== null) return _drawtextAvailable;
-  try {
-    const { stdout } = await execFileAsync("ffmpeg", ["-filters"], { timeout: 5000 });
-    _drawtextAvailable = stdout.includes("drawtext");
-  } catch {
-    _drawtextAvailable = false;
-  }
-  return _drawtextAvailable;
-}
-
 async function hasAudioStream(inputPath: string): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync("ffprobe", [
@@ -118,6 +107,56 @@ async function hasAudioStream(inputPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Render a caption text onto a transparent PNG the same size as the video output. */
+async function generateCaptionOverlay(
+  text: string,
+  videoWidth: number,
+  videoHeight: number,
+  fontSize: number,
+  outputPath: string,
+): Promise<void> {
+  const canvas = createCanvas(videoWidth, videoHeight);
+  const ctx = canvas.getContext("2d");
+
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // Word-wrap
+  const maxWidth = videoWidth * 0.85;
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+
+  const lineHeight = fontSize * 1.35;
+  const totalH = lines.length * lineHeight;
+  const baseY = videoHeight - 50 - totalH + fontSize;
+
+  // Shadow for readability on any background
+  ctx.shadowColor = "rgba(0,0,0,0.95)";
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = "white";
+
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], videoWidth / 2, baseY + i * lineHeight);
+  }
+
+  const buf = await canvas.encode("png");
+  await writeFile(outputPath, buf);
 }
 
 /** Compute even output dimensions from canvas size + max long-side target. */
@@ -286,6 +325,31 @@ async function runExport(
     return;
   }
 
+  // ── Generate caption PNG overlays with Node.js canvas (no FFmpeg text filter needed) ──
+  const captionItems = allItems
+    .filter((it: any) =>
+      it.type === "caption" &&
+      !it.metadata?.transcriptGuide &&
+      !it.details?.guideOnly &&
+      String(it.details?.text || "").trim()
+    )
+    .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
+
+  interface CaptionOverlay { path: string; fromS: number; toS: number; }
+  const captionOverlays: CaptionOverlay[] = [];
+
+  for (let i = 0; i < captionItems.length; i++) {
+    const item = captionItems[i];
+    const text = String(item.details?.text || "").trim();
+    if (!text) continue;
+    const fromS = Number(item.display?.from || 0) / 1000;
+    const toS   = Number(item.display?.to   || 0) / 1000;
+    const fontSize = Math.max(8, Math.round(Number(item.details?.fontSize || 22) * outW / canvasW));
+    const pngPath = path.join(tmpDir, `cap_${i}.png`);
+    await generateCaptionOverlay(text, outW, outH, fontSize, pngPath);
+    captionOverlays.push({ path: pngPath, fromS, toS });
+  }
+
   jobs.set(jobId, { status: "PROCESSING", progress: 50 });
 
   // ─── Build FFmpeg filter_complex ─────────────────────────────────────────
@@ -298,7 +362,7 @@ async function runExport(
     "-i", `color=black:size=${outW}x${outH}:r=30:d=${totalSec}`,
   );
 
-  // Add all media inputs
+  // Add all media inputs (inputs 1..N)
   for (const entry of entries) {
     if (entry.isImage) {
       const clipDurS = Math.max(
@@ -309,6 +373,12 @@ async function runExport(
     } else {
       ffmpegArgs.push("-i", entry.path);
     }
+  }
+
+  // Add caption PNG inputs (inputs N+1..N+M) — each loops for full duration
+  const captionInputStart = 1 + entries.length;
+  for (const cap of captionOverlays) {
+    ffmpegArgs.push("-loop", "1", "-framerate", "1", "-t", String(totalSec), "-i", cap.path);
   }
 
   const filterParts: string[] = [];
@@ -378,57 +448,25 @@ async function runExport(
     }
   }
 
-  // ── Burn captions via drawtext+textfile (no libass required) ──────────────
-  const captionItems = allItems
-    .filter((it: any) =>
-      it.type === "caption" &&
-      !it.metadata?.transcriptGuide &&
-      !it.details?.guideOnly &&
-      String(it.details?.text || "").trim()
-    )
-    .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
-
+  // Chain caption PNG overlays onto video output
   let finalVideoLabel = "vout";
-
-  if (captionItems.length > 0) {
-    const drawtextOk = await hasDrawtext();
-    if (!drawtextOk) {
-      console.warn("[render] drawtext filter not available — captions skipped. Run: brew reinstall ffmpeg");
-    } else {
-      try {
-        const validCaptions = captionItems.filter(
-          (it: any) => String(it.details?.text || "").trim()
-        );
-
-        if (validCaptions.length > 0) {
-          let prevLabel = "vout";
-          for (let i = 0; i < validCaptions.length; i++) {
-            const item = validCaptions[i];
-            const text = String(item.details?.text || "").trim();
-            const fromS  = Number(item.display?.from || 0) / 1000;
-            const toS    = Number(item.display?.to   || 0) / 1000;
-            const fontSize = Math.max(8, Math.round(Number(item.details?.fontSize || 22) * outW / canvasW));
-
-            // Write text to a file — avoids ALL quoting/escaping in filter_complex
-            const txtPath = path.join(tmpDir, `cap_${i}.txt`);
-            await writeFile(txtPath, text, "utf-8");
-            // Escape path for FFmpeg: backslash first, then colon
-            const esc = txtPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
-
-            const isLast  = i === validCaptions.length - 1;
-            const outLabel = isLast ? "vcap" : `capt${i}`;
-            filterParts.push(
-              `[${prevLabel}]drawtext=textfile='${esc}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=h-text_h-40:enable='between(t,${fromS},${toS})'[${outLabel}]`
-            );
-            prevLabel = outLabel;
-          }
-          finalVideoLabel = "vcap";
-        }
-      } catch (captionErr) {
-        console.error("[render] caption burn skipped:", captionErr);
-        finalVideoLabel = "vout";
-      }
+  if (captionOverlays.length > 0) {
+    let prevLabel = "vout";
+    for (let i = 0; i < captionOverlays.length; i++) {
+      const { fromS, toS } = captionOverlays[i];
+      const capInputIdx = captionInputStart + i;
+      // scale caption PNG to video size, then overlay with alpha during its time window
+      filterParts.push(
+        `[${capInputIdx}:v]scale=${outW}:${outH},format=rgba[capscaled${i}]`,
+      );
+      const isLast = i === captionOverlays.length - 1;
+      const outLabel = isLast ? "vcap" : `capov${i}`;
+      filterParts.push(
+        `[${prevLabel}][capscaled${i}]overlay=x=0:y=0:enable='between(t,${fromS},${toS})'[${outLabel}]`,
+      );
+      prevLabel = outLabel;
     }
+    finalVideoLabel = "vcap";
   }
 
   // Mix all audio tracks
@@ -488,4 +526,5 @@ async function runExport(
   jobs.set(jobId, { status: "COMPLETED", progress: 100, url: `/exports/${jobId}.mp4` });
 
   for (const entry of entries) unlink(entry.path).catch(() => {});
+  for (const cap of captionOverlays) unlink(cap.path).catch(() => {});
 }
