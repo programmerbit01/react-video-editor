@@ -137,7 +137,7 @@ export default function MenuListHorizontal() {
               </DrawerHeader>
             </VisuallyHidden>
 
-            <div className="flex-1 overflow-auto">
+            <div className="flex flex-1 flex-col overflow-hidden min-h-0">
               <MenuItem />
             </div>
           </DrawerContent>

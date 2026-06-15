@@ -44,6 +44,10 @@ interface IUploadStore {
   setUploads: (uploads: any[] | ((prev: any[]) => any[])) => void;
   uploadsLoaded: boolean;
   setUploadsLoaded: (v: boolean) => void;
+  uploadsHasMore: boolean;
+  setUploadsHasMore: (v: boolean) => void;
+  uploadsPage: number;
+  setUploadsPage: (v: number) => void;
 }
 
 const useUploadStore = create<IUploadStore>()(
@@ -183,7 +187,11 @@ const useUploadStore = create<IUploadStore>()(
               : uploads
         })),
       uploadsLoaded: false,
-      setUploadsLoaded: (v: boolean) => set({ uploadsLoaded: v })
+      setUploadsLoaded: (v: boolean) => set({ uploadsLoaded: v }),
+      uploadsHasMore: false,
+      setUploadsHasMore: (v: boolean) => set({ uploadsHasMore: v }),
+      uploadsPage: 1,
+      setUploadsPage: (v: number) => set({ uploadsPage: v })
     }),
     {
       name: "upload-store",

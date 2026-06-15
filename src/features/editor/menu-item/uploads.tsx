@@ -210,10 +210,13 @@ const UploadGridItem = ({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export const Uploads = () => {
-  const { setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads, uploadsLoaded, setUploadsLoaded } = useUploadStore();
+  const {
+    setShowUploadModal, uploads, pendingUploads, activeUploads, setUploads,
+    uploadsLoaded, setUploadsLoaded,
+    uploadsHasMore: hasMore, setUploadsHasMore: setHasMore,
+    uploadsPage: page, setUploadsPage: setPage
+  } = useUploadStore();
   const { setTranscriptResult } = useCaptionTranscribeStore();
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
