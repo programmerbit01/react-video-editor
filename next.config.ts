@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
 	env: {
 		NEXT_PUBLIC_BASE_PATH: '/editor',
 	},
+	serverExternalPackages: ['@napi-rs/canvas'],
 };
 
 export default nextConfig;
