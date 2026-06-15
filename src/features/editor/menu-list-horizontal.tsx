@@ -127,7 +127,7 @@ export default function MenuListHorizontal() {
       {/* Drawer only on mobile/tablet - conditionally mounted */}
       {!isLargeScreen && (
         <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
-          <DrawerContent className="max-h-[80vh] min-h-[340px] mt-0">
+          <DrawerContent className="h-[80vh] mt-0 flex flex-col">
             <VisuallyHidden>
               <DrawerHeader>
                 <DrawerTitle>Menu Options</DrawerTitle>

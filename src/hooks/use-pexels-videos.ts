@@ -150,7 +150,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
 
   const searchVideos = useCallback(
     async (query: string, page = 1, filters?: PexelsVideoFilters) => {
-      const url = buildVideoUrl(query, page, 18, filters);
+      const url = buildVideoUrl(query, page, 27, filters);
       await fetchVideos(url);
     },
     [fetchVideos]
@@ -161,7 +161,7 @@ export function usePexelsVideos(): UsePexelsVideosReturn {
     setError(null);
 
     try {
-      const url = buildVideoUrl(query, page, 18, filters);
+      const url = buildVideoUrl(query, page, 27, filters);
       const response = await fetch(url);
 
       if (!response.ok) {

@@ -359,69 +359,73 @@ export const Uploads = () => {
   const hasItems = allItems.length > 0 || pendingUploads.length > 0 || activeUploads.length > 0;
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 overflow-y-auto">
+    <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
       <ModalUpload />
 
-      <div className="p-4 flex gap-2">
-        <Button className="flex-1 cursor-pointer" onClick={() => setShowUploadModal(true)} variant="outline">
-          <UploadIcon className="w-4 h-4" />
-          <span className="ml-2">Upload</span>
-        </Button>
-        <Button
-          variant="outline"
-          className="cursor-pointer px-3"
-          onClick={handleRefresh}
-          disabled={refreshing}
-          title="Refresh"
-        >
-          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-        </Button>
+      {/* Fixed top: upload button + status */}
+      <div className="flex-none">
+        <div className="p-4 flex gap-2">
+          <Button className="flex-1 cursor-pointer" onClick={() => setShowUploadModal(true)} variant="outline">
+            <UploadIcon className="w-4 h-4" />
+            <span className="ml-2">Upload</span>
+          </Button>
+          <Button
+            variant="outline"
+            className="cursor-pointer px-3"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Refresh"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+
+        {/* Error state */}
+        {!loading && fetchError && (
+          <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{fetchError}</span>
+          </div>
+        )}
+
+        {/* Active uploads progress */}
+        {(pendingUploads.length > 0 || activeUploads.length > 0) && (
+          <div className="px-4 pb-2">
+            <div className="font-medium text-sm mb-2 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              Uploading…
+            </div>
+            {[...pendingUploads, ...activeUploads].map((u) => (
+              <div key={u.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="truncate flex-1">{u.file?.name || "…"}</span>
+                <span>{u.progress ?? 0}%</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Loading state */}
-      {loading && (
-        <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">
-          <Loader2 className="w-6 h-6 animate-spin" />
-          <span className="text-xs">Loading media…</span>
-        </div>
-      )}
-
-      {/* Error state */}
-      {!loading && fetchError && (
-        <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>{fetchError}</span>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!loading && !hasItems && !fetchError && (
-        <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
-          <Upload size={32} className="opacity-50" />
-          <span className="text-sm">No uploads yet</span>
-        </div>
-      )}
-
-      {/* Active uploads progress */}
-      {(pendingUploads.length > 0 || activeUploads.length > 0) && (
-        <div className="px-4 pb-2">
-          <div className="font-medium text-sm mb-2 flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-            Uploading…
+      {/* Scrollable grid */}
+      <div className="flex-1 overflow-y-auto px-4 min-h-0">
+        {/* Loading state */}
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">
+            <Loader2 className="w-6 h-6 animate-spin" />
+            <span className="text-xs">Loading media…</span>
           </div>
-          {[...pendingUploads, ...activeUploads].map((u) => (
-            <div key={u.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="truncate flex-1">{u.file?.name || "…"}</span>
-              <span>{u.progress ?? 0}%</span>
-            </div>
-          ))}
-        </div>
-      )}
+        )}
 
-      {/* Media grid — single unified list, server order (newest first) */}
-      {!loading && allItems.length > 0 && (
-        <div className="px-4 pb-2">
-          <div className="grid grid-cols-3 gap-2">
+        {/* Empty state */}
+        {!loading && !hasItems && !fetchError && (
+          <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
+            <Upload size={32} className="opacity-50" />
+            <span className="text-sm">No uploads yet</span>
+          </div>
+        )}
+
+        {/* Media grid */}
+        {!loading && allItems.length > 0 && (
+          <div className="grid grid-cols-3 gap-2 pb-2">
             {allItems.map((item, idx) => (
               <UploadGridItem
                 key={item.id || `item-${idx}`}
@@ -432,11 +436,12 @@ export const Uploads = () => {
               />
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
+      {/* Pinned Load More footer */}
       {hasMore && (
-        <div className="px-4 pb-4 pt-1">
+        <div className="flex-none border-t border-border/40 px-4 py-2">
           <Button
             variant="outline"
             className="w-full"
