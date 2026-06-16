@@ -32,6 +32,7 @@ import { design } from "./mock";
 import { Separator } from "@/components/ui/separator";
 import useTranscriptGuides from "./hooks/use-transcript-guides";
 import { setStateManagerRef } from "./utils/state-manager-ref";
+import ScriptGuidePanel from "./control-item/script-guide-panel";
 
 const stateManager = new StateManager(
   {
@@ -194,6 +195,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
         stateManager={stateManager}
         setProjectName={setProjectName}
       />
+      <ScriptGuidePanel />
 
       <div className="flex flex-1">
         {isLargeScreen ? (

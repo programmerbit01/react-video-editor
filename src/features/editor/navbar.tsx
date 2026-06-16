@@ -38,6 +38,8 @@ import Link from "next/link";
 import { ShortcutsModal } from "./shortcuts-modal";
 import { ModeToggle } from "@/components/ui/mode-toggle";
 import { SaveProjectModal } from "./save-project-modal";
+import useScriptGuideStore, { ScriptSegment } from "./store/use-script-guide-store";
+import { parseTimeToMs } from "./store/use-script-guide-store";
 import {
   getSavedProjects,
   saveProject,
@@ -61,6 +63,7 @@ export default function Navbar({
   const isLargeScreen = useIsLargeScreen();
   const isMediumScreen = useIsMediumScreen();
   const isSmallScreen = useIsSmallScreen();
+  const { rawJson, setSegments } = useScriptGuideStore();
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
@@ -98,12 +101,13 @@ export default function Navbar({
   };
 
   const handleSaveProject = (name: string) => {
-    const data = stateManager.toJSON() as Record<string, unknown>;
+    const data = {
+      ...(stateManager.toJSON() as Record<string, unknown>),
+      ...(rawJson ? { _guidedScript: rawJson } : {}),
+    };
     if (currentProjectId) {
-      // update existing project
       updateProject(currentProjectId, name, data);
     } else {
-      // create new project and remember its id
       const saved = saveProject(name, data);
       setCurrentProjectId(saved.id);
     }
@@ -118,6 +122,15 @@ export default function Navbar({
     setProjectName(project.name);
     setCurrentProjectId(project.id);
     setIsProjectsOpen(false);
+    // restore guided script if saved
+    const scriptRaw = project.data._guidedScript as string | undefined;
+    if (scriptRaw) {
+      try {
+        const parsed = JSON.parse(scriptRaw);
+        const arr: ScriptSegment[] = Array.isArray(parsed) ? parsed : parsed.segments;
+        if (Array.isArray(arr) && arr.length) setSegments(arr, scriptRaw);
+      } catch {}
+    }
   };
 
   const handleDeleteProject = (e: React.MouseEvent, id: string) => {
@@ -246,6 +259,7 @@ export default function Navbar({
       {/* Right: theme + shortcuts + download */}
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
+          <ScriptGuideButton />
           <div className="rounded-full border border-border/70 bg-background/80 p-0.5 shadow-sm">
             <ModeToggle />
           </div>
@@ -504,5 +518,32 @@ const ResizeOption = ({
         <div className="text-xs text-muted-foreground">{description}</div>
       </div>
     </div>
+  );
+};
+
+const ScriptGuideButton = () => {
+  const { isOpen, segments, setOpen } = useScriptGuideStore();
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => setOpen(!isOpen)}
+      className={`pointer-events-auto h-8 gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+        isOpen
+          ? "border-violet-500/60 bg-violet-500/10 text-violet-600 dark:text-violet-300"
+          : "border-border text-muted-foreground hover:text-foreground"
+      }`}
+      title="Guided Script"
+    >
+      <span>📋</span>
+      <span className="hidden sm:inline">Script</span>
+      {segments.length > 0 && (
+        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+          isOpen ? "bg-violet-500/20 text-violet-600 dark:text-violet-300" : "bg-muted text-muted-foreground"
+        }`}>
+          {segments.length}
+        </span>
+      )}
+    </Button>
   );
 };

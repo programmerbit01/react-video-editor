@@ -172,6 +172,185 @@ All vapp items (both fetched and freshly uploaded) satisfy `metadata.vappItem = 
 
 ---
 
+---
+
+## 🎬 Guided Script
+
+Guided Script is a floating, project-level panel that shows the video script as a continuous visual guide while editing. It is **completely independent of clip selection and tab state** — it stays visible regardless of which tab is open or which clip is selected.
+
+---
+
+### How to open
+
+A **📋 Script** button sits in the top-right navbar. Click it to open/close the panel. When segments are loaded, the button shows a count badge and highlights violet.
+
+---
+
+### Architecture
+
+```
+navbar.tsx
+  └─ ScriptGuideButton        → toggles isOpen in store
+
+editor.tsx
+  └─ <ScriptGuidePanel />     → rendered at root level (position: fixed, always on top)
+
+use-script-guide-store.ts     → Zustand store, single source of truth
+script-guide-panel.tsx        → panel UI: input, parse, render, drag, resize
+```
+
+**Key design decision:** The panel is rendered in `editor.tsx` (not inside any clip control), so it is never unmounted when the user switches tabs, selects a different clip, or opens a modal.
+
+---
+
+### Store — `use-script-guide-store.ts`
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `segments` | `ScriptSegment[]` | Parsed segments with computed `startMs`/`endMs` |
+| `rawJson` | `string` | Original JSON string (used for project save) |
+| `isOpen` | `boolean` | Whether the floating panel is visible |
+| `floatPos` | `{ x, y }` | Panel position on screen (drag to move) |
+| `panelSize` | `{ width, height }` | Panel dimensions (drag edges to resize) |
+| `fontSizeKey` | `"S" \| "M" \| "L"` | Text size inside the panel |
+| `activeSegmentIndex` | `number` | Index of the segment matching current player time |
+| `isCollapsed` | `boolean` | Header-only mode |
+| `showInput` | `boolean` | Whether the JSON textarea is visible |
+
+---
+
+### Panel features
+
+| Feature | How |
+|---------|-----|
+| **Move** | Drag the header (6-dot grip) |
+| **Resize width** | Drag left or right edge |
+| **Resize height** | Drag bottom-right corner |
+| **Font size** | S / M / L pill buttons in header |
+| **Load example** | **E** button fills textarea with sample JSON |
+| **Minimize** | **—** button collapses to header-only |
+| **Close** | **✕** button, reopen via navbar |
+| **Segment click → seek** | Click any segment to seek the player to its start time |
+| **Live highlight** | Active segment highlights automatically as player time changes |
+
+---
+
+### JSON format
+
+Paste a JSON array into the panel textarea and click **Parse Script**.
+
+```json
+[
+  {
+    "type": "avatar",
+    "time": "0:00 - 0:20",
+    "text": "What if one of the simplest health habits was not a new diet...",
+    "note": "Intense eye contact, lean slightly forward",
+    "mark": "hook"
+  },
+  {
+    "type": "broll",
+    "time": "0:20 - 1:00",
+    "text": "After you eat, your body starts breaking food into energy...",
+    "note": "Calm voiceover pace, no rush",
+    "search": ["healthy meal", "walking after eating", "blood sugar"],
+    "mark": "context-build"
+  }
+]
+```
+
+#### Fields
+
+| Field | Required | Values | Description |
+|-------|----------|--------|-------------|
+| `type` | ✅ | `"avatar"` / `"broll"` | Avatar = on-camera talking (bold). B-roll = voiceover + footage (dimmer) |
+| `time` | ✅ | `"M:SS - M:SS"` | Segment time range. Used for seek and live highlight |
+| `text` | ✅ | string | The spoken script for this segment |
+| `note` | optional | string | Director note — tone, camera angle, delivery hint. Shown in italic |
+| `search` | optional | string[] | Stock footage keywords (Pixabay/Pexels). Only meaningful on broll segments |
+| `mark` | optional | see below | Content psychology label shown as a colored badge |
+
+#### Mark values
+
+| Mark | Badge | When to use |
+|------|-------|-------------|
+| `hook` | 🎣 HOOK | First 3–5 seconds — must grab attention |
+| `open-loop` | ◎ OPEN LOOP | Creates curiosity that keeps viewer watching |
+| `context-build` | ▸ CONTEXT | Background / explanation section |
+| `pattern-interrupt` | ⚡ PATTERN BREAK | Sudden tone/energy shift to re-engage dropping viewers |
+| `payoff` | ✓ PAYOFF | Answers the open loop — the key reveal |
+| `retention-peak` | ★ RETENTION | Emotional or surprising high point |
+| `cta` | ★ CTA | Like / comment / subscribe / final message |
+
+Most segments have **no mark** — only label the psychologically important moments.
+
+---
+
+### How time parsing works
+
+`time: "1:20 - 2:00"` is split on `-` or `–`, each half parsed:
+
+```
+"1:20" → (1 × 60 + 20) × 1000 = 80000 ms
+"2:00" → (2 × 60 + 0)  × 1000 = 120000 ms
+```
+
+These become `startMs` / `endMs` on each segment. On every animation frame, the player's current time is compared against all segments. The first match sets `activeSegmentIndex` and that segment gets a colored highlight in the panel.
+
+---
+
+### Project save / load
+
+When a project is saved (**Save Project** button), the raw JSON string is written into the project data as `_guidedScript`. When the project is loaded, `_guidedScript` is detected, parsed, and loaded into the store automatically — no manual re-paste needed.
+
+```typescript
+// on save (navbar.tsx)
+const data = {
+  ...stateManager.toJSON(),
+  ...(rawJson ? { _guidedScript: rawJson } : {}),
+};
+
+// on load (navbar.tsx)
+const scriptRaw = project.data._guidedScript as string | undefined;
+if (scriptRaw) setSegments(JSON.parse(scriptRaw), scriptRaw);
+```
+
+---
+
+### AI system prompt for JSON generation
+
+Use this prompt with any AI (Claude, ChatGPT, Gemini) to generate the JSON from a script + timing table:
+
+```
+You are a video script guide generator. I will give you a video script with a timing table.
+Output a JSON array only — no explanation, no markdown code block.
+
+Rules:
+- One object per timing row
+- "type": "avatar" or "broll"
+- "time": exact "M:SS - M:SS" from the table
+- "text": exact spoken words for that segment
+- "note": one short director note (tone, camera, delivery)
+- "search": 3–6 stock footage keywords — only on broll segments
+- "mark": one of: hook, open-loop, context-build, pattern-interrupt, payoff, retention-peak, cta
+  Add mark only to the most important moments. Most segments have no mark.
+
+Output only the raw JSON array. Nothing else.
+```
+
+---
+
+### Relevant files
+
+| File | Role |
+|------|------|
+| `src/features/editor/store/use-script-guide-store.ts` | Zustand store + time parser |
+| `src/features/editor/control-item/script-guide-panel.tsx` | Full panel component |
+| `src/features/editor/editor.tsx` | Mounts `<ScriptGuidePanel />` at root |
+| `src/features/editor/navbar.tsx` | Script button + save/load integration |
+
+---
+
 ## 📝 License
 
 Copyright © 2025 [DesignCombo](https://designcombo.dev/).
