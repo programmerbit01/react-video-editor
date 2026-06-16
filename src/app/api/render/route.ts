@@ -413,9 +413,11 @@ async function runExport(
       videoOverlays.push({ vLabel: `v${inputIdx}`, from: displayFromS, to: displayToS });
 
       if (entry.hasAudio) {
+        const vol = Math.max(0, Number(item.details?.volume ?? 100) / 100);
         filterParts.push(
           `[${inputIdx}:a]atrim=start=${trimFromS}:end=${trimToS},` +
           `asetpts=PTS-STARTPTS,` +
+          `volume=${vol},` +
           `adelay=${delayMs}|${delayMs},` +
           `aformat=channel_layouts=stereo:sample_rates=48000[va${inputIdx}]`,
         );
@@ -423,9 +425,11 @@ async function runExport(
       }
     } else {
       // Audio-only track
+      const vol = Math.max(0, Number(item.details?.volume ?? 100) / 100);
       filterParts.push(
         `[${inputIdx}:a]atrim=start=${trimFromS}:end=${trimToS},` +
         `asetpts=PTS-STARTPTS,` +
+        `volume=${vol},` +
         `adelay=${delayMs}|${delayMs},` +
         `aformat=channel_layouts=stereo:sample_rates=48000[aa${inputIdx}]`,
       );
