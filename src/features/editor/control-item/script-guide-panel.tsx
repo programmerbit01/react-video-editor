@@ -79,23 +79,22 @@ const MARK_CONFIG: Record<string, { label: string; color: string }> = {
   cta:                { label: "★ CTA",              color: "#c084fc" },
 };
 
-function MarkBadge({ mark }: { mark: string }) {
+function MarkBadge({ mark, fontSize = 8 }: { mark: string; fontSize?: number }) {
   const cfg = MARK_CONFIG[mark];
   const label = cfg?.label ?? mark.toUpperCase();
   const color = cfg?.color ?? "#888";
   return (
     <span
       style={{
-        fontSize: 8,
+        fontSize,
         fontWeight: 700,
-        letterSpacing: "0.07em",
-        padding: "2px 6px",
+        letterSpacing: "0.06em",
+        padding: "1px 5px",
         borderRadius: 4,
         color,
         background: `${color}22`,
         border: `1px solid ${color}44`,
         whiteSpace: "nowrap",
-        marginLeft: "auto",
       }}
     >
       {label}
@@ -118,56 +117,57 @@ function ScriptBlock({
   const borderColor = isAvatar
     ? isActive ? "#8b5cf6" : "#6d28d955"
     : isActive ? "#d97706" : "#d9770655";
+  const metaSize = Math.max(8, fontSize - 3);
 
   return (
     <div
       onClick={onClick}
-      className={`mb-4 cursor-pointer rounded-r-lg py-2 pr-2 transition-colors ${
+      className={`mb-1.5 cursor-pointer rounded-r-md py-1 pr-2 transition-colors ${
         isActive
           ? isAvatar ? "bg-violet-500/10" : "bg-amber-500/10"
           : "hover:bg-card/40"
       }`}
-      style={{ borderLeft: `2px solid ${borderColor}`, paddingLeft: 10 }}
+      style={{ borderLeft: `2px solid ${borderColor}`, paddingLeft: 8 }}
     >
-      <div className="mb-1 flex items-center gap-1.5">
-        <div
-          className="h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{ background: isAvatar ? "#7c3aed" : "#d97706" }}
-        />
-        <span className="font-mono text-[9px] tracking-wider text-muted-foreground/60">
-          {seg.time}
-        </span>
-        {seg.mark && <MarkBadge mark={seg.mark} />}
-      </div>
-
+      {/* Main text */}
       <div
         style={{ fontSize }}
-        className={`leading-relaxed ${
+        className={`leading-snug ${
           isAvatar ? "font-semibold text-foreground" : "font-normal text-foreground/60"
         }`}
       >
         {seg.text}
       </div>
 
-      {seg.note && (
-        <div className="mt-1 text-[10px] italic leading-snug text-muted-foreground/50">
-          {seg.note}
-        </div>
-      )}
-
-      {seg.search && seg.search.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {seg.search.map((kw, i) => (
-            <span
-              key={i}
-              style={{ background: "rgba(217,119,6,0.12)", border: "1px solid rgba(217,119,6,0.25)" }}
-              className="rounded px-1.5 py-0.5 text-[9px] text-amber-600 dark:text-amber-400"
-            >
-              {kw}
-            </span>
-          ))}
-        </div>
-      )}
+      {/* Meta row: dot · time · [mark] · note · keywords — all one line */}
+      <div className="mt-0.5 flex flex-wrap items-center gap-1" style={{ fontSize: metaSize }}>
+        <div
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ background: isAvatar ? "#7c3aed" : "#d97706" }}
+        />
+        <span className="font-mono text-muted-foreground/50" style={{ letterSpacing: "0.05em" }}>
+          {seg.time}
+        </span>
+        {seg.mark && <MarkBadge mark={seg.mark} fontSize={metaSize} />}
+        {seg.note && (
+          <span className="italic text-muted-foreground/40">{seg.note}</span>
+        )}
+        {seg.search?.map((kw, i) => (
+          <span
+            key={i}
+            style={{
+              fontSize: metaSize,
+              background: "rgba(217,119,6,0.12)",
+              border: "1px solid rgba(217,119,6,0.25)",
+              padding: "1px 5px",
+              borderRadius: 4,
+            }}
+            className="text-amber-600 dark:text-amber-400"
+          >
+            {kw}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -177,6 +177,7 @@ export default function ScriptGuidePanel() {
     segments,
     rawJson,
     isOpen,
+    isFullscreen,
     floatPos,
     panelSize,
     isCollapsed,
@@ -186,6 +187,7 @@ export default function ScriptGuidePanel() {
     setSegments,
     clearSegments,
     setOpen,
+    setFullscreen,
     setFloatPos,
     setPanelSize,
     setCollapsed,
@@ -288,15 +290,20 @@ export default function ScriptGuidePanel() {
 
   if (!isOpen) return null;
 
+  const panelStyle: React.CSSProperties = isFullscreen
+    ? { position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh", zIndex: 9999, overflow: "visible" }
+    : { position: "fixed", left: floatPos.x, top: floatPos.y, width: panelSize.width, zIndex: 9999, overflow: "visible" };
+
   return (
     <div
-      className="rounded-2xl border border-border bg-background shadow-lg"
-      style={{ position: "fixed", left: floatPos.x, top: floatPos.y, width: panelSize.width, zIndex: 9999, overflow: "visible" }}
+      className="rounded-2xl border-2 border-violet-500/40 bg-background shadow-xl"
+      style={panelStyle}
     >
-      {/* Header — drag handle */}
+      {/* Header — drag handle (double-click = fullscreen) */}
       <div
-        onMouseDown={startDrag}
-        className="flex cursor-grab select-none items-center justify-between rounded-t-2xl border-b border-border bg-card px-3 py-2 overflow-hidden"
+        onMouseDown={!isFullscreen ? startDrag : undefined}
+        onDoubleClick={() => setFullscreen(!isFullscreen)}
+        className={`flex select-none items-center justify-between rounded-t-2xl border-b-2 border-violet-500/30 bg-card px-3 py-2 overflow-hidden ${!isFullscreen ? "cursor-grab" : "cursor-default"}`}
       >
         <div className="flex items-center gap-2">
           <div className="grid grid-cols-2 gap-[3px]">
@@ -343,6 +350,13 @@ export default function ScriptGuidePanel() {
             E
           </button>
           <button
+            onClick={() => setFullscreen(!isFullscreen)}
+            className="flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[9px] text-muted-foreground hover:bg-violet-500/20 hover:text-violet-500"
+            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          >
+            {isFullscreen ? "⊡" : "⊞"}
+          </button>
+          <button
             onClick={() => setCollapsed(!isCollapsed)}
             className="flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[9px] text-muted-foreground hover:text-foreground"
           >
@@ -358,7 +372,10 @@ export default function ScriptGuidePanel() {
       </div>
 
       {!isCollapsed && (
-        <div className="overflow-y-auto rounded-b-2xl p-3" style={{ height: panelSize.height }}>
+        <div
+          className="overflow-y-auto rounded-b-2xl p-3"
+          style={{ height: isFullscreen ? "calc(100vh - 40px)" : panelSize.height }}
+        >
           {showInput && (
             <div className="mb-3">
               <textarea
