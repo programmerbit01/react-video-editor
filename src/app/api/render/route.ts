@@ -393,32 +393,32 @@ async function runExport(
     isImage: boolean;
     hasAudio: boolean;
   }
-  const entries: MediaEntry[] = [];
   const allMedia = [...videoItems, ...audioItems];
 
-  for (let i = 0; i < allMedia.length; i++) {
-    const item = allMedia[i];
-    const src: string = item.details?.src || item.details?.url || "";
-    if (!src) continue;
-
-    const urlPath = src.split("?")[0];
-    const rawExt = urlPath.split(".").pop()?.toLowerCase() ?? "mp4";
-    const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
-      "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
-    const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
-
-    try {
-      await fetchToFile(src, tmpFile);
-      const isImage = /\.(jpe?g|png|webp)$/i.test(tmpFile);
-      const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
-      const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
-      entries.push({ path: tmpFile, item, kind, isImage, hasAudio });
-    } catch (err) {
-      console.error(`[render] skipping ${src}: ${err}`);
-    }
-
-    jobs.set(jobId, { status: "PROCESSING", progress: Math.round(5 + (i / allMedia.length) * 40) });
-  }
+  // Download all media files in parallel — biggest speedup for multi-clip timelines
+  jobs.set(jobId, { status: "PROCESSING", progress: 5 });
+  const entryResults = await Promise.all(
+    allMedia.map(async (item: any, i: number) => {
+      const src: string = item.details?.src || item.details?.url || "";
+      if (!src) return null;
+      const urlPath = src.split("?")[0];
+      const rawExt = urlPath.split(".").pop()?.toLowerCase() ?? "mp4";
+      const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
+        "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
+      const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
+      try {
+        await fetchToFile(src, tmpFile);
+        const isImage = /\.(jpe?g|png|webp)$/i.test(tmpFile);
+        const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
+        const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
+        return { path: tmpFile, item, kind, isImage, hasAudio } as MediaEntry;
+      } catch (err) {
+        console.error(`[render] skipping ${src}: ${err}`);
+        return null;
+      }
+    })
+  );
+  const entries: MediaEntry[] = entryResults.filter(Boolean) as MediaEntry[];
 
   if (entries.length === 0) {
     const cur = jobs.get(jobId);
@@ -439,12 +439,13 @@ async function runExport(
   interface CaptionOverlay { path: string; fromS: number; toS: number; }
   const captionOverlays: CaptionOverlay[] = [];
 
-  for (let i = 0; i < captionItems.length; i++) {
-    const wordOverlays = await generateHighlightedCaptionOverlays(
-      captionItems[i], outW, outH, canvasW, tmpDir, i,
-    );
-    captionOverlays.push(...wordOverlays);
-  }
+  // Generate all caption PNGs in parallel across caption items
+  const allWordOverlays = await Promise.all(
+    captionItems.map((item: any, i: number) =>
+      generateHighlightedCaptionOverlays(item, outW, outH, canvasW, tmpDir, i)
+    )
+  );
+  for (const overlays of allWordOverlays) captionOverlays.push(...overlays);
 
   jobs.set(jobId, { status: "PROCESSING", progress: 50 });
 
