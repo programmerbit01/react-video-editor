@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ITrackItem } from "@designcombo/types";
 import { dispatch } from "@designcombo/events";
 import { ACTIVE_SPLIT } from "@designcombo/state";
+import { getStateManagerRef } from "../utils/state-manager-ref";
 import { ScissorsLineDashed, SquareSplitHorizontal } from "lucide-react";
 import useCaptionTranscribeStore, {
   TranscriptResult,
@@ -63,6 +64,8 @@ export default function TranscriptPanel({
   const { playerRef, fps } = useStore();
   const { selectedGuide, selectGuide } = useTranscriptGuideStore();
   const [loading, setLoading] = useState(false);
+  const [splitEvery, setSplitEvery] = useState(1);
+  const [arrange, setArrange] = useState(true);
   const activeWordRef = useRef<HTMLSpanElement | null>(null);
 
   const currentFrame = useCurrentPlayerFrame(playerRef || null);
@@ -186,6 +189,87 @@ export default function TranscriptPanel({
     });
   };
 
+  const splitBySegments = () => {
+    if (!trackItem || !transcript?.segments?.length) return;
+    const segments = transcript.segments;
+    const originalFrom = safeDisplayFrom;
+    const originalTo = Number((trackItem as any)?.display?.to || 0);
+    const originalTrackId = (trackItem as any)?.trackId;
+    const originalSrc = (trackItem as any)?.details?.src;
+
+    const splitTimes: number[] = [];
+    for (let i = splitEvery - 1; i < segments.length - 1; i += splitEvery) {
+      const time = Math.min(
+        originalTo,
+        originalFrom - safeTrimFrom + segments[i].end * 1000
+      );
+      splitTimes.push(time);
+    }
+
+    if (splitTimes.length === 0) return;
+
+    // ACTIVE_SPLIT always splits activeIds[0]. After first split, activeIds[0]
+    // becomes clip A (0→T1) so subsequent splits at T2>T1 fail silently.
+    // Fix: before each split, find the clip containing that time and make it active.
+    const doNextSplit = (index: number) => {
+      if (index >= splitTimes.length) {
+        if (arrange) doArrange();
+        return;
+      }
+      const time = splitTimes[index];
+      const sm = getStateManagerRef();
+
+      if (sm && index > 0) {
+        const state = sm.getState();
+        const clip = Object.values(state.trackItemsMap).find((item: any) =>
+          item.trackId === originalTrackId &&
+          typeof item.display?.from === "number" &&
+          typeof item.display?.to === "number" &&
+          item.display.from < time &&
+          item.display.to > time
+        ) as any;
+        if (clip) sm.updateState({ activeIds: [clip.id] }, { updateHistory: false });
+      }
+
+      dispatch(ACTIVE_SPLIT, { payload: {}, options: { time } });
+      setTimeout(() => doNextSplit(index + 1), 250);
+    };
+
+    const doArrange = () => {
+      setTimeout(() => {
+        const sm = getStateManagerRef();
+        if (!sm) return;
+        const { trackItemsMap } = sm.getState();
+
+        const ourClips = Object.values(trackItemsMap)
+          .filter((item: any) =>
+            item.trackId === originalTrackId &&
+            item.details?.src === originalSrc &&
+            typeof item.display?.from === "number" &&
+            typeof item.display?.to === "number"
+          )
+          .sort((a: any, b: any) => a.display.from - b.display.from);
+
+        if (ourClips.length <= 1) return;
+
+        const newMap = { ...trackItemsMap };
+        let cursor = originalFrom;
+        for (const clip of ourClips) {
+          const dur = (clip as any).display.to - (clip as any).display.from;
+          if (!isFinite(dur) || dur <= 0) return;
+          newMap[(clip as any).id] = {
+            ...(clip as any),
+            display: { from: cursor, to: cursor + dur }
+          };
+          cursor += dur * 2;
+        }
+        sm.updateState({ trackItemsMap: newMap }, { updateHistory: true });
+      }, 300);
+    };
+
+    doNextSplit(0);
+  };
+
   if (!trackItem) return null;
 
   if (loading && !transcript) {
@@ -200,6 +284,42 @@ export default function TranscriptPanel({
 
   return (
     <div className="px-4 py-4">
+      {/* Split by segments — above the Guided Text header, red border to distinguish */}
+      <div className="mb-4 flex flex-col gap-2 rounded-2xl border border-red-500/60 bg-red-500/5 px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground">Split after every</span>
+          <input
+            type="number"
+            min={1}
+            max={transcript.segments.length}
+            value={splitEvery}
+            onChange={(e) =>
+              setSplitEvery(Math.max(1, parseInt(e.target.value) || 1))
+            }
+            className="w-12 rounded-lg bg-background/60 px-1.5 py-1 text-center text-xs text-foreground outline-none"
+          />
+          <span className="flex-1 text-[11px] text-muted-foreground">segments</span>
+          <button
+            type="button"
+            onClick={splitBySegments}
+            className="rounded-lg bg-violet-500/20 px-3 py-1 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-500/35"
+          >
+            Split
+          </button>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            checked={arrange}
+            onChange={(e) => setArrange(e.target.checked)}
+            className="h-3.5 w-3.5 rounded accent-violet-500"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            Arrange clips with equal spacing
+          </span>
+        </label>
+      </div>
+
       <div className="mb-3 flex items-center justify-between gap-3 px-1 py-1">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-background/60 text-muted-foreground">
