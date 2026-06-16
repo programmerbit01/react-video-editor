@@ -20,17 +20,30 @@ type AlignedWord = {
   segRangeEnd: number;
 };
 
+type SegRange = {
+  wordStart: number;
+  wordEnd: number;
+  seekToMs: number;
+};
+
+type WordMapResult = {
+  words: AlignedWord[];
+  paraSegs: SegRange[][];  // paraSegs[paraIdx] = all segment ranges for that paragraph
+};
+
 function buildWordMap(
   transcript: { segments: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[] },
   segments: ScriptSegment[],
   safeDisplayFrom: number,
   safeTrimFrom: number,
-): AlignedWord[] {
+): WordMapResult {
   const map: AlignedWord[] = [];
+  const paraSegs: SegRange[][] = segments.map(() => []);
+  const seenRanges = new Set<string>();
 
   for (const ws of transcript.segments) {
     const wsWordList = ws.words?.length ? ws.words : null;
-    const wsTokens = (wsWordList ?? ws.text.trim().split(/\s+/).map(w => ({ word: w, start: ws.start, end: ws.end })));
+    const wsTokens = wsWordList ?? ws.text.trim().split(/\s+/).map(w => ({ word: w, start: ws.start, end: ws.end }));
     const wsNorm = wsTokens.map(w => w.word.toLowerCase().replace(/[^a-z]/g, ""));
 
     // Find the script paragraph with maximum time overlap with this Whisper segment
@@ -51,7 +64,7 @@ function buildWordMap(
     const pDur = Math.max(0.001, pE - pS);
     const expectedIdx = Math.round(Math.max(0, Math.min(1, (ws.start - pS) / pDur)) * (scriptWords.length - 1));
 
-    // Sliding window — runs once per Whisper segment, not per frame
+    // Sliding window — once per Whisper segment, not per frame
     let bestScore = 0, bestSi = expectedIdx;
     for (let si = 0; si < scriptNorm.length; si++) {
       let score = 0;
@@ -65,6 +78,17 @@ function buildWordMap(
 
     const segRangeStart = bestSi;
     const segRangeEnd   = Math.min(scriptWords.length - 1, bestSi + wsNorm.length - 1);
+
+    // Store segment range for click-to-seek (once per unique range)
+    const rangeKey = `${bestParaIdx}-${segRangeStart}-${segRangeEnd}`;
+    if (!seenRanges.has(rangeKey)) {
+      seenRanges.add(rangeKey);
+      paraSegs[bestParaIdx].push({
+        wordStart: segRangeStart,
+        wordEnd: segRangeEnd,
+        seekToMs: safeDisplayFrom - safeTrimFrom + ws.start * 1000,
+      });
+    }
 
     // Map each Whisper word → script word index
     wsTokens.forEach((w, wi) => {
@@ -96,18 +120,22 @@ function buildWordMap(
   }
 
   map.sort((a, b) => a.startSec - b.startSec);
-  return map;
+  return { words: map, paraSegs };
 }
 
-// Binary search: last entry where startSec <= t
-function findWord(map: AlignedWord[], t: number): AlignedWord | null {
-  let lo = 0, hi = map.length - 1, result: AlignedWord | null = null;
+// Binary search → last index where startSec <= t; then scan back for active para
+function findWordForPara(map: AlignedWord[], t: number, paraIdx: number): AlignedWord | null {
+  let lo = 0, hi = map.length - 1, bsIdx = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (map[mid].startSec <= t) { result = map[mid]; lo = mid + 1; }
+    if (map[mid].startSec <= t) { bsIdx = mid; lo = mid + 1; }
     else hi = mid - 1;
   }
-  return result;
+  // Scan back up to 50 entries to find the most recent word for this paragraph
+  for (let i = bsIdx; i >= Math.max(0, bsIdx - 50); i--) {
+    if (map[i].paraIdx === paraIdx) return map[i];
+  }
+  return null;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -225,6 +253,8 @@ function ScriptBlock({
   highlightWordIdx = -1,
   segRangeStart = -1,
   segRangeEnd = -1,
+  segmentRanges,
+  onSegmentSeek,
 }: {
   seg: ScriptSegment;
   isActive: boolean;
@@ -233,6 +263,8 @@ function ScriptBlock({
   highlightWordIdx?: number;
   segRangeStart?: number;
   segRangeEnd?: number;
+  segmentRanges?: SegRange[];
+  onSegmentSeek?: (ms: number) => void;
 }) {
   const isAvatar = seg.type === "avatar";
   const borderColor = isAvatar
@@ -241,31 +273,48 @@ function ScriptBlock({
   const metaSize = Math.max(8, fontSize - 3);
 
   const renderWords = () => {
-    if (!isActive || highlightWordIdx < 0) {
+    const words = seg.text.trim().split(/\s+/);
+    const hasHighlight = isActive && highlightWordIdx >= 0;
+    const hasRanges = segmentRanges && segmentRanges.length > 0;
+
+    if (!hasHighlight && !hasRanges) {
       return (
         <span className={isActive ? "text-foreground" : "text-foreground/35"}>
           {seg.text}
         </span>
       );
     }
-    const words = seg.text.trim().split(/\s+/);
-    const inSeg = (wi: number) => segRangeStart >= 0 && wi >= segRangeStart && wi <= segRangeEnd;
-    return words.map((word, wi) => (
-      <span
-        key={wi}
-        className={`transition-colors ${
-          wi === highlightWordIdx
-            ? "rounded-sm bg-violet-500 px-0.5 text-white"
-            : inSeg(wi)
-            ? "text-foreground/90 underline decoration-violet-400/50 underline-offset-2"
-            : wi < highlightWordIdx
-            ? "text-foreground/45"
-            : "text-foreground/20"
-        }`}
-      >
-        {word}{wi < words.length - 1 ? " " : ""}
-      </span>
-    ));
+
+    return words.map((word, wi) => {
+      const isCurrent   = isActive && wi === highlightWordIdx;
+      const inActiveRange = isActive && segRangeStart >= 0 && wi >= segRangeStart && wi <= segRangeEnd;
+      const range = hasRanges ? segmentRanges!.find(r => wi >= r.wordStart && wi <= r.wordEnd) : null;
+
+      let cls = "transition-colors ";
+      if (isCurrent) {
+        cls += "rounded-sm bg-violet-500 px-0.5 text-white";
+      } else if (inActiveRange) {
+        cls += "text-foreground/90 underline decoration-violet-400/60 underline-offset-2";
+      } else if (hasHighlight && wi < highlightWordIdx) {
+        cls += "text-foreground/45";
+      } else if (hasHighlight) {
+        cls += "text-foreground/20";
+      } else if (range) {
+        cls += "text-foreground/40 underline decoration-muted-foreground/30 underline-offset-2 cursor-pointer hover:text-foreground/70 hover:decoration-violet-400/50";
+      } else {
+        cls += "text-foreground/30";
+      }
+
+      return (
+        <span
+          key={wi}
+          className={cls}
+          onClick={range && !isCurrent ? (e) => { e.stopPropagation(); onSegmentSeek?.(range.seekToMs); } : undefined}
+        >
+          {word}{wi < words.length - 1 ? " " : ""}
+        </span>
+      );
+    });
   };
 
   return (
@@ -315,6 +364,8 @@ function ScriptBlock({
     </div>
   );
 }
+
+let _positionSet = false;
 
 export default function ScriptGuidePanel() {
   const {
@@ -390,12 +441,19 @@ export default function ScriptGuidePanel() {
   const [parseError, setParseError] = useState("");
 
   const activeSegmentRef = useRef<HTMLDivElement | null>(null);
-  const wordMapRef = useRef<AlignedWord[]>([]);
+  const wordMapRef  = useRef<AlignedWord[]>([]);
+  const paraSegsRef = useRef<SegRange[][]>([]);
 
-  // Rebuild alignment map whenever transcript or script changes — O(segments × paraWords) once
+  // Rebuild alignment map once when transcript or script changes
   useEffect(() => {
-    if (!transcript?.segments?.length || !segments.length) { wordMapRef.current = []; return; }
-    wordMapRef.current = buildWordMap(transcript, segments, safeDisplayFrom, safeTrimFrom);
+    if (!transcript?.segments?.length || !segments.length) {
+      wordMapRef.current = [];
+      paraSegsRef.current = [];
+      return;
+    }
+    const result = buildWordMap(transcript, segments, safeDisplayFrom, safeTrimFrom);
+    wordMapRef.current  = result.words;
+    paraSegsRef.current = result.paraSegs;
   }, [transcript, segments, safeDisplayFrom, safeTrimFrom]);
   const dragRef = useRef<{ dragging: boolean; startX: number; startY: number; originX: number; originY: number }>({
     dragging: false, startX: 0, startY: 0, originX: 0, originY: 0,
@@ -424,19 +482,19 @@ export default function ScriptGuidePanel() {
     }
   }, [activeSegmentIndex]);
 
-  // Per-frame: binary search pre-computed map — O(log n)
+  // Per-frame: scan-back from binary search position for active paragraph — O(log n + 50)
   let highlightWordIdx = -1;
   let segRangeStart = -1;
   let segRangeEnd = -1;
 
   if (activeSegmentIndex >= 0 && activeSegmentIndex < segments.length) {
-    const entry = findWord(wordMapRef.current, mediaTimeSec);
-    if (entry && entry.paraIdx === activeSegmentIndex) {
+    const entry = findWordForPara(wordMapRef.current, mediaTimeSec, activeSegmentIndex);
+    if (entry) {
       highlightWordIdx = entry.scriptWordIdx;
       segRangeStart    = entry.segRangeStart;
       segRangeEnd      = entry.segRangeEnd;
     } else {
-      // Fallback: time fraction (no transcript or between clips)
+      // No word map entry for this para yet — time fraction fallback
       const seg = segments[activeSegmentIndex];
       const wc  = seg.text.trim().split(/\s+/).length;
       const p0  = ((seg.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
@@ -446,6 +504,27 @@ export default function ScriptGuidePanel() {
       highlightWordIdx = Math.min(wc - 1, Math.floor((el / dur) * wc));
     }
   }
+
+  useEffect(() => {
+    if (_positionSet) return;
+    // Start near the navbar Script button while waiting for right panel to settle
+    const HEADER_H = 42;
+    setFloatPos({ x: window.innerWidth - 340, y: 60 });
+    const trySnap = () => {
+      const el = document.getElementById("editor-right-panel");
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 10 && rect.left > 100) {
+          _positionSet = true;
+          setFloatPos({ x: rect.left, y: rect.top });
+          setPanelSize({ width: rect.width, height: rect.height - HEADER_H });
+          return;
+        }
+      }
+      requestAnimationFrame(trySnap);
+    };
+    requestAnimationFrame(trySnap);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -660,6 +739,8 @@ export default function ScriptGuidePanel() {
                       highlightWordIdx={isActive ? highlightWordIdx : -1}
                       segRangeStart={isActive ? segRangeStart : -1}
                       segRangeEnd={isActive ? segRangeEnd : -1}
+                      segmentRanges={paraSegsRef.current[i]}
+                      onSegmentSeek={(ms) => dispatch(PLAYER_SEEK, { payload: { time: ms } })}
                     />
                   </div>
                 );
