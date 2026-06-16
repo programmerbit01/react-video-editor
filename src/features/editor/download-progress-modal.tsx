@@ -4,12 +4,36 @@ import { Button } from "@/components/ui/button";
 import { CircleCheckIcon, XCircleIcon, XIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
+import { useEffect, useRef, useState } from "react";
+
+const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 const DownloadProgressModal = () => {
   const { progress, displayProgressModal, output, error, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
+
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef<number | null>(null);
+  const finalRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (displayProgressModal && !isCompleted && !isFailed) {
+      if (startRef.current === null) startRef.current = Date.now();
+      const id = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - startRef.current!) / 1000));
+      }, 1000);
+      return () => clearInterval(id);
+    }
+    if (isCompleted || isFailed) {
+      finalRef.current = elapsed;
+    }
+  }, [displayProgressModal, isCompleted, isFailed]);
+
+  useEffect(() => {
+    if (!displayProgressModal) { startRef.current = null; setElapsed(0); }
+  }, [displayProgressModal]);
 
   const handleDownload = async () => {
     if (output?.url) {
@@ -41,6 +65,11 @@ const DownloadProgressModal = () => {
               <div className="text-muted-foreground">
                 You can download the video to your device.
               </div>
+              {finalRef.current > 0 && (
+                <div className="text-xs text-muted-foreground/60">
+                  Completed in {fmt(finalRef.current)}
+                </div>
+              )}
             </div>
             <Button onClick={handleDownload}>Download</Button>
           </div>
@@ -66,6 +95,7 @@ const DownloadProgressModal = () => {
               {Math.floor(progress)}%
             </div>
             <div className="font-bold">Exporting...</div>
+            <div className="text-sm tabular-nums text-muted-foreground">{fmt(elapsed)}</div>
             <div className="text-center text-zinc-500">
               <div>Closing the browser will not cancel the export.</div>
               <div>The video will be saved in your space.</div>

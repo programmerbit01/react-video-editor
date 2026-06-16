@@ -20,7 +20,8 @@ const DEFAULT_STYLE = {
   activeColor: "#F5E7BE",
   activeFillColor: "#7E12FF",
   backgroundColor: "rgba(0,0,0,0)",
-  position: "bottom" as "top" | "center" | "bottom"
+  position: "bottom" as "top" | "center" | "bottom",
+  highlightWords: false
 };
 
 const POSITION_TOP: Record<string, string> = {
@@ -103,8 +104,8 @@ function buildCaptionItem(trackItem: ITrackItem, segment: any, segIdx: number, s
       text: String(segment.text || "").trim(),
       fontSize: style.fontSize,
       color: style.color,
-      activeColor: style.activeColor,
-      activeFillColor: style.activeFillColor,
+      activeColor: style.highlightWords ? style.activeColor : style.color,
+      activeFillColor: style.highlightWords ? style.activeFillColor : "transparent",
       appearedColor: style.color,
       backgroundColor: style.backgroundColor,
       borderColor: "rgba(255,255,255,0.08)",
@@ -231,7 +232,8 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
     activeColor: globalStyle.activeColor,
     activeFillColor: globalStyle.activeFillColor,
     backgroundColor: globalStyle.backgroundColor,
-    position: globalStyle.position
+    position: globalStyle.position,
+    highlightWords: false
   }));
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -371,8 +373,23 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
                 onValueChange={([v]) => setStyle((s) => ({ ...s, fontSize: v }))} />
             </div>
             <ColorSwatch label="Text color" value={style.color} onChange={(v) => setStyle((s) => ({ ...s, color: v }))} />
-            <ColorSwatch label="Active word color" value={style.activeColor} onChange={(v) => setStyle((s) => ({ ...s, activeColor: v }))} />
-            <ColorSwatch label="Highlight color" value={style.activeFillColor} onChange={(v) => setStyle((s) => ({ ...s, activeFillColor: v }))} />
+
+            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-border/50 bg-background/40 px-3 py-2">
+              <span className="text-xs text-muted-foreground">Highlight active word</span>
+              <div
+                onClick={() => setStyle((s) => ({ ...s, highlightWords: !s.highlightWords }))}
+                className={`relative h-5 w-9 rounded-full transition-colors ${style.highlightWords ? "bg-primary" : "bg-muted"}`}
+              >
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${style.highlightWords ? "translate-x-4" : "translate-x-0.5"}`} />
+              </div>
+            </label>
+
+            {style.highlightWords && (
+              <>
+                <ColorSwatch label="Active word color" value={style.activeColor} onChange={(v) => setStyle((s) => ({ ...s, activeColor: v }))} />
+                <ColorSwatch label="Highlight color" value={style.activeFillColor} onChange={(v) => setStyle((s) => ({ ...s, activeFillColor: v }))} />
+              </>
+            )}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Position</Label>
               <div className="grid grid-cols-3 gap-1">

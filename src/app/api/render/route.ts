@@ -223,19 +223,20 @@ async function generateHighlightedCaptionOverlays(
   await drawCaption(null, basePath);
   overlays.push({ path: basePath, fromS, toS });
 
-  // Per-word highlighted overlays — same full caption but one word lit up
+  // Per-word highlighted overlays — generated in parallel for speed
   if (hasWordHighlight) {
     const firstWordMs = Number(words[0]?.start ?? 0);
     const offsetMs = (captionItem.display?.from ?? 0) - firstWordMs;
-    for (let wi = 0; wi < words.length; wi++) {
-      const w = words[wi];
+    const wordTasks = words.map(async (w: any, wi: number) => {
       const wFromS = Math.max(fromS, (Number(w.start ?? 0) + offsetMs) / 1000);
       const wToS = Math.min(toS, (Number(w.end ?? 0) + offsetMs) / 1000);
-      if (wToS <= wFromS + 0.01) continue;
+      if (wToS <= wFromS + 0.01) return null;
       const wPath = path.join(tmpDir, `cap_${capIdx}_w${wi}.png`);
       await drawCaption(wi, wPath);
-      overlays.push({ path: wPath, fromS: wFromS, toS: wToS });
-    }
+      return { path: wPath, fromS: wFromS, toS: wToS };
+    });
+    const results = await Promise.all(wordTasks);
+    for (const r of results) { if (r) overlays.push(r); }
   }
 
   return overlays;
