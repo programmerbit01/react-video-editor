@@ -9,6 +9,108 @@ import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import useUploadStore from "../store/use-upload-store";
 import { getTrackTranscript } from "./transcript-panel";
 
+// ─── Pre-computed alignment map ──────────────────────────────────────────────
+// Built ONCE when transcript + script both load. Per-frame cost = binary search O(log n).
+
+type AlignedWord = {
+  startSec: number;
+  paraIdx: number;
+  scriptWordIdx: number;
+  segRangeStart: number;
+  segRangeEnd: number;
+};
+
+function buildWordMap(
+  transcript: { segments: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[] },
+  segments: ScriptSegment[],
+  safeDisplayFrom: number,
+  safeTrimFrom: number,
+): AlignedWord[] {
+  const map: AlignedWord[] = [];
+
+  for (const ws of transcript.segments) {
+    const wsWordList = ws.words?.length ? ws.words : null;
+    const wsTokens = (wsWordList ?? ws.text.trim().split(/\s+/).map(w => ({ word: w, start: ws.start, end: ws.end })));
+    const wsNorm = wsTokens.map(w => w.word.toLowerCase().replace(/[^a-z]/g, ""));
+
+    // Find the script paragraph with maximum time overlap with this Whisper segment
+    let bestParaIdx = -1, bestOverlap = -1;
+    segments.forEach((seg, pi) => {
+      const pS = ((seg.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const pE = ((seg.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const overlap = Math.max(0, Math.min(ws.end, pE) - Math.max(ws.start, pS));
+      if (overlap > bestOverlap) { bestOverlap = overlap; bestParaIdx = pi; }
+    });
+    if (bestParaIdx < 0) continue;
+
+    const para = segments[bestParaIdx];
+    const scriptWords = para.text.trim().split(/\s+/);
+    const scriptNorm  = scriptWords.map(w => w.toLowerCase().replace(/[^a-z]/g, ""));
+    const pS = ((para.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+    const pE = ((para.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+    const pDur = Math.max(0.001, pE - pS);
+    const expectedIdx = Math.round(Math.max(0, Math.min(1, (ws.start - pS) / pDur)) * (scriptWords.length - 1));
+
+    // Sliding window — runs once per Whisper segment, not per frame
+    let bestScore = 0, bestSi = expectedIdx;
+    for (let si = 0; si < scriptNorm.length; si++) {
+      let score = 0;
+      for (let wi = 0; wi < wsNorm.length && si + wi < scriptNorm.length; wi++) {
+        if (wsNorm[wi].length >= 2 && wsNorm[wi] === scriptNorm[si + wi]) score++;
+      }
+      const better = score > bestScore ||
+        (score === bestScore && score > 0 && Math.abs(si - expectedIdx) < Math.abs(bestSi - expectedIdx));
+      if (better) { bestScore = score; bestSi = si; }
+    }
+
+    const segRangeStart = bestSi;
+    const segRangeEnd   = Math.min(scriptWords.length - 1, bestSi + wsNorm.length - 1);
+
+    // Map each Whisper word → script word index
+    wsTokens.forEach((w, wi) => {
+      let scriptWordIdx: number;
+      if (bestScore >= 2) {
+        const frac = wsNorm.length > 1 ? wi / (wsNorm.length - 1) : 0;
+        scriptWordIdx = Math.round(segRangeStart + frac * (segRangeEnd - segRangeStart));
+      } else {
+        const wn = wsNorm[wi];
+        if (wn.length >= 3) {
+          let bi = expectedIdx, bd = Infinity;
+          for (let i = 0; i < scriptNorm.length; i++) {
+            if (scriptNorm[i] === wn && Math.abs(i - expectedIdx) < bd) { bd = Math.abs(i - expectedIdx); bi = i; }
+          }
+          scriptWordIdx = bi;
+        } else {
+          const frac = wsNorm.length > 1 ? wi / (wsNorm.length - 1) : 0;
+          scriptWordIdx = Math.round(segRangeStart + frac * Math.max(0, segRangeEnd - segRangeStart));
+        }
+      }
+      map.push({
+        startSec: w.start,
+        paraIdx: bestParaIdx,
+        scriptWordIdx: Math.max(0, Math.min(scriptWords.length - 1, scriptWordIdx)),
+        segRangeStart,
+        segRangeEnd,
+      });
+    });
+  }
+
+  map.sort((a, b) => a.startSec - b.startSec);
+  return map;
+}
+
+// Binary search: last entry where startSec <= t
+function findWord(map: AlignedWord[], t: number): AlignedWord | null {
+  let lo = 0, hi = map.length - 1, result: AlignedWord | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (map[mid].startSec <= t) { result = map[mid]; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return result;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const getVappParams = () => {
   if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
   const p = new URLSearchParams(window.location.search);
@@ -288,6 +390,13 @@ export default function ScriptGuidePanel() {
   const [parseError, setParseError] = useState("");
 
   const activeSegmentRef = useRef<HTMLDivElement | null>(null);
+  const wordMapRef = useRef<AlignedWord[]>([]);
+
+  // Rebuild alignment map whenever transcript or script changes — O(segments × paraWords) once
+  useEffect(() => {
+    if (!transcript?.segments?.length || !segments.length) { wordMapRef.current = []; return; }
+    wordMapRef.current = buildWordMap(transcript, segments, safeDisplayFrom, safeTrimFrom);
+  }, [transcript, segments, safeDisplayFrom, safeTrimFrom]);
   const dragRef = useRef<{ dragging: boolean; startX: number; startY: number; originX: number; originY: number }>({
     dragging: false, startX: 0, startY: 0, originX: 0, originY: 0,
   });
@@ -315,101 +424,23 @@ export default function ScriptGuidePanel() {
     }
   }, [activeSegmentIndex]);
 
-  // Sync: find active Whisper segment → align its text to script paragraph via sliding window
-  // → underline matched range, violet-highlight active word within it
+  // Per-frame: binary search pre-computed map — O(log n)
   let highlightWordIdx = -1;
   let segRangeStart = -1;
   let segRangeEnd = -1;
 
   if (activeSegmentIndex >= 0 && activeSegmentIndex < segments.length) {
-    const activeSeg = segments[activeSegmentIndex];
-    const scriptWords = activeSeg.text.trim().split(/\s+/);
-    const paraWordCount = scriptWords.length;
-
-    if (paraWordCount > 0 && transcript?.segments?.length) {
-      const pStart = ((activeSeg.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
-      const pEnd   = ((activeSeg.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
-      const pDur   = Math.max(0.001, pEnd - pStart);
-      const timeFrac = Math.max(0, Math.min(1, (mediaTimeSec - pStart) / pDur));
-      const expectedIdx = Math.round(timeFrac * (paraWordCount - 1));
-
-      // Find active Whisper segment and the active word index within it
-      let activeWseg: typeof transcript.segments[0] | null = null;
-      let activeWordInSeg = 0;
-      for (const ws of transcript.segments) {
-        if (mediaTimeSec >= ws.start && mediaTimeSec <= ws.end) {
-          activeWseg = ws;
-          if (ws.words?.length) {
-            for (let i = 0; i < ws.words.length; i++) {
-              if (ws.words[i].start <= mediaTimeSec) activeWordInSeg = i;
-              else break;
-            }
-          }
-          break;
-        }
-      }
-
-      if (activeWseg) {
-        // Build normalized word list from Whisper segment
-        const wsText = activeWseg.words?.length
-          ? activeWseg.words.map(w => w.word)
-          : activeWseg.text.trim().split(/\s+/);
-        const wsNorm = wsText.map(w => w.toLowerCase().replace(/[^a-z]/g, ""));
-        const scriptNorm = scriptWords.map(w => w.toLowerCase().replace(/[^a-z]/g, ""));
-
-        // Sliding window: count matching words at each offset, prefer offset nearest expectedIdx
-        let bestScore = 0, bestSi = expectedIdx;
-        for (let si = 0; si < paraWordCount; si++) {
-          let score = 0;
-          for (let wi = 0; wi < wsNorm.length && si + wi < paraWordCount; wi++) {
-            if (wsNorm[wi].length >= 2 && wsNorm[wi] === scriptNorm[si + wi]) score++;
-          }
-          const isBetter = score > bestScore ||
-            (score === bestScore && score > 0 && Math.abs(si - expectedIdx) < Math.abs(bestSi - expectedIdx));
-          if (isBetter) { bestScore = score; bestSi = si; }
-        }
-
-        if (bestScore >= 2) {
-          // Good alignment found — use it
-          segRangeStart = bestSi;
-          segRangeEnd   = Math.min(paraWordCount - 1, bestSi + wsNorm.length - 1);
-          const wordFrac = wsNorm.length > 1 ? activeWordInSeg / (wsNorm.length - 1) : 0;
-          highlightWordIdx = Math.round(segRangeStart + wordFrac * (segRangeEnd - segRangeStart));
-        } else {
-          // Weak/no alignment — fall back to single spoken-word lookup
-          let curWord = "";
-          for (const ws of transcript.segments) {
-            if (ws.start > mediaTimeSec + 0.5) break;
-            for (const w of (ws.words ?? [])) {
-              if (w.start <= mediaTimeSec) curWord = w.word.toLowerCase().replace(/[^a-z]/g, "");
-              else break;
-            }
-          }
-          if (curWord.length >= 3) {
-            let bestIdx = -1, bestDist = Infinity;
-            for (let i = 0; i < paraWordCount; i++) {
-              if (scriptNorm[i] === curWord) {
-                const d = Math.abs(i - expectedIdx);
-                if (d < bestDist) { bestDist = d; bestIdx = i; }
-              }
-            }
-            highlightWordIdx = bestIdx >= 0 ? bestIdx : expectedIdx;
-          } else {
-            highlightWordIdx = expectedIdx;
-          }
-        }
-      } else {
-        // Not in any Whisper segment — time fraction
-        const pDurSec = Math.max(0.001, pEnd - pStart);
-        const elapsed  = Math.max(0, Math.min(pDurSec, mediaTimeSec - pStart));
-        highlightWordIdx = Math.min(paraWordCount - 1, Math.floor((elapsed / pDurSec) * paraWordCount));
-      }
-    } else if (activeSegmentIndex >= 0 && activeSegmentIndex < segments.length) {
-      // No transcript — time fraction
-      const seg2 = segments[activeSegmentIndex];
-      const wc = seg2.text.trim().split(/\s+/).length;
-      const p0 = ((seg2.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
-      const p1 = ((seg2.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+    const entry = findWord(wordMapRef.current, mediaTimeSec);
+    if (entry && entry.paraIdx === activeSegmentIndex) {
+      highlightWordIdx = entry.scriptWordIdx;
+      segRangeStart    = entry.segRangeStart;
+      segRangeEnd      = entry.segRangeEnd;
+    } else {
+      // Fallback: time fraction (no transcript or between clips)
+      const seg = segments[activeSegmentIndex];
+      const wc  = seg.text.trim().split(/\s+/).length;
+      const p0  = ((seg.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const p1  = ((seg.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
       const dur = Math.max(0.001, p1 - p0);
       const el  = Math.max(0, Math.min(dur, mediaTimeSec - p0));
       highlightWordIdx = Math.min(wc - 1, Math.floor((el / dur) * wc));
