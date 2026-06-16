@@ -66,7 +66,6 @@ export const Videos = () => {
   const isDraggingOverTimeline = useIsDraggingOverTimeline();
   const [searchQuery, setSearchQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
   const [aspectRatio, setAspectRatio] = useState<NonNullable<PexelsVideoFilters["aspectRatio"]> | "all">("16:9");
   const [size, setSize] = useState<NonNullable<PexelsVideoFilters["size"]> | "all">("medium");
 
@@ -111,7 +110,6 @@ export const Videos = () => {
 
   const handleSearch = async () => {
     const nextQuery = searchQuery.trim();
-    setSelectedCategory("all");
     setActiveQuery(nextQuery);
   };
 
@@ -134,7 +132,6 @@ export const Videos = () => {
   const handleClearSearch = () => {
     setSearchQuery("");
     setActiveQuery("");
-    setSelectedCategory("all");
     clearVideos();
   };
   const handleTopicClick = (topic: string) => {
@@ -144,28 +141,16 @@ export const Videos = () => {
     }
     setSearchQuery(topic);
     setActiveQuery(topic);
-    setSelectedCategory(topic);
-  };
-
-  const handleCategoryChange = (topic: string) => {
-    setSelectedCategory(topic);
-    if (topic === "all") {
-      setSearchQuery("");
-      setActiveQuery("");
-      return;
-    }
-    setSearchQuery(topic);
-    setActiveQuery(topic);
   };
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
-      <div className="flex items-center gap-2 p-4">
+      <div className="flex items-center gap-1.5 px-3 py-2">
         <div className="relative flex-1">
           <Button
             size="sm"
             variant="ghost"
-            className="absolute left-1 top-1/2 h-6 w-6 -translate-y-1/2 p-0"
+            className="absolute left-1 top-1/2 h-5 w-5 -translate-y-1/2 p-0"
             onClick={handleSearch}
             disabled={pexelsLoading}
           >
@@ -176,17 +161,17 @@ export const Videos = () => {
             )}
           </Button>
           <Input
-            placeholder="Search Pexels videos..."
+            placeholder="Search videos..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={handleKeyPress}
-            className="pl-10"
+            className="h-7 pl-7 text-xs"
           />
         </div>
         <select
           value={aspectRatio}
           onChange={(e) => setAspectRatio(e.target.value as NonNullable<PexelsVideoFilters["aspectRatio"]> | "all")}
-          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
           title="Aspect ratio"
         >
           {ASPECT_RATIO_OPTIONS.map((option) => (
@@ -198,7 +183,7 @@ export const Videos = () => {
         <select
           value={size}
           onChange={(e) => setSize(e.target.value as NonNullable<PexelsVideoFilters["size"]> | "all")}
-          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
           title="Quality"
         >
           {SIZE_OPTIONS.map((option) => (
@@ -207,22 +192,11 @@ export const Videos = () => {
             </option>
           ))}
         </select>
-        <select
-          value={selectedCategory}
-          onChange={(e) => handleCategoryChange(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          title="Category"
-        >
-          {CATEGORY_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {option === "all" ? "All items" : option.charAt(0).toUpperCase() + option.slice(1)}
-            </option>
-          ))}
-        </select>
         {searchQuery && (
           <Button
             size="sm"
             variant="outline"
+            className="h-7 px-2 text-xs"
             onClick={handleClearSearch}
             disabled={pexelsLoading}
           >
@@ -263,7 +237,7 @@ export const Videos = () => {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto min-h-0 px-4">
+      <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-4">
         <div className="grid grid-cols-3 gap-2 pb-2">
           {pexelsVideos.map((video, index) => (
             <VideoItem
@@ -277,26 +251,24 @@ export const Videos = () => {
         {pexelsLoading && <ImageLoading message="Searching for videos..." />}
       </div>
 
-      {hasNextPage && (
-        <div className="flex-none border-t border-border/40 px-4 py-2">
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full"
-            onClick={handleLoadMore}
-            disabled={pexelsLoading}
-          >
-            {pexelsLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Loading...
-              </>
-            ) : (
-              "Load More"
-            )}
-          </Button>
-        </div>
-      )}
+      <div className="flex-none border-t border-border/40 px-4 py-2">
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full"
+          onClick={handleLoadMore}
+          disabled={pexelsLoading || !hasNextPage}
+        >
+          {pexelsLoading ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Loading...
+            </>
+          ) : (
+            "Load More"
+          )}
+        </Button>
+      </div>
     </div>
   );
 };

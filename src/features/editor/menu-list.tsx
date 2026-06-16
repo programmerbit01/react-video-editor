@@ -93,7 +93,7 @@ const MenuButton = memo<{
     <div
       onClick={handleClick}
       className={cn(
-        "flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl px-1 py-2 transition-all duration-200",
+        "flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1 transition-all duration-200",
         isActive
           ? "bg-white/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
           : "text-muted-foreground hover:bg-white/5 hover:text-white"
@@ -104,20 +104,18 @@ const MenuButton = memo<{
         <TooltipTrigger asChild>
           <div
             className={cn(
-              "flex h-9 w-9 items-center justify-center rounded-lg transition-colors",
-              isActive ? "bg-white/10 text-white" : `${item.color} bg-transparent`
+              "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
+              isActive ? "text-white" : `${item.color}`
             )}
           >
-            <IconComponent width={20} height={20} />
+            <IconComponent width={15} height={15} />
           </div>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="center" sideOffset={8}>
+        <TooltipContent side="bottom" align="center" sideOffset={4}>
           {item.label}
         </TooltipContent>
       </Tooltip>
-      <span className="truncate text-[10px] font-medium leading-none tracking-[0.01em]">
-        {item.label}
-      </span>
+      <span className="truncate text-[9px] leading-none">{item.label}</span>
     </div>
   );
 });
@@ -162,8 +160,8 @@ function MenuList() {
 
   return (
     <>
-      <div className="relative flex items-center border-b border-border/70 bg-primary/7 px-2 py-2">
-        <div className="flex w-full items-start justify-between gap-1">
+      <div className="relative flex items-center border-b border-border/70 bg-primary/7 px-1.5 py-1">
+        <div className="flex w-full items-center justify-between gap-0.5">
           {MENU_ITEMS.map((item) => {
             const isActive =
               (drawerOpen && activeMenuItem === item.id) ||

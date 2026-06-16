@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { dispatch } from "@designcombo/events";
 import {
   ACTIVE_SPLIT,
+  DESIGN_RESIZE,
   LAYER_CLONE,
   LAYER_DELETE,
   TIMELINE_SCALE_CHANGED
@@ -10,7 +11,6 @@ import { PLAYER_PAUSE, PLAYER_PLAY } from "../constants/events";
 import { frameToTimeString, getCurrentTime, timeToString } from "../utils/time";
 import useStore from "../store/use-store";
 import {
-  Captions,
   Magnet,
   SquareSplitHorizontal,
   Trash,
@@ -103,7 +103,6 @@ const Header = () => {
     trackItemsMap
   } = useStore();
   const { setActiveMenuItem, setShowMenuItem, setDrawerOpen } = useLayoutStore();
-  const { requestTranscription } = useCaptionTranscribeStore();
   const isLargeScreen = useIsLargeScreen();
   useUpdateAnsestors({ playing, playerRef });
 
@@ -136,19 +135,6 @@ const Header = () => {
 
   const handlePause = () => {
     dispatch(PLAYER_PAUSE);
-  };
-
-  const selectedMediaItem =
-    activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
-  const canTranscribeSelection =
-    selectedMediaItem?.type === "audio" || selectedMediaItem?.type === "video";
-
-  const handleTranscribeSelection = () => {
-    if (!canTranscribeSelection || !selectedMediaItem?.details?.src) return;
-    setActiveMenuItem("captions");
-    setShowMenuItem(true);
-    setDrawerOpen(true);
-    requestTranscription(selectedMediaItem.details.src);
   };
 
   useEffect(() => {
@@ -234,23 +220,11 @@ const Header = () => {
             <Button
               onClick={() => setSnapEnabled(!snapEnabled)}
               variant={snapEnabled ? "secondary" : "ghost"}
-              size={isLargeScreen ? "sm" : "icon"}
-              className="flex items-center gap-1 px-2"
+              size="icon"
+              className="flex items-center px-2"
               title={snapEnabled ? "Magnet on" : "Magnet off"}
             >
               <Magnet size={15} />
-              <span className="hidden lg:block">Magnet</span>
-            </Button>
-            <Button
-              disabled={!canTranscribeSelection}
-              onClick={handleTranscribeSelection}
-              variant={"ghost"}
-              size={isLargeScreen ? "sm" : "icon"}
-              className="flex items-center gap-1 px-2"
-              title="Generate transcription for selected clip"
-            >
-              <Captions size={15} />
-              <span className="hidden lg:block">Transcribe</span>
             </Button>
           </div>
           <div className="flex items-center justify-center">
@@ -321,13 +295,52 @@ const Header = () => {
             </div>
           </div>
 
-          <ZoomControl
-            scale={scale}
-            onChangeTimelineScale={changeScale}
-            duration={duration}
-          />
+          <div className="flex items-center justify-end">
+            <CanvasSelector />
+            <ZoomControl
+              scale={scale}
+              onChangeTimelineScale={changeScale}
+              duration={duration}
+            />
+          </div>
         </div>
       </div>
+    </div>
+  );
+};
+
+const CANVAS_OPTIONS = [
+  { label: "16:9", width: 1920, height: 1080 },
+  { label: "9:16", width: 1080, height: 1920 },
+  { label: "1:1", width: 1080, height: 1080 },
+  { label: "4:5", width: 1080, height: 1350 },
+  { label: "3:4", width: 1080, height: 1440 },
+] as const;
+
+const CanvasSelector = () => {
+  const { size } = useStore();
+  const activeCanvas =
+    CANVAS_OPTIONS.find(o => o.width === size.width && o.height === size.height)?.label ??
+    `${size.width}:${size.height}`;
+
+  const handleChange = (value: string) => {
+    const selected = CANVAS_OPTIONS.find(o => o.label === value);
+    if (!selected) return;
+    dispatch(DESIGN_RESIZE, { payload: { width: selected.width, height: selected.height, name: selected.label } });
+  };
+
+  return (
+    <div className="flex items-center gap-1.5 border-r border-border pr-3 mr-1">
+      <span className="text-xs text-muted-foreground">Canvas</span>
+      <select
+        value={activeCanvas}
+        onChange={e => handleChange(e.target.value)}
+        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none cursor-pointer"
+      >
+        {CANVAS_OPTIONS.map(o => (
+          <option key={o.label} value={o.label}>{o.label}</option>
+        ))}
+      </select>
     </div>
   );
 };

@@ -51,6 +51,7 @@ const TAB_CONFIG: Record<string, TabDefinition[]> = {
   ],
   video: [
     { value: "adjust", label: "Adjust", features: ["crop", "basic"] },
+    { value: "audio", label: "Audio", features: ["volume", "speed"] },
     { value: "motion", label: "Motion", features: ["animations"] },
     { value: "style", label: "Style", features: ["outline", "shadow"] },
     { value: "transcript", label: "Guided Text", transcript: true },
@@ -91,6 +92,9 @@ const renderFeature = (trackItem: ITrackItemAndDetails, feature: string) => {
     case "image":
       return <BasicImage key={feature} trackItem={trackItem as ITrackItem & IImage} type={feature} />;
     case "video":
+      if (feature === "volume" || feature === "speed") {
+        return <BasicAudio key={feature} trackItem={trackItem as any} type={feature} />;
+      }
       return <BasicVideo key={feature} trackItem={trackItem as ITrackItem & IVideo} type={feature} />;
     case "audio":
       return <BasicAudio key={feature} trackItem={trackItem as ITrackItem & IAudio} type={feature} />;
@@ -135,30 +139,22 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
 
   return (
     <div className="hidden h-full w-full flex-col bg-card lg:flex">
-      <div className="border-b border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card),transparent_0%)_0%,color-mix(in_oklab,var(--card),var(--background)_35%)_100%)] px-4 py-4">
-        <div className="mb-3 flex items-start gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border/70 bg-background/80 shadow-sm">
-            <Icon className="h-5 w-5 text-foreground" />
+      <div className="border-b border-border/70 px-3 py-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background/80">
+            <Icon className="h-3.5 w-3.5 text-foreground" />
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-2">
-              <p className="truncate text-sm font-semibold text-foreground">{clipName}</p>
-              <Badge variant="secondary" className="rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.12em]">
-                {meta.label}
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">Selected clip controls</p>
+          <p className="truncate text-xs font-semibold text-foreground">{clipName}</p>
+          <Badge variant="secondary" className="shrink-0 rounded-full px-1.5 py-0 text-[9px] uppercase tracking-[0.1em]">
+            {meta.label}
+          </Badge>
+          <div className="flex shrink-0 items-center gap-1 ml-auto">
+            {summary.slice(1).map((item) => (
+              <span key={item} className="rounded-full border border-border/60 bg-background/75 px-2 py-0.5 text-[10px] text-muted-foreground">
+                {item}
+              </span>
+            ))}
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {summary.map((item) => (
-            <span
-              key={item}
-              className="rounded-full border border-border/60 bg-background/75 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
-            >
-              {item}
-            </span>
-          ))}
         </div>
       </div>
 
@@ -197,6 +193,24 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
       </Tabs>
     </div>
   );
+};
+
+export const PropertiesPanel = () => {
+  const { activeIds, trackItemsMap } = useStore();
+  const [trackItem, setTrackItem] = useState<ITrackItem | null>(null);
+
+  useEffect(() => {
+    if (activeIds.length === 1) {
+      const [id] = activeIds;
+      const item = trackItemsMap[id];
+      setTrackItem(item ?? null);
+    } else {
+      setTrackItem(null);
+    }
+  }, [activeIds, trackItemsMap]);
+
+  if (!trackItem) return null;
+  return <SelectedTrackPanel trackItem={trackItem} />;
 };
 
 export const ControlItem = () => {

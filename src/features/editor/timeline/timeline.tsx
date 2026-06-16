@@ -448,7 +448,7 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
       id="timeline-container"
       className="relative w-full overflow-hidden bg-card"
       style={{
-        height: `${timelineHeight}px`,
+        height: "100%",
         borderTopWidth: "1px",
         borderTopStyle: "solid",
         borderTopColor: "transparent"

@@ -29,7 +29,6 @@ import { ITrackItem } from "@designcombo/types";
 import useLayoutStore from "./store/use-layout-store";
 import ControlItemHorizontal from "./control-item-horizontal";
 import { design } from "./mock";
-import { Separator } from "@/components/ui/separator";
 import useTranscriptGuides from "./hooks/use-transcript-guides";
 import { setStateManagerRef } from "./utils/state-manager-ref";
 import ScriptGuidePanel from "./control-item/script-guide-panel";
@@ -50,44 +49,43 @@ const stateManager = new StateManager(
   }
 );
 
-const SceneContainer = ({
+const CanvasOnly = ({
   sceneRef,
-  playerRef,
   stateManager,
   trackItem,
   loaded,
   isLargeScreen,
 }: any) => {
   return (
-    <div className="relative flex h-full w-full flex-col bg-background">
+    <div className="relative flex h-full w-full flex-col bg-background overflow-hidden">
       <div className="flex-1 relative overflow-hidden w-full h-full">
-        <div className="flex h-full flex-1">
-          <div className="flex-1 relative overflow-hidden w-full h-full">
-            <CropModal />
-            <Scene ref={sceneRef} stateManager={stateManager} />
-          </div>
-        </div>
+        <CropModal />
+        <Scene ref={sceneRef} stateManager={stateManager} />
       </div>
-
-      <div className="w-full">
-        {playerRef && <Timeline stateManager={stateManager} />}
-      </div>
-
       {!isLargeScreen && !trackItem && loaded && <MenuListHorizontal />}
       {!isLargeScreen && trackItem && <ControlItemHorizontal />}
     </div>
   );
 };
 
-const Sidebar = () => {
+const LeftSidebar = () => {
   return (
-    <div className="bg-card w-full flex flex-none border-r border-border/80 h-[calc(100vh-52px)]">
-      <div className="flex flex-col w-full">
-        <MenuList />
-        <Separator orientation="horizontal" />
-        <ControlItem />
+    <div className="bg-card w-full flex flex-none border-r border-border/80 h-full overflow-hidden">
+      <div className="flex flex-col w-full h-full overflow-hidden">
+        <div className="flex-none">
+          <MenuList />
+        </div>
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          <ControlItem />
+        </div>
       </div>
     </div>
+  );
+};
+
+const RightPanel = () => {
+  return (
+    <div id="editor-right-panel" className="bg-card w-full flex flex-none border-l border-border/80 h-full overflow-hidden" />
   );
 };
 
@@ -197,45 +195,77 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
       />
       <ScriptGuidePanel />
 
-      <div className="flex flex-1">
+      <div className="flex flex-1 min-h-0">
         {isLargeScreen ? (
-          <ResizablePanelGroup direction="horizontal" className="h-full w-full">
-            <ResizablePanel
-              defaultSize={30}
-              minSize={20}
-              maxSize={40}
-              className="max-w-7xl relative bg-card min-w-0 overflow-visible!"
-            >
-              <Sidebar />
-              <FloatingControl />
+          <ResizablePanelGroup direction="vertical" className="h-full w-full">
+            {/* Top: 3-column area */}
+            <ResizablePanel defaultSize={65} minSize={30} className="min-h-0">
+              <ResizablePanelGroup direction="horizontal" className="h-full w-full">
+                {/* Left: Tabs/Menu sidebar */}
+                <ResizablePanel
+                  defaultSize={22}
+                  minSize={14}
+                  maxSize={38}
+                  className="relative min-w-0 overflow-visible!"
+                >
+                  <LeftSidebar />
+                  <FloatingControl />
+                </ResizablePanel>
+
+                <ResizableHandle className="bg-border/90" />
+
+                {/* Center: Canvas */}
+                <ResizablePanel defaultSize={56} minSize={30} className="min-w-0 min-h-0">
+                  <CanvasOnly
+                    sceneRef={sceneRef}
+                    stateManager={stateManager}
+                    trackItem={trackItem}
+                    loaded={loaded}
+                    isLargeScreen={isLargeScreen}
+                  />
+                </ResizablePanel>
+
+                <ResizableHandle className="bg-border/90" />
+
+                {/* Right: Properties panel */}
+                <ResizablePanel
+                  defaultSize={22}
+                  minSize={14}
+                  maxSize={38}
+                  className="min-w-0 min-h-0"
+                >
+                  <RightPanel />
+                </ResizablePanel>
+              </ResizablePanelGroup>
             </ResizablePanel>
 
-            <ResizableHandle className="bg-border/90" />
+            <ResizableHandle className="bg-border/90" onDragging={handleTimelineResize} />
 
+            {/* Bottom: Full-width Timeline */}
             <ResizablePanel
-              defaultSize={70}
-              minSize={60}
-              className="min-w-0 min-h-0"
+              ref={timelinePanelRef}
+              defaultSize={35}
+              minSize={15}
+              maxSize={70}
+              className="min-h-0"
+              onResize={handleTimelineResize}
             >
-              <SceneContainer
-                sceneRef={sceneRef}
-                playerRef={playerRef}
-                stateManager={stateManager}
-                trackItem={trackItem}
-                loaded={loaded}
-                isLargeScreen={isLargeScreen}
-              />
+              {playerRef && <Timeline stateManager={stateManager} />}
             </ResizablePanel>
           </ResizablePanelGroup>
         ) : (
-          <SceneContainer
-            sceneRef={sceneRef}
-            playerRef={playerRef}
-            stateManager={stateManager}
-            trackItem={trackItem}
-            loaded={loaded}
-            isLargeScreen={isLargeScreen}
-          />
+          <div className="relative flex h-full w-full flex-col bg-background overflow-hidden">
+            <CanvasOnly
+              sceneRef={sceneRef}
+              stateManager={stateManager}
+              trackItem={trackItem}
+              loaded={loaded}
+              isLargeScreen={isLargeScreen}
+            />
+            <div className="w-full">
+              {playerRef && <Timeline stateManager={stateManager} />}
+            </div>
+          </div>
         )}
       </div>
     </div>

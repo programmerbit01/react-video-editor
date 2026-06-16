@@ -1,1 +1,1 @@
-export { ControlItem } from "./control-item";
+export { ControlItem, PropertiesPanel } from "./control-item";

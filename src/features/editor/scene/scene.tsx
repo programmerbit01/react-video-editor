@@ -71,24 +71,6 @@ const Scene = forwardRef<
       }}
       ref={containerRef}
     >
-      {isMounted && (
-        <div className="pointer-events-none absolute right-4 top-4 z-[150]">
-          <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-white/10 bg-black/60 px-3 py-2 backdrop-blur-sm">
-            <span className="text-xs font-medium text-white/70">Canvas</span>
-            <select
-              value={activeCanvas}
-              onChange={(event) => handleCanvasChange(event.target.value)}
-              className="h-8 rounded-md border border-white/10 bg-black/70 px-2 text-sm text-white outline-none"
-            >
-              {CANVAS_OPTIONS.map((option) => (
-                <option key={option.label} value={option.label}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      )}
       {isMounted && trackItemIds.length === 0 && <SceneEmpty />}
       <div
         style={{

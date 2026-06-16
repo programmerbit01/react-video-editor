@@ -406,7 +406,7 @@ export const Uploads = () => {
       </div>
 
       {/* Scrollable grid */}
-      <div className="flex-1 overflow-y-auto px-4 min-h-0">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 min-h-0">
         {/* Loading state */}
         {loading && (
           <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">
@@ -440,19 +440,17 @@ export const Uploads = () => {
       </div>
 
       {/* Pinned Load More footer */}
-      {hasMore && (
-        <div className="flex-none border-t border-border/40 px-4 py-2">
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={handleLoadMore}
-            disabled={loadingMore}
-          >
-            {loadingMore ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Load more
-          </Button>
-        </div>
-      )}
+      <div className="flex-none border-t border-border/40 px-4 py-2">
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={handleLoadMore}
+          disabled={loadingMore || !hasMore}
+        >
+          {loadingMore ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+          Load more
+        </Button>
+      </div>
     </div>
   );
 };

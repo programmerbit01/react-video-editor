@@ -1,4 +1,3 @@
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { dispatch } from "@designcombo/events";
 import { generateId } from "@designcombo/timeline";
 import Draggable from "@/components/shared/draggable";
@@ -94,13 +93,13 @@ export const Images = () => {
   const displayImages = pexelsImages;
 
   return (
-    <div className="flex flex-1 flex-col">
-      <div className="flex items-center gap-2 p-4">
+    <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+      <div className="flex-none flex items-center gap-1.5 px-3 py-2">
         <div className="relative flex-1">
           <Button
             size="sm"
             variant="ghost"
-            className="absolute left-1 top-1/2 h-6 w-6 -translate-y-1/2 p-0"
+            className="absolute left-1 top-1/2 h-5 w-5 -translate-y-1/2 p-0"
             onClick={handleSearch}
             disabled={pexelsLoading}
           >
@@ -111,17 +110,18 @@ export const Images = () => {
             )}
           </Button>
           <Input
-            placeholder="Search Pexels images..."
+            placeholder="Search images..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={handleKeyPress}
-            className="pl-10"
+            className="h-7 pl-7 text-xs"
           />
         </div>
         {searchQuery && (
           <Button
             size="sm"
             variant="outline"
+            className="h-7 px-2 text-xs"
             onClick={handleClearSearch}
             disabled={pexelsLoading}
           >
@@ -131,50 +131,47 @@ export const Images = () => {
       </div>
 
       {pexelsError && (
-        <div className="px-4 pb-2">
+        <div className="flex-none px-4 pb-2">
           <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-2 rounded">
             {pexelsError}
           </div>
         </div>
       )}
 
-      <ScrollArea className="flex-1 px-4 max-h-full">
-        <div className="max-h-full">
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
-            {displayImages.map((image, index) => {
-              return (
-                <ImageItem
-                  key={image.id || index}
-                  image={image}
-                  shouldDisplayPreview={!isDraggingOverTimeline}
-                  handleAddImage={handleAddImage}
-                />
-              );
-            })}
-          </div>
-          {pexelsLoading && <ImageLoading message="Searching for images..." />}
-          {/* Pagination */}
-          {hasNextPage && (
-            <div className="flex items-center justify-center p-4">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleLoadMore}
-                disabled={pexelsLoading}
-              >
-                {pexelsLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  "Load More"
-                )}
-              </Button>
-            </div>
-          )}
+      <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
+          {displayImages.map((image, index) => {
+            return (
+              <ImageItem
+                key={image.id || index}
+                image={image}
+                shouldDisplayPreview={!isDraggingOverTimeline}
+                handleAddImage={handleAddImage}
+              />
+            );
+          })}
         </div>
-      </ScrollArea>
+        {pexelsLoading && <ImageLoading message="Searching for images..." />}
+      </div>
+
+      <div className="flex-none border-t border-border/40 px-4 py-2">
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full"
+          onClick={handleLoadMore}
+          disabled={pexelsLoading || !hasNextPage}
+        >
+          {pexelsLoading ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Loading...
+            </>
+          ) : (
+            "Load More"
+          )}
+        </Button>
+      </div>
     </div>
   );
 };
