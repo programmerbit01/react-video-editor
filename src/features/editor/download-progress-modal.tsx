@@ -15,6 +15,7 @@ const DownloadProgressModal = () => {
   const isFailed = !!error;
 
   const [elapsed, setElapsed] = useState(0);
+  const [autoDownloaded, setAutoDownloaded] = useState(false);
   const startRef = useRef<number | null>(null);
   const finalRef = useRef<number>(0);
 
@@ -32,8 +33,16 @@ const DownloadProgressModal = () => {
   }, [displayProgressModal, isCompleted, isFailed]);
 
   useEffect(() => {
-    if (!displayProgressModal) { startRef.current = null; setElapsed(0); }
+    if (!displayProgressModal) { startRef.current = null; setElapsed(0); setAutoDownloaded(false); }
   }, [displayProgressModal]);
+
+  // Auto-download as soon as export completes
+  useEffect(() => {
+    if (isCompleted && output?.url && !autoDownloaded) {
+      setAutoDownloaded(true);
+      download(output.url, "untitled.mp4");
+    }
+  }, [isCompleted, output]);
 
   const handleDownload = async () => {
     if (output?.url) {
@@ -61,17 +70,19 @@ const DownloadProgressModal = () => {
           <div className="flex flex-1 flex-col items-center justify-center gap-2 space-y-4">
             <div className="flex flex-col items-center space-y-1 text-center">
               <CircleCheckIcon className="h-10 w-10 text-green-500" />
-              <div className="font-bold">Exported</div>
-              <div className="text-muted-foreground">
-                You can download the video to your device.
+              <div className="text-xl font-bold">Done — Downloaded!</div>
+              <div className="text-muted-foreground text-sm">
+                Your video has been saved to your Downloads folder.
               </div>
               {finalRef.current > 0 && (
                 <div className="text-xs text-muted-foreground/60">
-                  Completed in {fmt(finalRef.current)}
+                  Exported in {fmt(finalRef.current)}
                 </div>
               )}
             </div>
-            <Button onClick={handleDownload}>Download</Button>
+            <Button variant="outline" size="sm" onClick={handleDownload}>
+              Download again
+            </Button>
           </div>
         ) : isFailed ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6">
