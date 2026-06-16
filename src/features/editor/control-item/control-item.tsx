@@ -159,13 +159,13 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <div className="px-3 py-3">
-          <TabsList className="h-auto w-full justify-start gap-1 rounded-2xl bg-background/45 p-1">
+        <div className="px-2 py-2">
+          <TabsList className="h-auto w-full justify-start gap-0.5 rounded-2xl bg-background/45 p-1 flex-wrap">
             {tabs.map((tab) => (
               <TabsTrigger
                 key={tab.value}
                 value={tab.value}
-                className="rounded-xl border-0 px-3 py-2 text-xs font-semibold shadow-none"
+                className="rounded-lg border-0 px-2 py-1.5 text-[11px] font-semibold shadow-none"
               >
                 {tab.label}
               </TabsTrigger>
