@@ -278,10 +278,28 @@ function toFFmpegColor(color: string): string {
 
 
 const QUALITY_PRESETS: Record<string, { crf: string; preset: string }> = {
-  high:   { crf: "18", preset: "slow" },
-  medium: { crf: "23", preset: "medium" },
-  low:    { crf: "28", preset: "fast" },
+  high:   { crf: "18", preset: "veryfast" },
+  medium: { crf: "23", preset: "veryfast" },
+  low:    { crf: "28", preset: "veryfast" },
 };
+
+// Cache GPU detection result for the lifetime of the process
+let _gpuAvailable: boolean | null = null;
+async function hasNvencGpu(): Promise<boolean> {
+  if (_gpuAvailable !== null) return _gpuAvailable;
+  try {
+    // Ask FFmpeg to list encoders — if h264_nvenc is present, try a 1-frame test encode
+    await execFileAsync("ffmpeg", [
+      "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+      "-c:v", "h264_nvenc", "-f", "null", "-"
+    ], { timeout: 8000 });
+    _gpuAvailable = true;
+  } catch {
+    _gpuAvailable = false;
+  }
+  console.log(`[render] NVENC GPU: ${_gpuAvailable ? "available ✓" : "not found, using libx264"}`);
+  return _gpuAvailable;
+}
 
 const PLATFORM_PRESETS: Record<string, {
   w: number; h: number;
@@ -569,10 +587,24 @@ async function runExport(
   ffmpegArgs.push("-map", `[${finalVideoLabel}]`);
   if (hasAudio) ffmpegArgs.push("-map", "[aout]");
 
-  // Codec args
+  // Codec args — prefer NVENC if GPU is available, fallback to libx264
+  const useNvenc = !platformPreset && await hasNvencGpu();
   if (platformPreset) {
     ffmpegArgs.push(...platformPreset.videoArgs);
     if (hasAudio) ffmpegArgs.push(...platformPreset.audioArgs);
+  } else if (useNvenc) {
+    // h264_nvenc: qp maps roughly to crf; rc=constqp for quality mode
+    ffmpegArgs.push(
+      "-c:v", "h264_nvenc",
+      "-rc", "constqp",
+      "-qp", crf,
+      "-preset", "p2",         // p1=fastest … p7=slowest; p2 is very fast
+      "-pix_fmt", "yuv420p",
+      "-profile:v", "high",
+    );
+    if (hasAudio) {
+      ffmpegArgs.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2");
+    }
   } else {
     ffmpegArgs.push(
       "-c:v", "libx264",
