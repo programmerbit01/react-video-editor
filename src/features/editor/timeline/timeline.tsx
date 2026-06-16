@@ -35,7 +35,7 @@ import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import { Captions as CaptionsIcon } from "lucide-react";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 import TrackControlsOverlay from "./track-controls-overlay";
-import TransitionSlotsOverlay from "./transition-slots-overlay";
+
 
 CanvasTimeline.registerItems({
   Text,
@@ -58,6 +58,7 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
   // prevent duplicate scroll events
   const canScrollRef = useRef(false);
   const [scrollLeft, setScrollLeft] = useState(0);
+  const scrollLeftRef = useRef(TIMELINE_OFFSET_CANVAS_LEFT);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasElRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = useRef<CanvasTimeline | null>(null);
@@ -219,7 +220,8 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
         waveAudioBars: ["audio", "waveAudioBars"],
         hillAudioBars: ["audio", "hillAudioBars"]
       },
-      guideLineColor: "#ffffff"
+      guideLineColor: "#ffffff",
+      withTransitions: ["Video", "Image"]
     });
 
     canvas.initScrollbars({
@@ -232,7 +234,9 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     });
 
     canvas.onViewportChange((left: number) => {
-      setScrollLeft(left + 16);
+      const sl = left + TIMELINE_OFFSET_CANVAS_LEFT;
+      scrollLeftRef.current = sl;
+      setScrollLeft(sl);
     });
 
     canvasRef.current = canvas;
@@ -376,6 +380,68 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     setContextMenu(null);
   };
 
+  const handleTransitionDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    try {
+      const data = JSON.parse(e.dataTransfer.types[0]);
+      if (data.type === "transition") {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    } catch {}
+  };
+
+  const handleTransitionDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    let data: any;
+    try {
+      data = JSON.parse(e.dataTransfer.types[0]);
+    } catch { return; }
+    if (data.type !== "transition") return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const canvas = canvasRef.current as any;
+    if (!canvas) return;
+
+    const transitionSlots: any[] = canvas.getObjects?.("Transition") || [];
+    if (!transitionSlots.length) return;
+
+    const containerEl = containerRef.current;
+    if (!containerEl) return;
+    const rect = containerEl.getBoundingClientRect();
+
+    const viewportLeft = scrollLeftRef.current - TIMELINE_OFFSET_CANVAS_LEFT;
+    const mouseCanvasX = e.clientX - rect.left + viewportLeft;
+
+    let nearest: any = null;
+    let minDist = Infinity;
+    for (const slot of transitionSlots) {
+      const slotCenterX = slot.left + slot.width / 2;
+      const dist = Math.abs(mouseCanvasX - slotCenterX);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = slot;
+      }
+    }
+
+    if (!nearest || minDist > 80) return;
+
+    const slotId = nearest.id;
+    if (!canvas.transitionsMap?.[slotId]) return;
+
+    canvas.transitionsMap[slotId] = {
+      ...canvas.transitionsMap[slotId],
+      kind: data.kind ?? "none",
+      ...(data.direction ? { direction: data.direction } : {}),
+    };
+
+    canvas.adjustMagneticTrack?.();
+    canvas.calcBounding?.();
+    canvas.updateTransitions?.();
+    canvas.refreshTrackLayout?.();
+    canvas.updateState?.({ kind: "add:transition", updateHistory: true });
+  };
+
   return (
     <div
       ref={timelineContainerRef}
@@ -406,7 +472,12 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
         >
           <TrackControlsOverlay />
         </div>
-        <div style={{ height: canvasSize.height }} className="relative flex-1">
+        <div
+          style={{ height: canvasSize.height }}
+          className="relative flex-1"
+          onDragOver={handleTransitionDragOver}
+          onDrop={handleTransitionDrop}
+        >
           <div
             style={{ height: canvasSize.height }}
             ref={containerRef}
@@ -414,7 +485,6 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
           >
             <canvas id="designcombo-timeline-canvas" ref={canvasElRef} />
           </div>
-          <TransitionSlotsOverlay />
         </div>
       </div>
       {contextMenu ? (
