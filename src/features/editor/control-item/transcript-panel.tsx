@@ -252,6 +252,7 @@ export default function TranscriptPanel({
 
         if (ourClips.length <= 1) return;
 
+        const isAudio = (trackItem as any)?.type === "audio";
         const newMap = { ...trackItemsMap };
         let cursor = originalFrom;
         for (const clip of ourClips) {
@@ -261,7 +262,7 @@ export default function TranscriptPanel({
             ...(clip as any),
             display: { from: cursor, to: cursor + dur }
           };
-          cursor += dur * 2;
+          cursor += isAudio ? dur : dur * 2;
         }
         sm.updateState({ trackItemsMap: newMap }, { updateHistory: true });
       }, 300);
