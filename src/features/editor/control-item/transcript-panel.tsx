@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ITrackItem } from "@designcombo/types";
 import { dispatch } from "@designcombo/events";
+import { ACTIVE_SPLIT } from "@designcombo/state";
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import { generateId } from "@/utils/id";
 import { ScissorsLineDashed, SquareSplitHorizontal } from "lucide-react";
