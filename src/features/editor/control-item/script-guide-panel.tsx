@@ -5,6 +5,19 @@ import { PLAYER_SEEK } from "../constants/events";
 import useScriptGuideStore, { ScriptSegment, FontSizeKey, FONT_SIZE_MAP } from "../store/use-script-guide-store";
 import useStore from "../store/use-store";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
+import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import useUploadStore from "../store/use-upload-store";
+import { getTrackTranscript } from "./transcript-panel";
+
+const getVappParams = () => {
+  if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
+  const p = new URLSearchParams(window.location.search);
+  return {
+    vappHost: p.get("vappHost") || `${window.location.protocol}//${window.location.hostname}`,
+    token: p.get("token") || "",
+    baseUrl: p.get("baseUrl") || "https://api.muapi.ai",
+  };
+};
 
 const EXAMPLE_JSON = `[
   {
@@ -107,17 +120,51 @@ function ScriptBlock({
   isActive,
   onClick,
   fontSize,
+  highlightWordIdx = -1,
+  segRangeStart = -1,
+  segRangeEnd = -1,
 }: {
   seg: ScriptSegment;
   isActive: boolean;
   onClick: () => void;
   fontSize: number;
+  highlightWordIdx?: number;
+  segRangeStart?: number;
+  segRangeEnd?: number;
 }) {
   const isAvatar = seg.type === "avatar";
   const borderColor = isAvatar
     ? isActive ? "#8b5cf6" : "#6d28d955"
     : isActive ? "#d97706" : "#d9770655";
   const metaSize = Math.max(8, fontSize - 3);
+
+  const renderWords = () => {
+    if (!isActive || highlightWordIdx < 0) {
+      return (
+        <span className={isActive ? "text-foreground" : "text-foreground/35"}>
+          {seg.text}
+        </span>
+      );
+    }
+    const words = seg.text.trim().split(/\s+/);
+    const inSeg = (wi: number) => segRangeStart >= 0 && wi >= segRangeStart && wi <= segRangeEnd;
+    return words.map((word, wi) => (
+      <span
+        key={wi}
+        className={`transition-colors ${
+          wi === highlightWordIdx
+            ? "rounded-sm bg-violet-500 px-0.5 text-white"
+            : inSeg(wi)
+            ? "text-foreground/90 underline decoration-violet-400/50 underline-offset-2"
+            : wi < highlightWordIdx
+            ? "text-foreground/45"
+            : "text-foreground/20"
+        }`}
+      >
+        {word}{wi < words.length - 1 ? " " : ""}
+      </span>
+    ));
+  };
 
   return (
     <div
@@ -129,17 +176,12 @@ function ScriptBlock({
       }`}
       style={{ borderLeft: `2px solid ${borderColor}`, paddingLeft: 8 }}
     >
-      {/* Main text */}
-      <div
-        style={{ fontSize }}
-        className={`leading-snug ${
-          isAvatar ? "font-semibold text-foreground" : "font-normal text-foreground/60"
-        }`}
-      >
-        {seg.text}
+      {/* font-semibold lives here for avatar — all word spans inherit it, no per-word toggling */}
+      <div style={{ fontSize }} className={`leading-snug ${isAvatar ? "font-semibold" : ""}`}>
+        {renderWords()}
       </div>
 
-      {/* Meta row: dot · time · [mark] · note · keywords — all one line */}
+      {/* Meta row: dot · time · [mark] · note · keywords */}
       <div className="mt-0.5 flex flex-wrap items-center gap-1" style={{ fontSize: metaSize }}>
         <div
           className="h-1.5 w-1.5 shrink-0 rounded-full"
@@ -198,13 +240,54 @@ export default function ScriptGuidePanel() {
 
   const fontSize = FONT_SIZE_MAP[fontSizeKey];
 
-  const { playerRef, fps } = useStore();
+  const { playerRef, fps, trackItemsMap } = useStore();
+  const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
+  const { uploads } = useUploadStore();
   const currentFrame = useCurrentPlayerFrame(playerRef || null);
   const currentTimeMs = currentFrame * (1000 / (fps || 30));
+
+  // Find the video/audio clip currently under the playhead — no clip selection required.
+  // This means the Script panel keeps working even when the user clicks on it (deselecting clips).
+  const allItems = Object.values(trackItemsMap) as any[];
+  const atCurrentTime = (item: any) => {
+    const from = Number(item.display?.from ?? 0);
+    const to   = Number(item.display?.to   ?? 0);
+    return to > 0 && currentTimeMs >= from && currentTimeMs <= to;
+  };
+  const playingClip: any =
+    allItems.find(i => i.type === "video" && atCurrentTime(i)) ??
+    allItems.find(i => i.type === "audio" && atCurrentTime(i)) ??
+    null;
+
+  const mediaSrc = String(playingClip?.details?.src || "").trim();
+  let transcript = getTrackTranscript(playingClip, resultsByMedia);
+  if (!transcript && mediaSrc) {
+    const match = (uploads as any[]).find(u => (u.metadata?.uploadedUrl || u.url || "") === mediaSrc);
+    if (match?.stt?.segments?.length) transcript = match.stt;
+  }
+  const safeDisplayFrom = Number(playingClip?.display?.from ?? 0);
+  const safeTrimFrom    = Number(playingClip?.trim?.from    ?? 0);
+  // Clip-relative time in seconds (same formula as transcript-panel.tsx)
+  const mediaTimeSec = (currentTimeMs - safeDisplayFrom + safeTrimFrom) / 1000;
+
+  // Auto-fetch transcript for the clip under the playhead
+  useEffect(() => {
+    if (!mediaSrc || transcript) return;
+    const isVappMedia = mediaSrc.includes("rpublic.tomtap.ai") || mediaSrc.includes("/api/proxy?url=");
+    if (!isVappMedia) return;
+    const { vappHost, token, baseUrl } = getVappParams();
+    fetch(
+      `${vappHost}/api/vapp/stt?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&url=${encodeURIComponent(mediaSrc)}`
+    )
+      .then(r => r.json())
+      .then(data => { if (data?.stt?.segments?.length) setTranscriptResult(mediaSrc, data.stt); })
+      .catch(() => {});
+  }, [mediaSrc]);
 
   const [jsonInput, setJsonInput] = useState(rawJson);
   const [parseError, setParseError] = useState("");
 
+  const activeSegmentRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ dragging: boolean; startX: number; startY: number; originX: number; originY: number }>({
     dragging: false, startX: 0, startY: 0, originX: 0, originY: 0,
   });
@@ -215,6 +298,7 @@ export default function ScriptGuidePanel() {
     resizing: false, startX: 0, originW: 300, originX: 0,
   });
 
+  // Active PARAGRAPH detection — script times are absolute timeline ms (treated as-is)
   useEffect(() => {
     if (!segments.length) return;
     const idx = segments.findIndex(
@@ -223,6 +307,114 @@ export default function ScriptGuidePanel() {
     );
     setActiveSegment(idx);
   }, [currentTimeMs, segments]);
+
+  // Auto-scroll active paragraph into view
+  useEffect(() => {
+    if (activeSegmentRef.current) {
+      activeSegmentRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeSegmentIndex]);
+
+  // Sync: find active Whisper segment → align its text to script paragraph via sliding window
+  // → underline matched range, violet-highlight active word within it
+  let highlightWordIdx = -1;
+  let segRangeStart = -1;
+  let segRangeEnd = -1;
+
+  if (activeSegmentIndex >= 0 && activeSegmentIndex < segments.length) {
+    const activeSeg = segments[activeSegmentIndex];
+    const scriptWords = activeSeg.text.trim().split(/\s+/);
+    const paraWordCount = scriptWords.length;
+
+    if (paraWordCount > 0 && transcript?.segments?.length) {
+      const pStart = ((activeSeg.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const pEnd   = ((activeSeg.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const pDur   = Math.max(0.001, pEnd - pStart);
+      const timeFrac = Math.max(0, Math.min(1, (mediaTimeSec - pStart) / pDur));
+      const expectedIdx = Math.round(timeFrac * (paraWordCount - 1));
+
+      // Find active Whisper segment and the active word index within it
+      let activeWseg: typeof transcript.segments[0] | null = null;
+      let activeWordInSeg = 0;
+      for (const ws of transcript.segments) {
+        if (mediaTimeSec >= ws.start && mediaTimeSec <= ws.end) {
+          activeWseg = ws;
+          if (ws.words?.length) {
+            for (let i = 0; i < ws.words.length; i++) {
+              if (ws.words[i].start <= mediaTimeSec) activeWordInSeg = i;
+              else break;
+            }
+          }
+          break;
+        }
+      }
+
+      if (activeWseg) {
+        // Build normalized word list from Whisper segment
+        const wsText = activeWseg.words?.length
+          ? activeWseg.words.map(w => w.word)
+          : activeWseg.text.trim().split(/\s+/);
+        const wsNorm = wsText.map(w => w.toLowerCase().replace(/[^a-z]/g, ""));
+        const scriptNorm = scriptWords.map(w => w.toLowerCase().replace(/[^a-z]/g, ""));
+
+        // Sliding window: count matching words at each offset, prefer offset nearest expectedIdx
+        let bestScore = 0, bestSi = expectedIdx;
+        for (let si = 0; si < paraWordCount; si++) {
+          let score = 0;
+          for (let wi = 0; wi < wsNorm.length && si + wi < paraWordCount; wi++) {
+            if (wsNorm[wi].length >= 2 && wsNorm[wi] === scriptNorm[si + wi]) score++;
+          }
+          const isBetter = score > bestScore ||
+            (score === bestScore && score > 0 && Math.abs(si - expectedIdx) < Math.abs(bestSi - expectedIdx));
+          if (isBetter) { bestScore = score; bestSi = si; }
+        }
+
+        if (bestScore >= 2) {
+          // Good alignment found — use it
+          segRangeStart = bestSi;
+          segRangeEnd   = Math.min(paraWordCount - 1, bestSi + wsNorm.length - 1);
+          const wordFrac = wsNorm.length > 1 ? activeWordInSeg / (wsNorm.length - 1) : 0;
+          highlightWordIdx = Math.round(segRangeStart + wordFrac * (segRangeEnd - segRangeStart));
+        } else {
+          // Weak/no alignment — fall back to single spoken-word lookup
+          let curWord = "";
+          for (const ws of transcript.segments) {
+            if (ws.start > mediaTimeSec + 0.5) break;
+            for (const w of (ws.words ?? [])) {
+              if (w.start <= mediaTimeSec) curWord = w.word.toLowerCase().replace(/[^a-z]/g, "");
+              else break;
+            }
+          }
+          if (curWord.length >= 3) {
+            let bestIdx = -1, bestDist = Infinity;
+            for (let i = 0; i < paraWordCount; i++) {
+              if (scriptNorm[i] === curWord) {
+                const d = Math.abs(i - expectedIdx);
+                if (d < bestDist) { bestDist = d; bestIdx = i; }
+              }
+            }
+            highlightWordIdx = bestIdx >= 0 ? bestIdx : expectedIdx;
+          } else {
+            highlightWordIdx = expectedIdx;
+          }
+        }
+      } else {
+        // Not in any Whisper segment — time fraction
+        const pDurSec = Math.max(0.001, pEnd - pStart);
+        const elapsed  = Math.max(0, Math.min(pDurSec, mediaTimeSec - pStart));
+        highlightWordIdx = Math.min(paraWordCount - 1, Math.floor((elapsed / pDurSec) * paraWordCount));
+      }
+    } else if (activeSegmentIndex >= 0 && activeSegmentIndex < segments.length) {
+      // No transcript — time fraction
+      const seg2 = segments[activeSegmentIndex];
+      const wc = seg2.text.trim().split(/\s+/).length;
+      const p0 = ((seg2.startMs ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const p1 = ((seg2.endMs   ?? 0) - safeDisplayFrom + safeTrimFrom) / 1000;
+      const dur = Math.max(0.001, p1 - p0);
+      const el  = Math.max(0, Math.min(dur, mediaTimeSec - p0));
+      highlightWordIdx = Math.min(wc - 1, Math.floor((el / dur) * wc));
+    }
+  }
 
   useEffect(() => {
     if (!isOpen) return;
@@ -285,6 +477,21 @@ export default function ScriptGuidePanel() {
 
   const seekToSegment = (seg: ScriptSegment) => {
     if (seg.startMs === undefined) return;
+    // If we have a real transcript, find the Whisper segment closest to the paragraph's
+    // estimated start and seek to its REAL clip-relative start time → more accurate than estimate
+    if (transcript?.segments?.length) {
+      const paraStartSec = seg.startMs / 1000;
+      let best = transcript.segments[0];
+      let bestDist = Math.abs(best.start - paraStartSec);
+      for (const ws of transcript.segments) {
+        const d = Math.abs(ws.start - paraStartSec);
+        if (d < bestDist) { best = ws; bestDist = d; }
+      }
+      const realTimeMs = safeDisplayFrom - safeTrimFrom + best.start * 1000;
+      dispatch(PLAYER_SEEK, { payload: { time: realTimeMs } });
+      return;
+    }
+    // Fallback: script paragraph estimated time (treated as absolute timeline ms)
     dispatch(PLAYER_SEEK, { payload: { time: seg.startMs } });
   };
 
@@ -313,7 +520,7 @@ export default function ScriptGuidePanel() {
           </div>
           <span className="text-[11px] font-medium text-foreground">Guided Script</span>
           {segments.length > 0 && (
-            <span className="text-[11px] text-muted-foreground">{segments.length} segments</span>
+            <span className="text-[11px] text-muted-foreground">{segments.length} paragraphs</span>
           )}
         </div>
 
@@ -410,15 +617,22 @@ export default function ScriptGuidePanel() {
 
           {segments.length > 0 && (
             <div>
-              {segments.map((seg, i) => (
-                <ScriptBlock
-                  key={i}
-                  seg={seg}
-                  isActive={activeSegmentIndex === i}
-                  onClick={() => seekToSegment(seg)}
-                  fontSize={fontSize}
-                />
-              ))}
+              {segments.map((seg, i) => {
+                const isActive = activeSegmentIndex === i;
+                return (
+                  <div key={i} ref={isActive ? activeSegmentRef : null}>
+                    <ScriptBlock
+                      seg={seg}
+                      isActive={isActive}
+                      onClick={() => seekToSegment(seg)}
+                      fontSize={fontSize}
+                      highlightWordIdx={isActive ? highlightWordIdx : -1}
+                      segRangeStart={isActive ? segRangeStart : -1}
+                      segRangeEnd={isActive ? segRangeEnd : -1}
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
 

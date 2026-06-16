@@ -340,6 +340,137 @@ Output only the raw JSON array. Nothing else.
 
 ---
 
+### Word-level highlight — approaches tried, problems, and recommended future architecture
+
+#### Context
+
+The Script panel shows a **planned** script with author-estimated timings (e.g. `"0:05 - 0:20"`).
+The Guided Text (Transcript) panel shows the **actual** Whisper STT output with exact per-word timestamps.
+
+These two are fundamentally different:
+- Whisper text is what the speaker **actually said**, tokenised into segments and words with real clock times.
+- Script text is what they **planned to say**, organised into paragraphs with rough time estimates.
+
+The texts are similar but not identical (paraphrasing, filler words, minor rewording). There is no 1-to-1 word mapping available without NLP text alignment.
+
+---
+
+#### Approach 1 — Time fraction (elapsed / paragraph duration)
+
+```
+highlightWordIdx = floor((mediaTimeSec - paraStart) / paraDur * wordCount)
+```
+
+**Problem:** `paraStart` and `paraDur` are author estimates. If the speaker starts a paragraph 1–2 seconds earlier or later than estimated, the highlight is wrong from the first word. Speech pace is also non-uniform — fast at the start, slow at sentence ends — so the fraction drifts in the middle.
+
+---
+
+#### Approach 2 — Whisper word-count proportion
+
+Collect all Whisper words whose `start` timestamp falls within the paragraph's estimated time window. Find the current word in that list. Map its list-index proportionally to the script paragraph word count.
+
+```
+highlightWordIdx = round((curWhisperWordIdx / totalWhisperWordsInWindow) * (paraWordCount - 1))
+```
+
+**Problem:** The estimated paragraph time window often doesn't align with the actual Whisper word timestamps. For example, the Whisper segment for paragraph 2 content might start at 4.8 s while the script says the paragraph starts at 5.0 s. Words before 5.0 s are excluded → the window is incomplete → the ratio is wrong. Caused visible "speedy" acceleration in the middle of long paragraphs.
+
+---
+
+#### Approach 3 — Nearest-Whisper-segment anchoring
+
+Find the Whisper segment whose `start` is nearest to `estParaStart` and use that as `realParaStart`. Similarly find `realParaEnd`. Use real anchors for all calculations.
+
+**Problem:** "Nearest start" frequently landed on segment[0] (t=0) for paragraphs 2–8, because segment boundaries don't align with paragraph boundaries. `realParaStart = 0` then collected every Whisper word from the start of the video — completely wrong words for later paragraphs.
+
+---
+
+#### Approach 4 — Single spoken-word lookup
+
+Find the last Whisper word that started at or before `mediaTimeSec` (the currently spoken word, e.g. `"supplement"`). Normalize it. Search for it in the script paragraph words. Pick the occurrence closest to the time-fraction estimate.
+
+**Improvement:** Works well for unique long words. The speaker IS reading the script so the word IS in the paragraph.
+
+**Remaining problem:** Common short words (`"a"`, `"the"`, `"not"`) appear many times; the time-fraction anchor for disambiguation is itself unreliable for the same reasons as Approach 1.
+
+---
+
+#### Approach 5 — Sliding-window segment alignment (current)
+
+Take the entire active Whisper **segment** word list (e.g. 8–12 words). Slide it across the script paragraph word list and count consecutive word matches at each offset. The highest-scoring offset is `segRangeStart`. This gives both:
+- `segRangeStart / segRangeEnd` — which words in the script correspond to the current Whisper segment (shown as underline)
+- `highlightWordIdx` — the active word within that matched range, using the Whisper word's index inside the segment
+
+**Improvement:** Multi-word matching is far more reliable than single-word lookup. A 4-word match uniquely identifies the position even in long paragraphs.
+
+**Remaining problem:** Still runs the O(n × m) sliding window on **every animation frame** (every 33 ms at 30 fps). Accurate but wasteful. If the transcript or script changes mid-session, the alignment is re-derived from scratch on the next frame.
+
+---
+
+#### Recommended future architecture — pre-computed alignment map
+
+**Core idea:** Run the alignment **once** when transcript + script are both available, store the result, and use O(1) lookups on every frame.
+
+**Step 1 — Build the alignment map** (run when transcript or script segments change):
+
+```typescript
+type WordMap = {
+  scriptParaIdx: number;
+  scriptWordIdx: number;
+  whisperSegIdx: number;
+  whisperWordIdx: number;
+  startMs: number;   // absolute timeline ms (for seeking)
+  endMs: number;
+};
+
+type ParaMeta = {
+  realStartMs: number;   // first Whisper word in this para → absolute ms
+  realEndMs: number;     // last Whisper word in this para → absolute ms
+  segRanges: Array<{     // each Whisper segment that touches this para
+    scriptWordStart: number;
+    scriptWordEnd: number;
+    whisperSegIdx: number;
+  }>;
+  wordMap: WordMap[];    // one entry per Whisper word that maps to this para
+};
+```
+
+For each script paragraph:
+1. Use sliding-window alignment (as in current approach) to find where each Whisper segment's words map in the paragraph. Run once, not per frame.
+2. Build `wordMap`: for each Whisper word at absolute time T, record which script word index it maps to.
+3. Store `realStartMs` and `realEndMs` from the earliest/latest Whisper word found in this paragraph.
+
+**Step 2 — Per-frame lookup (O(1)):**
+
+```typescript
+// Binary search wordMap for current mediaTimeSec
+const entry = binarySearch(paraMeta.wordMap, mediaTimeSec);
+highlightWordIdx = entry?.scriptWordIdx ?? timeFractionFallback;
+segRangeStart   = paraMeta.segRanges[entry?.whisperSegIdx]?.scriptWordStart ?? -1;
+segRangeEnd     = paraMeta.segRanges[entry?.whisperSegIdx]?.scriptWordEnd   ?? -1;
+```
+
+**Step 3 — Persist with project save:**
+
+Add `_guidedScriptMeta: JSON.stringify(alignmentMap)` to the project save payload alongside `_guidedScript`. On load, restore it — no need to re-align if transcript hasn't changed.
+
+**Step 4 — Invalidation:**
+
+Re-run alignment only when:
+- `transcript` changes (new STT fetch completes)
+- `segments` (script paragraphs) change (user re-parses JSON)
+
+Use a Zustand `alignmentReady` flag. While `false`, show a subtle "syncing…" indicator and fall back to time-fraction highlights.
+
+**Benefits over current approach:**
+- Zero per-frame computation — alignment is done once
+- Binary search on a sorted array is O(log n) per frame
+- More accurate: entire transcript is aligned holistically, not paragraph-by-paragraph in isolation
+- Seek-on-click uses `paraMeta.realStartMs` → seeks to actual speech, not estimated time
+- Saveable / restorable with project
+
+---
+
 ### Relevant files
 
 | File | Role |
