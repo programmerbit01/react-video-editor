@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ITrackItem } from "@designcombo/types";
 import { Loader2, CheckCircle2 } from "lucide-react";
 import useCaptionTranscribeStore, { TranscriptResult } from "../store/use-caption-transcribe-store";
@@ -235,6 +235,19 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
   }));
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const isFirstRender = useRef(true);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-apply style changes in real-time when captions are already applied
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    if (!transcript || captionCount === 0) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      applyCaption(trackItem, transcript, style);
+    }, 400);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [style]);
 
   const src = (trackItem as any)?.details?.src as string | undefined;
   const transcript: TranscriptResult | undefined =
@@ -378,25 +391,16 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
           </div>
 
           {captionCount > 0 ? (
-            <div className="flex gap-2">
-              <Button
-                onClick={() => applyCaption(trackItem, transcript, style)}
-                variant="outline"
-                className="flex-1"
-              >
-                Update Captions ({captionCount})
-              </Button>
-              <Button
-                onClick={() => removeCaption(trackItem)}
-                variant="ghost"
-                className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-              >
-                Remove
-              </Button>
-            </div>
+            <Button
+              onClick={() => removeCaption(trackItem)}
+              variant="outline"
+              className="w-full text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+            >
+              Remove Captions
+            </Button>
           ) : (
             <Button onClick={() => applyCaption(trackItem, transcript, style)} className="w-full">
-              Add Captions to Video
+              Apply Captions
             </Button>
           )}
         </>
