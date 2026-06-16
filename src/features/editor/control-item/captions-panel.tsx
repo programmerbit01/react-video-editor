@@ -122,6 +122,30 @@ function buildCaptionItem(trackItem: ITrackItem, segment: any, segIdx: number, s
   };
 }
 
+function removeCaption(trackItem: ITrackItem) {
+  const sm = getStateManagerRef();
+  if (!sm) return;
+  const captionTrackId = `${CAPTION_TRACK_PREFIX}${trackItem.id}`;
+  const state = sm.getState();
+  const tracks: any[] = Array.isArray(state?.tracks) ? state.tracks : [];
+  const map = { ...(state?.trackItemsMap || {}) };
+  const ids: string[] = Array.isArray(state?.trackItemIds) ? [...state.trackItemIds] : [];
+
+  const toRemove = Object.keys(map).filter(
+    (id) => map[id]?.metadata?.sourceTrackItemId === trackItem.id && map[id]?.metadata?.addedCaption
+  );
+  toRemove.forEach((id) => delete map[id]);
+
+  sm.updateState(
+    {
+      tracks: tracks.filter((t) => t.id !== captionTrackId),
+      trackItemIds: ids.filter((id) => !toRemove.includes(id)),
+      trackItemsMap: map
+    },
+    { updateHistory: true }
+  );
+}
+
 function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style: typeof DEFAULT_STYLE) {
   const sm = getStateManagerRef();
   if (!sm || !transcript?.segments) return;
@@ -353,13 +377,28 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
             </div>
           </div>
 
-          <Button
-            onClick={() => applyCaption(trackItem, transcript, style)}
-            className="w-full"
-            variant={captionCount > 0 ? "outline" : "default"}
-          >
-            {captionCount > 0 ? `Update Captions (${captionCount})` : "Add Captions to Video"}
-          </Button>
+          {captionCount > 0 ? (
+            <div className="flex gap-2">
+              <Button
+                onClick={() => applyCaption(trackItem, transcript, style)}
+                variant="outline"
+                className="flex-1"
+              >
+                Update Captions ({captionCount})
+              </Button>
+              <Button
+                onClick={() => removeCaption(trackItem)}
+                variant="ghost"
+                className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+              >
+                Remove
+              </Button>
+            </div>
+          ) : (
+            <Button onClick={() => applyCaption(trackItem, transcript, style)} className="w-full">
+              Add Captions to Video
+            </Button>
+          )}
         </>
       )}
     </div>

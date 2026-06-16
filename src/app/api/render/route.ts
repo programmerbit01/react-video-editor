@@ -109,56 +109,136 @@ async function hasAudioStream(inputPath: string): Promise<boolean> {
   }
 }
 
-/** Render a caption text onto a transparent PNG the same size as the video output. */
-async function generateCaptionOverlay(
-  text: string,
-  videoWidth: number,
-  videoHeight: number,
-  fontSize: number,
-  outputPath: string,
-): Promise<void> {
-  // Dynamic import so a missing native binary doesn't crash the whole server
+/**
+ * Render caption overlays with per-word karaoke highlighting.
+ * Returns one "base" overlay (full caption, no highlight) plus one overlay per word
+ * (full caption with that word highlighted), each enabled only during that word's time window.
+ */
+async function generateHighlightedCaptionOverlays(
+  captionItem: any,
+  outW: number,
+  outH: number,
+  canvasW: number,
+  tmpDir: string,
+  capIdx: number,
+): Promise<{ path: string; fromS: number; toS: number }[]> {
   const { createCanvas } = await import("@napi-rs/canvas");
-  const canvas = createCanvas(videoWidth, videoHeight);
-  const ctx = canvas.getContext("2d");
 
-  ctx.font = `bold ${fontSize}px sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
+  const words: any[] = Array.isArray(captionItem.details?.words) ? captionItem.details.words : [];
+  const text = String(captionItem.details?.text || "").trim();
+  if (!text) return [];
 
-  // Word-wrap
-  const maxWidth = videoWidth * 0.85;
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let line = "";
-  for (const word of words) {
-    const test = line ? `${line} ${word}` : word;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = test;
+  const rawFontSize = Number(captionItem.details?.fontSize || 22);
+  const fontSize = Math.max(8, Math.round(rawFontSize * outW / canvasW));
+  const color = String(captionItem.details?.color || "#FFFFFF");
+  const activeColor = String(captionItem.details?.activeColor || color);
+  const activeFillColor = String(captionItem.details?.activeFillColor || "transparent");
+  const topStr = String(captionItem.details?.top || "80%");
+  const topFrac = topStr.endsWith("%") ? parseFloat(topStr) / 100 : 0.8;
+
+  const fromS = Number(captionItem.display?.from || 0) / 1000;
+  const toS = Number(captionItem.display?.to || 0) / 1000;
+  const hasWordHighlight = words.length > 0 && activeColor !== color;
+
+  const drawCaption = async (activeWordIdx: number | null, outPath: string) => {
+    const canvas = createCanvas(outW, outH);
+    const ctx = canvas.getContext("2d");
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textBaseline = "alphabetic";
+
+    const wordTokens = words.length > 0
+      ? words.map((w: any) => String(w.word || ""))
+      : text.split(/\s+/);
+    const wordWidths = wordTokens.map((wt: string) => ctx.measureText(wt).width);
+    const spaceW = ctx.measureText(" ").width;
+
+    // Word-wrap into lines tracking global word indices
+    const maxLineW = outW * 0.85;
+    const lines: { tokens: string[]; widths: number[]; indices: number[] }[] = [];
+    let cur: { tokens: string[]; widths: number[]; indices: number[]; w: number } =
+      { tokens: [], widths: [], indices: [], w: 0 };
+    for (let i = 0; i < wordTokens.length; i++) {
+      const addW = cur.tokens.length > 0 ? spaceW + wordWidths[i] : wordWidths[i];
+      if (cur.tokens.length > 0 && cur.w + addW > maxLineW) {
+        lines.push({ tokens: cur.tokens, widths: cur.widths, indices: cur.indices });
+        cur = { tokens: [wordTokens[i]], widths: [wordWidths[i]], indices: [i], w: wordWidths[i] };
+      } else {
+        cur.tokens.push(wordTokens[i]); cur.widths.push(wordWidths[i]);
+        cur.indices.push(i); cur.w += addW;
+      }
+    }
+    if (cur.tokens.length) lines.push({ tokens: cur.tokens, widths: cur.widths, indices: cur.indices });
+
+    const lineH = fontSize * 1.35;
+    const startY = Math.round(topFrac * outH);
+
+    for (let li = 0; li < lines.length; li++) {
+      const { tokens, widths, indices } = lines[li];
+      const lineW = widths.reduce((a: number, b: number) => a + b, 0) + spaceW * Math.max(0, tokens.length - 1);
+      let x = Math.max(4, (outW - lineW) / 2);
+      const y = startY + (li + 1) * lineH;
+
+      for (let wi2 = 0; wi2 < tokens.length; wi2++) {
+        const globalWi = indices[wi2];
+        const isActive = globalWi === activeWordIdx;
+        const wW = widths[wi2];
+
+        if (isActive) {
+          const solidFill = activeFillColor !== "transparent"
+            && activeFillColor !== "rgba(0,0,0,0)"
+            && !activeFillColor.startsWith("rgba(0,0,0,0)");
+          if (solidFill) {
+            ctx.save();
+            ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+            ctx.fillStyle = activeFillColor;
+            const pad = Math.max(2, Math.round(fontSize * 0.12));
+            ctx.fillRect(x - pad, y - fontSize - pad, wW + pad * 2, fontSize + pad * 2 + 2);
+            ctx.restore();
+          }
+          ctx.shadowColor = "rgba(0,0,0,0.95)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetX = 2;
+          ctx.shadowOffsetY = 2;
+          ctx.fillStyle = activeColor;
+        } else {
+          ctx.shadowColor = "rgba(0,0,0,0.95)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetX = 2;
+          ctx.shadowOffsetY = 2;
+          ctx.fillStyle = color;
+        }
+        ctx.fillText(tokens[wi2], x, y);
+        x += wW + (wi2 < tokens.length - 1 ? spaceW : 0);
+      }
+    }
+
+    await writeFile(outPath, await canvas.encode("png"));
+  };
+
+  const overlays: { path: string; fromS: number; toS: number }[] = [];
+
+  // Base overlay — full caption in normal color, covers the whole caption window
+  const basePath = path.join(tmpDir, `cap_${capIdx}_base.png`);
+  await drawCaption(null, basePath);
+  overlays.push({ path: basePath, fromS, toS });
+
+  // Per-word highlighted overlays — same full caption but one word lit up
+  if (hasWordHighlight) {
+    const firstWordMs = Number(words[0]?.start ?? 0);
+    const offsetMs = (captionItem.display?.from ?? 0) - firstWordMs;
+    for (let wi = 0; wi < words.length; wi++) {
+      const w = words[wi];
+      const wFromS = Math.max(fromS, (Number(w.start ?? 0) + offsetMs) / 1000);
+      const wToS = Math.min(toS, (Number(w.end ?? 0) + offsetMs) / 1000);
+      if (wToS <= wFromS + 0.01) continue;
+      const wPath = path.join(tmpDir, `cap_${capIdx}_w${wi}.png`);
+      await drawCaption(wi, wPath);
+      overlays.push({ path: wPath, fromS: wFromS, toS: wToS });
     }
   }
-  if (line) lines.push(line);
 
-  const lineHeight = fontSize * 1.35;
-  const totalH = lines.length * lineHeight;
-  const baseY = videoHeight - 50 - totalH + fontSize;
-
-  // Shadow for readability on any background
-  ctx.shadowColor = "rgba(0,0,0,0.95)";
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetX = 2;
-  ctx.shadowOffsetY = 2;
-  ctx.fillStyle = "white";
-
-  for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], videoWidth / 2, baseY + i * lineHeight);
-  }
-
-  const buf = await canvas.encode("png");
-  await writeFile(outputPath, buf);
+  return overlays;
 }
 
 /** Compute even output dimensions from canvas size + max long-side target. */
@@ -341,15 +421,10 @@ async function runExport(
   const captionOverlays: CaptionOverlay[] = [];
 
   for (let i = 0; i < captionItems.length; i++) {
-    const item = captionItems[i];
-    const text = String(item.details?.text || "").trim();
-    if (!text) continue;
-    const fromS = Number(item.display?.from || 0) / 1000;
-    const toS   = Number(item.display?.to   || 0) / 1000;
-    const fontSize = Math.max(8, Math.round(Number(item.details?.fontSize || 22) * outW / canvasW));
-    const pngPath = path.join(tmpDir, `cap_${i}.png`);
-    await generateCaptionOverlay(text, outW, outH, fontSize, pngPath);
-    captionOverlays.push({ path: pngPath, fromS, toS });
+    const wordOverlays = await generateHighlightedCaptionOverlays(
+      captionItems[i], outW, outH, canvasW, tmpDir, i,
+    );
+    captionOverlays.push(...wordOverlays);
   }
 
   jobs.set(jobId, { status: "PROCESSING", progress: 50 });
