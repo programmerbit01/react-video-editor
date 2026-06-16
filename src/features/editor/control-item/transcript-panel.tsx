@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ITrackItem } from "@designcombo/types";
 import { dispatch } from "@designcombo/events";
-import { ACTIVE_SPLIT } from "@designcombo/state";
 import { getStateManagerRef } from "../utils/state-manager-ref";
+import { generateId } from "@/utils/id";
 import { ScissorsLineDashed, SquareSplitHorizontal } from "lucide-react";
 import useCaptionTranscribeStore, {
   TranscriptResult,
@@ -191,12 +191,18 @@ export default function TranscriptPanel({
 
   const splitBySegments = () => {
     if (!trackItem || !transcript?.segments?.length) return;
+
+    const sm = getStateManagerRef();
+    if (!sm) return;
+
     const segments = transcript.segments;
+    const clipId = (trackItem as any)?.id;
+    const originalTrackId = (trackItem as any)?.trackId;
     const originalFrom = safeDisplayFrom;
     const originalTo = Number((trackItem as any)?.display?.to || 0);
-    const originalTrackId = (trackItem as any)?.trackId;
-    const originalSrc = (trackItem as any)?.details?.src;
+    const isAudio = (trackItem as any)?.type === "audio";
 
+    // Collect split times
     const splitTimes: number[] = [];
     for (let i = splitEvery - 1; i < segments.length - 1; i += splitEvery) {
       const time = Math.min(
@@ -205,70 +211,73 @@ export default function TranscriptPanel({
       );
       splitTimes.push(time);
     }
-
     if (splitTimes.length === 0) return;
 
-    // ACTIVE_SPLIT always splits activeIds[0]. After first split, activeIds[0]
-    // becomes clip A (0→T1) so subsequent splits at T2>T1 fail silently.
-    // Fix: before each split, find the clip containing that time and make it active.
-    const doNextSplit = (index: number) => {
-      if (index >= splitTimes.length) {
-        if (arrange) doArrange();
-        return;
+    // Build boundaries: [displayFrom, T1, T2, ..., displayTo]
+    const boundaries = [originalFrom, ...splitTimes, originalTo];
+
+    // Read the EXACT clip from stateManager (not the possibly-stale component prop)
+    const state = sm.getState();
+    const sourceClip = state.trackItemsMap[clipId] as any;
+    if (!sourceClip) return;
+
+    const originalTrimFrom = Number(sourceClip.trim?.from ?? 0);
+
+    // Build resulting clips — first keeps original ID, rest get new IDs
+    let cursor = arrange ? originalFrom : null;
+    const resultClips: any[] = [];
+
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const dFrom = boundaries[i];
+      const dTo   = boundaries[i + 1];
+      const dur   = dTo - dFrom;
+
+      // Positions after arrange
+      const arrangedFrom = cursor !== null ? cursor : dFrom;
+      const arrangedTo   = arrangedFrom + dur;
+      if (cursor !== null) cursor += isAudio ? dur : dur * 2;
+
+      const trimOffset = dFrom - originalFrom; // ms into the original clip
+      const clip: any = {
+        ...sourceClip,
+        id: i === 0 ? clipId : generateId(8),
+        display: { from: arrangedFrom, to: arrangedTo }
+      };
+
+      if (sourceClip.type === "video" || sourceClip.type === "audio") {
+        clip.trim = {
+          from: originalTrimFrom + trimOffset,
+          to:   originalTrimFrom + trimOffset + dur
+        };
       }
-      const time = splitTimes[index];
-      const sm = getStateManagerRef();
 
-      if (sm && index > 0) {
-        const state = sm.getState();
-        const clip = Object.values(state.trackItemsMap).find((item: any) =>
-          item.trackId === originalTrackId &&
-          typeof item.display?.from === "number" &&
-          typeof item.display?.to === "number" &&
-          item.display.from < time &&
-          item.display.to > time
-        ) as any;
-        if (clip) sm.updateState({ activeIds: [clip.id] }, { updateHistory: false });
-      }
+      resultClips.push(clip);
+    }
 
-      dispatch(ACTIVE_SPLIT, { payload: {}, options: { time } });
-      setTimeout(() => doNextSplit(index + 1), 250);
-    };
+    // Update trackItemsMap — replace original, add new clips
+    const newTrackItemsMap = { ...state.trackItemsMap };
+    const newTrackItemIds  = [...state.trackItemIds];
 
-    const doArrange = () => {
-      setTimeout(() => {
-        const sm = getStateManagerRef();
-        if (!sm) return;
-        const { trackItemsMap } = sm.getState();
+    for (const clip of resultClips) {
+      newTrackItemsMap[clip.id] = clip;
+      if (!newTrackItemIds.includes(clip.id)) newTrackItemIds.push(clip.id);
+    }
 
-        const ourClips = Object.values(trackItemsMap)
-          .filter((item: any) =>
-            item.trackId === originalTrackId &&
-            item.details?.src === originalSrc &&
-            typeof item.display?.from === "number" &&
-            typeof item.display?.to === "number"
-          )
-          .sort((a: any, b: any) => a.display.from - b.display.from);
+    // Update the track's items list — insert new IDs right after the original
+    const newTracks = state.tracks.map((track: any) => {
+      if (track.id !== originalTrackId) return track; // leave other tracks untouched
+      const items: string[] = [...track.items];
+      const idx = items.indexOf(clipId);
+      if (idx === -1) return track;
+      const newIds = resultClips.map((c: any) => c.id);
+      items.splice(idx, 1, ...newIds);
+      return { ...track, items };
+    });
 
-        if (ourClips.length <= 1) return;
-
-        const isAudio = (trackItem as any)?.type === "audio";
-        const newMap = { ...trackItemsMap };
-        let cursor = originalFrom;
-        for (const clip of ourClips) {
-          const dur = (clip as any).display.to - (clip as any).display.from;
-          if (!isFinite(dur) || dur <= 0) return;
-          newMap[(clip as any).id] = {
-            ...(clip as any),
-            display: { from: cursor, to: cursor + dur }
-          };
-          cursor += isAudio ? dur : dur * 2;
-        }
-        sm.updateState({ trackItemsMap: newMap }, { updateHistory: true });
-      }, 300);
-    };
-
-    doNextSplit(0);
+    sm.updateState(
+      { trackItemsMap: newTrackItemsMap, trackItemIds: newTrackItemIds, tracks: newTracks },
+      { updateHistory: true }
+    );
   };
 
   if (!trackItem) return null;
