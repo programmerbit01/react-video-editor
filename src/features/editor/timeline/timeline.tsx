@@ -33,7 +33,7 @@ import { useResizbleTimeline } from "../hooks/use-resizable-timeline";
 import useLayoutStore from "../store/use-layout-store";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import { Captions as CaptionsIcon, Download, Upload, Loader2, CheckCircle2 } from "lucide-react";
-import { processUrlUpload } from "@/utils/upload-service";
+import { processFileUpload } from "@/utils/upload-service";
 import { download } from "@/utils/download";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 import TrackControlsOverlay from "./track-controls-overlay";
@@ -399,7 +399,11 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     if (!selectedSrc) return;
     setUploadState("uploading");
     try {
-      await processUrlUpload(`ctx-upload-${Date.now()}`, selectedSrc, {
+      const res = await fetch(selectedSrc);
+      const blob = await res.blob();
+      const rawName = selectedSrc.split("/").pop()?.split("?")[0] || "clip";
+      const file = new File([blob], rawName, { type: blob.type || "application/octet-stream" });
+      await processFileUpload(`ctx-upload-${Date.now()}`, file, {
         onProgress: () => {},
         onStatus: (_, status) => {
           setUploadState(status === "uploaded" ? "done" : "error");
