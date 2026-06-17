@@ -3,6 +3,25 @@ import StateManager from "@designcombo/state";
 import useStore from "../store/use-store";
 import { IAudio, ITrackItem, IVideo } from "@designcombo/types";
 import { audioDataManager } from "../player/lib/audio-data";
+import { dispatch } from "@designcombo/events";
+import { EDIT_OBJECT } from "@designcombo/state";
+import { Easing } from "remotion";
+import useGlobalAnimationStore from "../store/use-global-animation-store";
+
+const QUICK_FADE_FRAMES = 9; // 0.3s at 30fps
+
+function buildQuickFadeAnimations() {
+  return {
+    in: {
+      name: "fadeIn",
+      composition: [{ property: "opacity", from: 0, to: 1, durationInFrames: QUICK_FADE_FRAMES, easing: "linear", ease: Easing.linear }],
+    },
+    out: {
+      name: "fadeOut",
+      composition: [{ property: "opacity", from: 1, to: 0, durationInFrames: QUICK_FADE_FRAMES, easing: "linear", ease: Easing.linear }],
+    },
+  };
+}
 
 // Global registry to prevent duplicate subscriptions
 const subscriptionRegistry = new WeakMap<StateManager, Set<string>>();
@@ -10,6 +29,7 @@ const subscriptionRegistry = new WeakMap<StateManager, Set<string>>();
 export const useStateManagerEvents = (stateManager: StateManager) => {
   const { setState } = useStore();
   const isSubscribedRef = useRef(false);
+  const prevItemIdsRef = useRef<Set<string>>(new Set());
 
   // Handle track item updates
   const handleTrackItemUpdate = useCallback(() => {
@@ -44,6 +64,32 @@ export const useStateManagerEvents = (stateManager: StateManager) => {
     audioDataManager.validateUpdateItems(
       filterTrakcItems as (ITrackItem & (IVideo | IAudio))[]
     );
+
+    // Auto-apply global animation to newly added video/image clips
+    const globalType = useGlobalAnimationStore.getState().type;
+    if (globalType !== "none") {
+      const currentIds = new Set(currentState.trackItemIds as string[]);
+      const newIds = (currentState.trackItemIds as string[]).filter(
+        (id) => !prevItemIdsRef.current.has(id)
+      );
+      for (const newId of newIds) {
+        const item = currentState.trackItemsMap[newId] as any;
+        if (!item || (item.type !== "video" && item.type !== "image")) continue;
+        // Only apply if clip has no custom animation already
+        if (item.animations?.in || item.animations?.out) continue;
+        if (globalType === "quickFade") {
+          setTimeout(() => {
+            dispatch(EDIT_OBJECT, {
+              payload: { [newId]: { animations: buildQuickFadeAnimations() } },
+            });
+          }, 80);
+        }
+      }
+      prevItemIdsRef.current = currentIds;
+    } else {
+      prevItemIdsRef.current = new Set(currentState.trackItemIds as string[]);
+    }
+
     setState({
       trackItemsMap: currentState.trackItemsMap,
       trackItemIds: currentState.trackItemIds,

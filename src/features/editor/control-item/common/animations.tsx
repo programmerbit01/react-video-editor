@@ -14,6 +14,7 @@ import type { PresetName } from "../../player/animated/presets";
 import { dispatch } from "@designcombo/events";
 import { EDIT_OBJECT } from "@designcombo/state";
 import { Easing } from "remotion";
+import useGlobalAnimationStore, { GlobalAnimationType } from "../../store/use-global-animation-store";
 
 interface PresetTextProps {
   trackItem: ITrackItem & any;
@@ -74,10 +75,36 @@ function applyQuickFade(activeId: string) {
   });
 }
 
+const GLOBAL_OPTIONS: { value: GlobalAnimationType; label: string }[] = [
+  { value: "none", label: "Off" },
+  { value: "quickFade", label: "Quick Fade (0.3s)" },
+];
+
+const GlobalAnimationToggle = () => {
+  const { type, setType } = useGlobalAnimationStore();
+  return (
+    <div className="flex items-center gap-2 pb-2 border-b border-border/50">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
+        Auto (new clips)
+      </span>
+      <select
+        value={type}
+        onChange={(e) => setType(e.target.value as GlobalAnimationType)}
+        className="text-xs bg-secondary text-foreground border border-border rounded px-1.5 py-0.5 cursor-pointer outline-none"
+      >
+        {GLOBAL_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+};
+
 export const Animations = ({ properties, trackItem }: PresetTextProps) => {
   return (
     <div className="flex flex-col gap-2 py-4">
       <Label className="font-sans text-xs font-semibold">Animations</Label>
+      <GlobalAnimationToggle />
       <SelectaAnimation trackItem={trackItem} />
     </div>
   );
