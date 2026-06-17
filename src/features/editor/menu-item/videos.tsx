@@ -3,54 +3,27 @@ import { dispatch } from "@designcombo/events";
 import { ADD_VIDEO } from "@designcombo/state";
 import { generateId } from "@designcombo/timeline";
 import { IVideo } from "@designcombo/types";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, Play, PlusIcon } from "lucide-react";
+import { Search, Loader2, Play, PlusIcon, Maximize2, Minimize2 } from "lucide-react";
 import { usePexelsVideos } from "@/hooks/use-pexels-videos";
 import type { PexelsVideoFilters } from "@/hooks/use-pexels-videos";
 import { ImageLoading } from "@/components/ui/image-loading";
 
-const QUICK_TOPICS = [
-  "nature",
-  "business",
-  "health",
-  "sports",
-  "travel",
-  "technology",
-  "food",
-  "cats"
-];
-const CATEGORY_OPTIONS = [
-  "nature",
-  "cats",
-  "business",
-  "city",
-  "food",
-  "health",
-  "sports",
-  "travel",
-  "fitness",
-  "technology",
-  "education",
-  "medical",
-  "finance",
-  "fashion",
-  "animals",
-  "all"
-];
+
 const ASPECT_RATIO_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["aspectRatio"]> | "all" }> = [
   { label: "16:9", value: "16:9" },
   { label: "9:16", value: "9:16" },
   { label: "1:1", value: "1:1" },
-  { label: "All items", value: "all" },
+  { label: "All", value: "all" },
 ];
 const SIZE_OPTIONS: Array<{ label: string; value: NonNullable<PexelsVideoFilters["size"]> | "all" }> = [
   { label: "HD", value: "small" },
   { label: "FHD", value: "medium" },
   { label: "4K", value: "large" },
-  { label: "All items", value: "all" },
+  { label: "All", value: "all" },
 ];
 
 const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
@@ -68,6 +41,17 @@ export const Videos = () => {
   const [activeQuery, setActiveQuery] = useState("");
   const [aspectRatio, setAspectRatio] = useState<NonNullable<PexelsVideoFilters["aspectRatio"]> | "all">("16:9");
   const [size, setSize] = useState<NonNullable<PexelsVideoFilters["size"]> | "all">("medium");
+  const [expanded, setExpanded] = useState(() => {
+    try { return localStorage.getItem("vapp_videos_expanded") === "true"; } catch { return false; }
+  });
+  const [overlayTop, setOverlayTop] = useState(0);
+  const [overlayWidth, setOverlayWidth] = useState(320);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const toggleExpanded = (v: boolean) => {
+    setExpanded(v);
+    try { localStorage.setItem("vapp_videos_expanded", String(v)); } catch {}
+  };
 
   const {
     videos: pexelsVideos,
@@ -114,8 +98,16 @@ export const Videos = () => {
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      handleSearch();
+    if (e.key === "Enter") handleSearch();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text").trim();
+    if (text) {
+      setTimeout(() => {
+        setSearchQuery(text);
+        setActiveQuery(text);
+      }, 0);
     }
   };
 
@@ -134,141 +126,106 @@ export const Videos = () => {
     setActiveQuery("");
     clearVideos();
   };
-  const handleTopicClick = (topic: string) => {
-    if (topic === "all") {
-      handleClearSearch();
-      return;
-    }
-    setSearchQuery(topic);
-    setActiveQuery(topic);
-  };
 
-  return (
-    <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
-      <div className="flex items-center gap-1.5 px-3 py-2">
-        <div className="relative flex-1">
-          <Button
-            size="sm"
-            variant="ghost"
+  // Measure panel top/width so the overlay sits below the tabs (not from screen top)
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const update = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      setOverlayTop(rect.top);
+      setOverlayWidth(rect.width);
+    };
+    update();
+    // Re-measure on window resize in case panel width changes
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [expanded]);
+
+  const inner = (
+    <>
+      <div className="flex-none flex items-center gap-1 px-2 py-2">
+        <div className="relative flex-1 min-w-0">
+          <Button size="sm" variant="ghost"
             className="absolute left-1 top-1/2 h-5 w-5 -translate-y-1/2 p-0"
-            onClick={handleSearch}
-            disabled={pexelsLoading}
+            onClick={handleSearch} disabled={pexelsLoading}
           >
-            {pexelsLoading ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Search className="h-3 w-3" />
-            )}
+            {pexelsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
           </Button>
           <Input
-            placeholder="Search videos..."
+            placeholder="Search..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={handleKeyPress}
-            className="h-7 pl-7 text-xs"
+            onPaste={handlePaste}
+            className="h-7 pl-7 pr-1 text-xs"
           />
         </div>
-        <select
-          value={aspectRatio}
+        <select value={aspectRatio}
           onChange={(e) => setAspectRatio(e.target.value as NonNullable<PexelsVideoFilters["aspectRatio"]> | "all")}
-          className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
-          title="Aspect ratio"
+          className="h-7 w-[54px] rounded-md border border-input bg-background px-1 text-[11px] shrink-0" title="Aspect ratio"
         >
-          {ASPECT_RATIO_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
+          {ASPECT_RATIO_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
-        <select
-          value={size}
+        <select value={size}
           onChange={(e) => setSize(e.target.value as NonNullable<PexelsVideoFilters["size"]> | "all")}
-          className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
-          title="Quality"
+          className="h-7 w-[46px] rounded-md border border-input bg-background px-1 text-[11px] shrink-0" title="Quality"
         >
-          {SIZE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
+          {SIZE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
-        {searchQuery && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-xs"
-            onClick={handleClearSearch}
-            disabled={pexelsLoading}
-          >
-            Clear
-          </Button>
-        )}
-      </div>
-
-      <div className="px-4 pb-2 flex flex-wrap gap-2">
-        {QUICK_TOPICS.map((topic) => (
-          <Button
-            key={topic}
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-xs capitalize"
-            onClick={() => handleTopicClick(topic)}
-            disabled={pexelsLoading}
-          >
-            {topic}
-          </Button>
-        ))}
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-xs"
-          onClick={() => handleTopicClick("all")}
-          disabled={pexelsLoading}
-        >
-          All items
+        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => toggleExpanded(!expanded)} title={expanded ? "Collapse" : "Expand"}>
+          {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
         </Button>
       </div>
 
       {pexelsError && (
-        <div className="px-4 pb-2">
-          <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-2 rounded">
-            {pexelsError}
-          </div>
+        <div className="flex-none px-4 pb-2">
+          <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-2 rounded">{pexelsError}</div>
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-4">
         <div className="grid grid-cols-3 gap-2 pb-2">
           {pexelsVideos.map((video, index) => (
-            <VideoItem
-              key={video.id || index}
-              video={video}
-              shouldDisplayPreview={!isDraggingOverTimeline}
-              handleAddImage={handleAddVideo}
-            />
+            <VideoItem key={video.id || index} video={video}
+              shouldDisplayPreview={!isDraggingOverTimeline} handleAddImage={handleAddVideo} />
           ))}
         </div>
         {pexelsLoading && <ImageLoading message="Searching for videos..." />}
       </div>
 
       <div className="flex-none border-t border-border/40 px-4 py-2">
-        <Button
-          size="sm"
-          variant="outline"
-          className="w-full"
-          onClick={handleLoadMore}
-          disabled={pexelsLoading || !hasNextPage}
-        >
-          {pexelsLoading ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Loading...
-            </>
-          ) : (
-            "Load More"
-          )}
+        <Button size="sm" variant="outline" className="w-full" onClick={handleLoadMore} disabled={pexelsLoading || !hasNextPage}>
+          {pexelsLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Loading...</> : "Load More"}
         </Button>
       </div>
+    </>
+  );
+
+  return (
+    <div className="flex flex-1 flex-col min-h-0 overflow-hidden" ref={containerRef}>
+      {expanded ? (
+        /* When expanded: show a stub row so the normal panel keeps its height,
+           and render the real content in a fixed overlay that starts below the tabs */
+        <>
+          <div className="flex-none flex items-center gap-1 px-2 py-2">
+            <span className="flex-1 text-xs text-muted-foreground truncate pl-1">
+              {activeQuery ? `"${activeQuery}"` : "Popular videos"} — expanded
+            </span>
+            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => toggleExpanded(false)} title="Collapse">
+              <Minimize2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div
+            className="fixed z-[200] flex flex-col bg-card border-r border-border shadow-2xl"
+            style={{ top: overlayTop, left: 0, bottom: 0, width: overlayWidth || 320 }}
+          >
+            {inner}
+          </div>
+        </>
+      ) : (
+        inner
+      )}
     </div>
   );
 };
