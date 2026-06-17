@@ -1,5 +1,6 @@
 import { IDesign } from "@designcombo/types";
 import { create } from "zustand";
+import useTrackVisibilityStore from "./use-track-visibility-store";
 
 export type ExportQuality = "high" | "medium" | "low";
 export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
@@ -69,6 +70,9 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
         if (!payload) throw new Error("Payload is not defined");
 
+        const { muted } = useTrackVisibilityStore.getState();
+        const mutedTrackIds = Object.keys(muted).filter((id) => muted[id]);
+
         const response = await fetch(`/api/render`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -77,6 +81,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             options: {
               fps: 30,
               maxDim,
+              mutedTrackIds,
               format: exportType,
               quality: exportQuality,
             },

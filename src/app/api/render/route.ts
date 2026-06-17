@@ -27,6 +27,7 @@ export async function POST(request: Request) {
       options?.quality ?? "high",
       options?.format ?? "mp4",
       options?.maxDim,
+      options?.mutedTrackIds ?? [],
     ).catch((err) => {
       console.error(`[render] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
@@ -320,12 +321,16 @@ const PLATFORM_PRESETS: Record<string, {
 
 // ─── main export ─────────────────────────────────────────────────────────────
 
+/** Format a time value safely for FFmpeg — avoids scientific notation that FFmpeg can't parse */
+const fmtT = (s: number) => (Math.abs(s) < 1e-9 ? "0" : s.toFixed(6));
+
 async function runExport(
   jobId: string,
   design: any,
   quality = "high",
   format = "mp4",
   maxDim?: number,
+  mutedTrackIds: string[] = [],
 ) {
   const exportsDir = path.join(process.cwd(), "public", "exports");
   const tmpDir = path.join(exportsDir, `tmp_${jobId}`);
@@ -341,8 +346,21 @@ async function runExport(
   }
 
   const { crf, preset } = QUALITY_PRESETS[quality] ?? QUALITY_PRESETS.high;
-  const { trackItemsMap, trackItemIds, size } = design;
+  const { trackItemsMap, trackItemIds, size, tracks } = design;
   const platformPreset = PLATFORM_PRESETS[format];
+
+  // Build itemId → trackId map for mute checks
+  const itemTrackMap: Record<string, string> = {};
+  if (Array.isArray(tracks)) {
+    for (const track of tracks) {
+      if (Array.isArray(track.items)) {
+        for (const itemId of track.items) {
+          itemTrackMap[itemId] = track.id;
+        }
+      }
+    }
+  }
+  const mutedSet = new Set(mutedTrackIds);
 
   // ── Output dimensions: use canvas AR, scale to requested quality ──────────
   const canvasW = size?.width ?? 1080;
@@ -490,27 +508,31 @@ async function runExport(
     const item = entry.item;
     const displayFromS = Math.max(0, Number(item.display?.from ?? 0) / 1000);
     const displayToS   = Math.max(displayFromS + 0.1, Number(item.display?.to ?? 0) / 1000);
-    const trimFromS    = Math.max(0, Number(item.trim?.from ?? 0) / 1000);
+    const trimFromRaw  = Math.max(0, Number(item.trim?.from ?? 0) / 1000);
+    const trimFromS    = Math.abs(trimFromRaw) < 1e-9 ? 0 : trimFromRaw;
     const clipDurS     = displayToS - displayFromS;
     const trimToS      = trimFromS + clipDurS;
     const delayMs      = Math.round(displayFromS * 1000);
 
+    const trackId = itemTrackMap[item.id] ?? "";
+    const trackMuted = mutedSet.has(trackId);
+
     if (entry.kind === "video") {
       if (entry.isImage) {
         filterParts.push(
-          `[${inputIdx}:v]setpts=PTS-STARTPTS+${displayFromS}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
+          `[${inputIdx}:v]setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
         );
       } else {
         filterParts.push(
-          `[${inputIdx}:v]trim=start=${trimFromS}:end=${trimToS},setpts=PTS-STARTPTS+${displayFromS}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
+          `[${inputIdx}:v]trim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
         );
       }
       videoOverlays.push({ vLabel: `v${inputIdx}`, from: displayFromS, to: displayToS });
 
       if (entry.hasAudio) {
-        const vol = Math.max(0, Number(item.details?.volume ?? 100) / 100);
+        const vol = trackMuted ? 0 : Math.max(0, Number(item.details?.volume ?? 100) / 100);
         filterParts.push(
-          `[${inputIdx}:a]atrim=start=${trimFromS}:end=${trimToS},` +
+          `[${inputIdx}:a]atrim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},` +
           `asetpts=PTS-STARTPTS,` +
           `volume=${vol},` +
           `adelay=${delayMs}|${delayMs},` +
@@ -520,9 +542,9 @@ async function runExport(
       }
     } else {
       // Audio-only track
-      const vol = Math.max(0, Number(item.details?.volume ?? 100) / 100);
+      const vol = trackMuted ? 0 : Math.max(0, Number(item.details?.volume ?? 100) / 100);
       filterParts.push(
-        `[${inputIdx}:a]atrim=start=${trimFromS}:end=${trimToS},` +
+        `[${inputIdx}:a]atrim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},` +
         `asetpts=PTS-STARTPTS,` +
         `volume=${vol},` +
         `adelay=${delayMs}|${delayMs},` +
