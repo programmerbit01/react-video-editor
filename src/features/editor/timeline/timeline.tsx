@@ -37,6 +37,7 @@ import { processFileUpload } from "@/utils/upload-service";
 import { download } from "@/utils/download";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 import TrackControlsOverlay from "./track-controls-overlay";
+import { AnimationOverlayStore } from "../utils/animation-overlay-store";
 
 
 CanvasTimeline.registerItems({
@@ -108,6 +109,31 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
       canScrollRef.current = playerRef?.current.isPlaying();
     }
   }, [playerRef?.current?.isPlaying()]);
+
+  // Sync animation data into AnimationOverlayStore so canvas items can draw indicators
+  useEffect(() => {
+    for (const [id, item] of Object.entries(trackItemsMap)) {
+      const anim = (item as any).animations;
+      const inAnim = anim?.in;
+      const outAnim = anim?.out;
+      const hasIn = !!inAnim?.name;
+      const hasOut = !!outAnim?.name;
+      if (!hasIn && !hasOut) {
+        delete AnimationOverlayStore[id];
+      } else {
+        AnimationOverlayStore[id] = {
+          hasIn,
+          hasOut,
+          inDurMs: hasIn ? ((inAnim.composition?.[0]?.durationInFrames ?? 15) * 1000) / 30 : 0,
+          outDurMs: hasOut ? ((outAnim.composition?.[0]?.durationInFrames ?? 15) * 1000) / 30 : 0,
+        };
+      }
+    }
+    for (const id of Object.keys(AnimationOverlayStore)) {
+      if (!trackItemsMap[id]) delete AnimationOverlayStore[id];
+    }
+    timeline?.requestRenderAll();
+  }, [trackItemsMap]);
 
   useEffect(() => {
     PlaybackState.currentMs = (currentFrame / fps) * 1000;

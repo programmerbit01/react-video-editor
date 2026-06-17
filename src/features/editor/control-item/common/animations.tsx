@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Zap } from "lucide-react";
 import { IText, ITrackItem } from "@designcombo/types";
 import { Label } from "@/components/ui/label";
 import useLayoutStore from "../../store/use-layout-store";
@@ -11,26 +11,67 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { AnimationDuration } from "./animation-duration";
 import { presets } from "../../player/animated";
 import type { PresetName } from "../../player/animated/presets";
+import { dispatch } from "@designcombo/events";
+import { EDIT_OBJECT } from "@designcombo/state";
+import { Easing } from "remotion";
 
 interface PresetTextProps {
   trackItem: ITrackItem & any;
   properties: any;
 }
 
-function getAnimationLabel(animations: any): string {
-  if (!animations) return "None";
-  const parts: string[] = [];
+function getAnimationParts(animations: any): { label: string; dur: string }[] {
+  if (!animations) return [];
+  const parts: { label: string; dur: string }[] = [];
   const types = ["in", "loop", "out"] as const;
   for (const t of types) {
-    const name = animations[t]?.name as PresetName | undefined;
+    const anim = animations[t];
+    const name = anim?.name as PresetName | undefined;
     if (name && presets[name]) {
       const displayName = presets[name].name;
-      parts.push(`${displayName} ${t.charAt(0).toUpperCase() + t.slice(1)}`);
+      const label = `${displayName} ${t.charAt(0).toUpperCase() + t.slice(1)}`;
+      const frames: number = anim?.composition?.[0]?.durationInFrames ?? 0;
+      const durS = frames > 0 ? (frames / 30).toFixed(1) + "s" : "";
+      parts.push({ label, dur: durS });
     }
   }
-  if (parts.length === 0) return "None";
-  if (parts.length === 1) return parts[0];
-  return `${parts[0]} +${parts.length - 1}`;
+  return parts;
+}
+
+const QUICK_FADE_FRAMES = 9; // 0.3s at 30fps
+
+function applyQuickFade(activeId: string) {
+  if (!activeId) return;
+  dispatch(EDIT_OBJECT, {
+    payload: {
+      [activeId]: {
+        animations: {
+          in: {
+            name: "fadeIn",
+            composition: [{
+              property: "opacity",
+              from: 0,
+              to: 1,
+              durationInFrames: QUICK_FADE_FRAMES,
+              easing: "linear",
+              ease: Easing.linear,
+            }],
+          },
+          out: {
+            name: "fadeOut",
+            composition: [{
+              property: "opacity",
+              from: 1,
+              to: 0,
+              durationInFrames: QUICK_FADE_FRAMES,
+              easing: "linear",
+              ease: Easing.linear,
+            }],
+          },
+        },
+      },
+    },
+  });
 }
 
 export const Animations = ({ properties, trackItem }: PresetTextProps) => {
@@ -48,8 +89,8 @@ const SelectaAnimation = ({ trackItem }: { trackItem: ITrackItem & IText }) => {
   const { activeIds, trackItemsMap } = useStore();
 
   const currentItem = trackItemsMap[activeIds[0]];
-  const animationLabel = getAnimationLabel(currentItem?.animations);
-  const hasAnimation = animationLabel !== "None";
+  const animParts = getAnimationParts(currentItem?.animations);
+  const hasAnimation = animParts.length > 0;
 
   const animationType = trackItem.type === "text" ? "text" : "media";
 
@@ -76,21 +117,45 @@ const SelectaAnimation = ({ trackItem }: { trackItem: ITrackItem & IText }) => {
   );
 
   return (
-    <div className="flex gap-2 py-0 flex-col lg:flex-row">
-      <div className="flex-1 items-center text-sm text-muted-foreground hidden lg:flex">
-        Animation
-      </div>
-      {isLargeScreen ? (
-        <div className="relative w-32">
+    <div className="flex gap-2 py-0 flex-col lg:flex-col">
+      {isLargeScreen && (
+        <Button
+          className="flex h-7 w-full items-center gap-1.5 text-xs"
+          variant="outline"
+          onClick={() => applyQuickFade(activeIds[0])}
+          title="Apply Fade In + Fade Out (0.3s each) — most used by YouTubers"
+        >
+          <Zap size={11} className="text-yellow-500 fill-yellow-500" />
+          Quick Fade
+          <span className="text-muted-foreground text-[10px]">(0.3s)</span>
+        </Button>
+      )}
+      <div className="flex gap-2 flex-row">
+        <div className="flex-1 items-center text-sm text-muted-foreground hidden lg:flex">
+          Custom
+        </div>
+        {isLargeScreen ? (
+        <div className="relative w-44">
           <Button
-            className="flex h-8 w-full items-center justify-between text-sm"
+            className="flex min-h-9 h-auto w-full items-start justify-between text-sm py-1.5 px-2"
             variant={hasAnimation ? "default" : "secondary"}
             onClick={() => setFloatingControl("animation-picker")}
           >
-            <div className="w-full text-left">
-              <p className="truncate text-xs">{animationLabel}</p>
+            <div className="w-full text-left flex flex-col gap-0.5">
+              {hasAnimation ? (
+                animParts.map((p, i) => (
+                  <p key={i} className="text-xs leading-tight">
+                    {p.label}
+                    {p.dur && (
+                      <span className="ml-1 opacity-70 text-[10px]">({p.dur})</span>
+                    )}
+                  </p>
+                ))
+              ) : (
+                <p className="text-xs">None</p>
+              )}
             </div>
-            <ChevronDown className="text-muted-foreground shrink-0" size={14} />
+            <ChevronDown className="text-muted-foreground shrink-0 mt-0.5" size={14} />
           </Button>
         </div>
       ) : (
@@ -132,6 +197,7 @@ const SelectaAnimation = ({ trackItem }: { trackItem: ITrackItem & IText }) => {
           <AnimationDuration />
         </div>
       )}
+      </div>
     </div>
   );
 };

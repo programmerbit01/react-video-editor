@@ -12,6 +12,9 @@ import { PresetName } from "../../player/animated/presets";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AnimationDuration } from "../common/animation-duration";
 
+// Animations that are rendered correctly during FFmpeg export
+const EXPORT_SUPPORTED = new Set(["fadeIn", "fadeOut"]);
+
 export const createPresetButtons = (
   filter: (key: string) => boolean,
   type: "in" | "out" | "loop",
@@ -53,6 +56,8 @@ export const createPresetButtons = (
         }
       }
 
+      const isExportSupported = EXPORT_SUPPORTED.has(presetKey);
+
       return (
         <div
           key={presetKey}
@@ -66,7 +71,18 @@ export const createPresetButtons = (
             )
           }
         >
-          <div style={style} draggable={false} />
+          <div className="relative">
+            <div style={style} draggable={false} />
+            {isExportSupported && (
+              <div
+                className="absolute bottom-0.5 right-0.5 bg-green-600 text-white rounded-sm font-bold leading-tight px-0.5"
+                style={{ fontSize: "7px" }}
+                title="Works in video export"
+              >
+                EXP
+              </div>
+            )}
+          </div>
           <div>{preset.name}</div>
         </div>
       );

@@ -324,6 +324,37 @@ const PLATFORM_PRESETS: Record<string, {
 /** Format a time value safely for FFmpeg — avoids scientific notation that FFmpeg can't parse */
 const fmtT = (s: number) => (Math.abs(s) < 1e-9 ? "0" : s.toFixed(6));
 
+/**
+ * Build FFmpeg fade filter string for items with fadeIn/fadeOut animations.
+ * Returns a comma-prefixed filter chain segment (e.g. ",fade=t=in:st=2:d=0.5")
+ * or empty string if no fade animation is set.
+ * Applies AFTER scale so PTS is already shifted to displayFromS.
+ */
+function getFadeFilters(item: any, displayFromS: number, clipDurS: number): string {
+  const animIn = item.animations?.in;
+  const animOut = item.animations?.out;
+  const fadeInDurS =
+    animIn?.name === "fadeIn" && (animIn.composition?.[0]?.durationInFrames ?? 0) > 0
+      ? animIn.composition[0].durationInFrames / 30
+      : 0;
+  const fadeOutDurS =
+    animOut?.name === "fadeOut" && (animOut.composition?.[0]?.durationInFrames ?? 0) > 0
+      ? animOut.composition[0].durationInFrames / 30
+      : 0;
+
+  const parts: string[] = [];
+  if (fadeInDurS > 0) {
+    const d = fmtT(Math.min(fadeInDurS, clipDurS));
+    parts.push(`fade=t=in:st=${fmtT(displayFromS)}:d=${d}`);
+  }
+  if (fadeOutDurS > 0) {
+    const d = Math.min(fadeOutDurS, clipDurS);
+    const st = fmtT(displayFromS + clipDurS - d);
+    parts.push(`fade=t=out:st=${st}:d=${fmtT(d)}`);
+  }
+  return parts.length > 0 ? `,${parts.join(",")}` : "";
+}
+
 async function runExport(
   jobId: string,
   design: any,
@@ -518,13 +549,14 @@ async function runExport(
     const trackMuted = mutedSet.has(trackId);
 
     if (entry.kind === "video") {
+      const fadeFilters = getFadeFilters(item, displayFromS, clipDurS);
       if (entry.isImage) {
         filterParts.push(
-          `[${inputIdx}:v]setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
+          `[${inputIdx}:v]setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}${fadeFilters}[v${inputIdx}]`,
         );
       } else {
         filterParts.push(
-          `[${inputIdx}:v]trim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}[v${inputIdx}]`,
+          `[${inputIdx}:v]trim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}${fadeFilters}[v${inputIdx}]`,
         );
       }
       videoOverlays.push({ vLabel: `v${inputIdx}`, from: displayFromS, to: displayToS });

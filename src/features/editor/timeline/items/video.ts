@@ -17,6 +17,7 @@ import { createMediaControls } from "../controls";
 import { SECONDARY_FONT } from "../../constants/constants";
 import { PlaybackState } from "../../utils/playback-state";
 import { TranscriptOverlayStore } from "../../utils/transcript-overlay-store";
+import { AnimationOverlayStore } from "../../utils/animation-overlay-store";
 import useTranscriptGuideStore from "../../store/use-transcript-guide-store";
 
 const TRANSCRIPT_ZONE_H = 16;
@@ -518,6 +519,7 @@ class Video extends Trimmable {
 
     ctx.restore();
     this.drawTranscriptZone(ctx);
+    this.drawAnimationIndicators(ctx);
     this.updateSelected(ctx);
   }
 
@@ -700,6 +702,70 @@ class Video extends Trimmable {
     }
 
     this.isDirty = false;
+  }
+
+  private drawAnimationIndicators(ctx: CanvasRenderingContext2D) {
+    const overlay = AnimationOverlayStore[this.id];
+    if (!overlay) return;
+
+    const clipDurMs = this.display.to - this.display.from;
+    if (clipDurMs <= 0 || this.width <= 0) return;
+
+    const pxPerMs = this.width / clipDurMs;
+    const T = 18; // triangle size in px
+
+    ctx.save();
+    ctx.translate(-this.width / 2, -this.height / 2);
+    ctx.beginPath();
+    ctx.rect(0, 0, this.width, this.height);
+    ctx.clip();
+
+    if (overlay.hasIn && overlay.inDurMs > 0) {
+      const stripeW = Math.max(8, Math.min(overlay.inDurMs * pxPerMs, this.width * 0.5));
+      // Gradient zone
+      const grad = ctx.createLinearGradient(0, 0, stripeW, 0);
+      grad.addColorStop(0, "rgba(255,255,255,0.70)");
+      grad.addColorStop(0.4, "rgba(255,255,255,0.30)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, stripeW, this.height);
+      // Solid left edge line
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillRect(0, 0, 3, this.height);
+      // Corner triangle (top-left, pointing into the clip)
+      ctx.fillStyle = "rgba(255,255,255,1)";
+      ctx.beginPath();
+      ctx.moveTo(3, 3);
+      ctx.lineTo(3 + T, 3);
+      ctx.lineTo(3, 3 + T);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (overlay.hasOut && overlay.outDurMs > 0) {
+      const stripeW = Math.max(8, Math.min(overlay.outDurMs * pxPerMs, this.width * 0.5));
+      const x = this.width - stripeW;
+      // Gradient zone
+      const grad = ctx.createLinearGradient(x, 0, this.width, 0);
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(0.6, "rgba(255,255,255,0.30)");
+      grad.addColorStop(1, "rgba(255,255,255,0.70)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, 0, stripeW, this.height);
+      // Solid right edge line
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillRect(this.width - 3, 0, 3, this.height);
+      // Corner triangle (top-right, pointing into the clip)
+      ctx.fillStyle = "rgba(255,255,255,1)";
+      ctx.beginPath();
+      ctx.moveTo(this.width - 3, 3);
+      ctx.lineTo(this.width - 3 - T, 3);
+      ctx.lineTo(this.width - 3, 3 + T);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 
   public drawTextIdentity(ctx: CanvasRenderingContext2D) {
