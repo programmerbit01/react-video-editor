@@ -32,7 +32,9 @@ import { useStateManagerEvents } from "../hooks/use-state-manager-events";
 import { useResizbleTimeline } from "../hooks/use-resizable-timeline";
 import useLayoutStore from "../store/use-layout-store";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
-import { Captions as CaptionsIcon } from "lucide-react";
+import { Captions as CaptionsIcon, Download, Upload, Loader2, CheckCircle2 } from "lucide-react";
+import { processUrlUpload } from "@/utils/upload-service";
+import { download } from "@/utils/download";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 import TrackControlsOverlay from "./track-controls-overlay";
 
@@ -88,9 +90,8 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
   const { setTimeline } = useStore();
   const { setActiveMenuItem, setShowMenuItem, setDrawerOpen } = useLayoutStore();
   const { requestTranscription } = useCaptionTranscribeStore();
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
-    null
-  );
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [uploadState, setUploadState] = useState<"idle" | "uploading" | "done" | "error">("idle");
 
   // Use the extracted state manager events hook
   useStateManagerEvents(stateManager);
@@ -362,22 +363,52 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
   const canTranscribeSelection =
     selectedMediaItem?.type === "audio" || selectedMediaItem?.type === "video";
+  const selectedSrc = (selectedMediaItem as any)?.details?.src as string | undefined;
 
-  const handleTimelineContextMenu = (
-    event: React.MouseEvent<HTMLDivElement>
-  ) => {
-    if (!canTranscribeSelection || !selectedMediaItem?.details?.src) return;
+  const handleTimelineContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!selectedSrc) return;
     event.preventDefault();
+    setUploadState("idle");
     setContextMenu({ x: event.clientX, y: event.clientY });
   };
 
   const handleTranscribeSelection = () => {
-    if (!canTranscribeSelection || !selectedMediaItem?.details?.src) return;
-    requestTranscription(selectedMediaItem.details.src);
+    if (!canTranscribeSelection || !selectedSrc) return;
+    requestTranscription(selectedSrc);
     setActiveMenuItem("captions");
     setShowMenuItem(true);
     setDrawerOpen(true);
     setContextMenu(null);
+  };
+
+  const handleDownloadClip = () => {
+    if (!selectedSrc) return;
+    const ext = selectedSrc.split("?")[0].split(".").pop() || "mp4";
+    const name = selectedSrc.split("/").pop()?.split("?")[0] || `clip.${ext}`;
+    const a = document.createElement("a");
+    a.href = selectedSrc;
+    a.download = name;
+    a.target = "_blank";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setContextMenu(null);
+  };
+
+  const handleUploadToLibrary = async () => {
+    if (!selectedSrc) return;
+    setUploadState("uploading");
+    try {
+      await processUrlUpload(`ctx-upload-${Date.now()}`, selectedSrc, {
+        onProgress: () => {},
+        onStatus: (_, status) => {
+          setUploadState(status === "uploaded" ? "done" : "error");
+          if (status === "uploaded") setTimeout(() => setContextMenu(null), 1000);
+        },
+      });
+    } catch {
+      setUploadState("error");
+    }
   };
 
   const handleTransitionDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -488,15 +519,45 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
         </div>
       </div>
       {contextMenu ? (
-        <button
-          type="button"
-          className="fixed z-[250] flex items-center gap-2 rounded-md border bg-popover px-3 py-2 text-sm shadow-lg"
+        <div
+          className="fixed z-[250] min-w-[200px] overflow-hidden rounded-lg border border-border/60 bg-popover shadow-xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={handleTranscribeSelection}
+          onClick={(e) => e.stopPropagation()}
         >
-          <CaptionsIcon size={14} />
-          Generate transcription
-        </button>
+          {canTranscribeSelection && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent"
+              onClick={handleTranscribeSelection}
+            >
+              <CaptionsIcon size={14} className="text-muted-foreground" />
+              Generate transcription
+            </button>
+          )}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent"
+            onClick={handleDownloadClip}
+          >
+            <Download size={14} className="text-muted-foreground" />
+            Download clip
+          </button>
+          <button
+            type="button"
+            disabled={uploadState === "uploading" || uploadState === "done"}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
+            onClick={handleUploadToLibrary}
+          >
+            {uploadState === "uploading" ? (
+              <Loader2 size={14} className="animate-spin text-muted-foreground" />
+            ) : uploadState === "done" ? (
+              <CheckCircle2 size={14} className="text-green-500" />
+            ) : (
+              <Upload size={14} className="text-muted-foreground" />
+            )}
+            {uploadState === "uploading" ? "Uploading…" : uploadState === "done" ? "Uploaded!" : "Upload to library"}
+          </button>
+        </div>
       ) : null}
     </div>
   );
