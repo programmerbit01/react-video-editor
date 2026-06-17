@@ -217,6 +217,49 @@ const ModalUpload: React.FC<ModalUploadProps> = ({ type = "all" }) => {
     setFiles([]);
   }, [showUploadModal]);
 
+  // Ctrl+V / Cmd+V paste support
+  useEffect(() => {
+    if (!showUploadModal) return;
+    const handlePaste = async (e: ClipboardEvent) => {
+      // Don't intercept paste when user is typing in a text input
+      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+
+      // Files from clipboard (images, videos, audio)
+      const clipFiles = Array.from(e.clipboardData?.files ?? []);
+      if (clipFiles.length > 0) {
+        e.preventDefault();
+        const newFiles = clipFiles
+          .filter((f) => !files.some((existing) => existing.file?.name === f.name))
+          .map((f) => ({ id: genId(), file: f }));
+        if (!newFiles.length) return;
+        setFiles((prev) => [...newFiles, ...prev]);
+        const thumbData = await Promise.all(
+          newFiles
+            .filter((f) => f.file?.type.startsWith("video/"))
+            .map(async (f) => ({
+              name: f.file?.name ?? "",
+              thumb: f.file ? await extractVideoThumbnail(f.file) : ""
+            }))
+        );
+        setVideoThumbnails((prev) => ({
+          ...prev,
+          ...Object.fromEntries(thumbData.map((v) => [v.name, v.thumb]))
+        }));
+        return;
+      }
+
+      // Text from clipboard — if it looks like a URL, put it in the link field
+      const text = e.clipboardData?.getData("text")?.trim() ?? "";
+      if (text.startsWith("http://") || text.startsWith("https://")) {
+        e.preventDefault();
+        setVideoUrl(text);
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [showUploadModal, files]);
+
   return (
     <div>
       <Dialog open={showUploadModal} onOpenChange={setShowUploadModal}>
