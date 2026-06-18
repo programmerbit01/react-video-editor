@@ -1,12 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
-import { ITrackItem } from "@designcombo/types";
+import { ICaption, ITrackItem } from "@designcombo/types";
 import { Loader2, CheckCircle2 } from "lucide-react";
 import useCaptionTranscribeStore, { TranscriptResult } from "../store/use-caption-transcribe-store";
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import useStore from "../store/use-store";
 import { millisecondsToHHMMSS } from "../utils/format";
 import useCaptionStyleStore from "../store/use-caption-style-store";
+import BasicCaption from "./basic-caption";
+import { dispatch } from "@designcombo/events";
+import { EDIT_OBJECT } from "@designcombo/state";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -204,7 +207,7 @@ function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style
 
 export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) {
   const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
-  const { tracks } = useStore();
+  const { tracks, trackItemsMap } = useStore();
   const globalStyle = useCaptionStyleStore();
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -217,6 +220,21 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
   const captionTrackId = `${CAPTION_TRACK_PREFIX}${trackItem.id}`;
   const captionTrack = (tracks as any[]).find((t) => t.id === captionTrackId);
   const captionCount = captionTrack?.items?.length ?? 0;
+
+  // First caption item — used as the "template" for BasicCaption styling
+  const firstCaptionId: string | undefined = captionTrack?.items?.[0];
+  const firstCaptionItem = firstCaptionId ? (trackItemsMap as any)[firstCaptionId] as ITrackItem & ICaption : null;
+
+  // Copy style from first caption to all other captions in this track
+  const applyStyleToAll = () => {
+    if (!firstCaptionItem || !captionTrack?.items?.length) return;
+    const { words, text, top, left, width, height, ...styleDetails } = (firstCaptionItem as any).details ?? {};
+    const payload: Record<string, any> = {};
+    for (const id of captionTrack.items) {
+      if (id !== firstCaptionId) payload[id] = { details: styleDetails };
+    }
+    if (Object.keys(payload).length > 0) dispatch(EDIT_OBJECT, { payload });
+  };
 
   const handleGenerate = async () => {
     if (!src) return;
@@ -317,7 +335,7 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
         </div>
       )}
 
-      {/* ── Apply / Remove (visible once transcript exists) ── */}
+      {/* ── Apply / Remove ── */}
       {transcript && (
         captionCount > 0 ? (
           <Button
@@ -343,6 +361,25 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
             Apply Captions
           </Button>
         )
+      )}
+
+      {/* ── Built-in caption styling (shown when captions are on timeline) ── */}
+      {captionCount > 0 && firstCaptionItem && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between px-1">
+            <p className="text-xs font-semibold text-foreground">Caption Style</p>
+            {captionCount > 1 && (
+              <button
+                type="button"
+                onClick={applyStyleToAll}
+                className="text-[11px] text-primary hover:underline"
+              >
+                Apply to all ({captionCount})
+              </button>
+            )}
+          </div>
+          <BasicCaption trackItem={firstCaptionItem} />
+        </div>
       )}
     </div>
   );
