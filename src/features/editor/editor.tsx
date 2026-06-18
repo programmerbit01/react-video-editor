@@ -103,6 +103,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
     setFloatingControl,
     setLabelControlItem,
     setTypeControlItem,
+    setActiveMenuItem,
   } = useLayoutStore();
   const isLargeScreen = useIsLargeScreen();
 
@@ -168,6 +169,10 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
       if (trackItem) {
         setTrackItem(trackItem);
         setLayoutTrackItem(trackItem);
+        // Caption items → open global Captions tab instead of right sidebar
+        if ((trackItem as any).type === "caption") {
+          setActiveMenuItem("captions");
+        }
       } else console.log(transitionsMap[id]);
     } else {
       setTrackItem(null);

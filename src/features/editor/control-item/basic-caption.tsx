@@ -49,10 +49,14 @@ const getStyleNameFromFontName = (fontName: string) => {
 
 const BasicCaption = ({
   trackItem,
-  type
+  type,
+  excludeKeys,
+  inline
 }: {
   trackItem: ITrackItem & ICaption;
   type?: string;
+  excludeKeys?: string[];
+  inline?: boolean;
 }) => {
   const showAll = !type;
   const [activeModalAnimation, setActiveModalAnimation] =
@@ -476,7 +480,7 @@ const BasicCaption = ({
     <>
       {activeModalAnimation && (
         <div
-          className="absolute right-[275px] top-1/2 z-[200] mt-6 flex h-[calc(100%-180px)] w-[250px] -translate-y-1/2 rounded-lg bg-background/80 shadow-lg transition duration-300 ease-in-out"
+          className={`${inline ? "fixed right-4 top-1/4" : "absolute right-[275px] top-1/2 -translate-y-1/2"} z-[300] mt-6 flex h-[60vh] w-[250px] rounded-lg bg-background/80 shadow-lg transition duration-300 ease-in-out`}
           onMouseDown={(event) => event.stopPropagation()}
         >
           <div className="flex h-full flex-col gap-2 p-4">
@@ -501,17 +505,27 @@ const BasicCaption = ({
         </div>
       )}
 
-      <div className="flex lg:h-[calc(100vh-84px)] flex-1 flex-col overflow-hidden min-h-[340px]">
-        <ScrollArea className="h-full">
-          <div className="flex flex-col gap-2 px-4 py-4">
-            {components
-              .filter((comp) => showAll || comp.key === type)
-              .map((comp) => (
-                <React.Fragment key={comp.key}>{comp.component}</React.Fragment>
-              ))}
-          </div>
-        </ScrollArea>
-      </div>
+      {inline ? (
+        <div className="flex flex-col gap-2 px-4 py-4">
+          {components
+            .filter((comp) => (showAll || comp.key === type) && !excludeKeys?.includes(comp.key))
+            .map((comp) => (
+              <React.Fragment key={comp.key}>{comp.component}</React.Fragment>
+            ))}
+        </div>
+      ) : (
+        <div className="flex lg:h-[calc(100vh-84px)] flex-1 flex-col overflow-hidden min-h-[340px]">
+          <ScrollArea className="h-full">
+            <div className="flex flex-col gap-2 px-4 py-4">
+              {components
+                .filter((comp) => (showAll || comp.key === type) && !excludeKeys?.includes(comp.key))
+                .map((comp) => (
+                  <React.Fragment key={comp.key}>{comp.component}</React.Fragment>
+                ))}
+            </div>
+          </ScrollArea>
+        </div>
+      )}
     </>
   );
 };

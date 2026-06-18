@@ -1,6 +1,7 @@
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import useCaptionStyleStore from "../store/use-caption-style-store";
 import useStore from "../store/use-store";
 import BasicCaption from "../control-item/basic-caption";
@@ -116,14 +117,14 @@ export const Captions = () => {
     );
   }
 
-  // Captions exist — show full BasicCaption controls
+  // Captions exist — show full style controls (inline, scrollable)
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between px-4 pt-4">
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center justify-between px-4 pt-4 pb-2">
         <p className="text-sm font-semibold text-foreground">
           Caption Style
           <span className="ml-2 text-xs font-normal text-muted-foreground">
-            ({captionItems.length} caption{captionItems.length !== 1 ? "s" : ""})
+            ({captionItems.length})
           </span>
         </p>
         {captionItems.length > 1 && (
@@ -132,7 +133,15 @@ export const Captions = () => {
           </Button>
         )}
       </div>
-      <BasicCaption trackItem={firstCaption} />
+      <ScrollArea className="flex-1">
+        {/* captionPreset uses right-sidebar floating control — not usable here */}
+        {/* captionWords restructures captions destructively — skip in global context */}
+        <BasicCaption
+          trackItem={firstCaption}
+          excludeKeys={["captionPreset", "captionWords"]}
+          inline
+        />
+      </ScrollArea>
     </div>
   );
 };
