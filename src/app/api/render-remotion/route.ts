@@ -69,7 +69,7 @@ async function runRemotionExport(jobId: string, design: any) {
     codec: "h264",
     outputLocation: outputPath,
     inputProps,
-    concurrency: Math.max(1, Math.floor((os.cpus().length ?? 2) / 2)),
+    concurrency: 6,
     onProgress: ({ progress }) => {
       jobs.set(jobId, {
         status: "PROCESSING",
