@@ -96,7 +96,11 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
           }),
         });
 
-        if (!response.ok) throw new Error("Failed to submit export request.");
+        if (!response.ok) {
+          let msg = `Export request failed (${response.status})`;
+          try { const j = await response.json(); if (j?.message) msg = j.message; } catch {}
+          throw new Error(msg);
+        }
 
         const jobInfo = await response.json();
         const jobId = jobInfo.render.id;

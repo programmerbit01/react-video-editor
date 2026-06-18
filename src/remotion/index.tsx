@@ -16,11 +16,12 @@ const RemotionRoot = () => (
     calculateMetadata={async ({ props }) => {
       const design = (props as any).design;
       if (!design) return {};
+      const durationMs = Number(design.duration) || 5000;
       return {
         fps: 30,
-        durationInFrames: Math.max(1, Math.ceil((design.duration / 1000) * 30)),
-        width: design.size?.width ?? 1920,
-        height: design.size?.height ?? 1080,
+        durationInFrames: Math.max(1, Math.ceil((durationMs / 1000) * 30)),
+        width: Number(design.size?.width) || 1920,
+        height: Number(design.size?.height) || 1080,
       };
     }}
   />

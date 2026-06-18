@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import path from "path";
 import { mkdir } from "fs/promises";
+import os from "os";
 import { jobs } from "./jobs";
 
 // Bundle is created once and reused for the lifetime of the server process.
@@ -66,7 +67,7 @@ async function runRemotionExport(jobId: string, design: any) {
     codec: "h264",
     outputLocation: outputPath,
     inputProps,
-    concurrency: Math.max(1, Math.floor((require("os").cpus().length ?? 2) / 2)),
+    concurrency: Math.max(1, Math.floor((os.cpus().length ?? 2) / 2)),
     onProgress: ({ progress }) => {
       jobs.set(jobId, {
         status: "PROCESSING",
