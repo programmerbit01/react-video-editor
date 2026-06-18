@@ -307,8 +307,8 @@ const RESOLUTION_LABELS = {
 };
 
 const ENGINE_INFO: Record<string, { label: string; hint: string }> = {
-  ffmpeg: { label: "FFmpeg", hint: "Fast — animations limited" },
-  remotion: { label: "Remotion", hint: "All animations & transitions — slower" },
+  ffmpeg: { label: "FF", hint: "Fast — animations limited" },
+  remotion: { label: "RE", hint: "All animations & transitions — slower" },
 };
 
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {

@@ -52,7 +52,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
   exportType: "mp4",
   exportQuality: "high",
   exportResolution: "1080p",
-  exportEngine: "ffmpeg",
+  exportEngine: "remotion",
   progress: 0,
   error: null,
   displayProgressModal: false,
