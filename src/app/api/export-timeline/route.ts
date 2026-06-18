@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import type { Timeline, Track, TrackItem, Clip, Gap, NLEEditor } from "@chatoctopus/timeline";
+
+type NLEEditor = "fcpx" | "premiere" | "resolve" | "otio";
+type TrackItem = any;
+type Track = any;
+type Clip = any;
+type Gap = any;
+type Timeline = any;
 
 // Convert design JSON (Vapp) → @chatoctopus/timeline Timeline model → FCPXML/XMEML/OTIO
 export async function POST(request: Request) {

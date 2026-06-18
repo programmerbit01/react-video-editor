@@ -491,9 +491,9 @@ const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) =>
 
         const JSZip = (await import("jszip")).default;
         const zip = new JSZip();
-        const folder = zip.folder(projectName)!;
+        const folder = zip.folder(projectName) ?? zip;
         folder.file(`project.${ext}`, xml);
-        const mediaFolder = folder.folder("media")!;
+        const mediaFolder = folder.folder("media") ?? folder;
 
         let done = 0;
         await Promise.all(
