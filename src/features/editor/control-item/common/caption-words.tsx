@@ -339,32 +339,34 @@ const CaptionWords = ({
   }, []);
 
   const onChange = ({ type, value }: { type: string; value: any }) => {
-    let newData;
+    let newData: any[] | undefined;
     setData({ ...data, [type]: value });
     if (type === "linesPerCaption") {
       newData = regroupCaptions(captionsData, value);
     } else if (type === "wordsPerLine") {
       newData = transformCaptions(captionsData, value);
     } else if (type === "showObject") {
-      newData = captionsData.map((item) => ({
+      newData = captionsData?.map((item) => ({
         ...item,
         details: { ...item.details, showObject: value }
       }));
     }
+
+    // Only restructure if we have both the old data to delete and new data to add
+    if (!captionsData?.length || !newData?.length) return;
 
     dispatch(LAYER_DELETE, {
       payload: {
         trackItemIds: captionsData.map((t) => t.id)
       }
     });
-    console.log(newData);
     dispatch(ADD_ITEMS, {
       payload: {
         trackItems: newData,
         tracks: [
           {
             id: generateId(),
-            items: newData?.map((item) => item.id) || [],
+            items: newData.map((item) => item.id),
             type: "caption"
           }
         ]
@@ -374,6 +376,7 @@ const CaptionWords = ({
 
   const handleSetPosition = useCallback(
     debounce((left: number, top: number) => {
+      if (!captionsData?.length) return;
       const updates = captionsData.reduce(
         (acc, item) => ({
           ...acc,

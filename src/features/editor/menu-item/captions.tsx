@@ -1,14 +1,15 @@
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import useCaptionStyleStore from "../store/use-caption-style-store";
+import { useEffect } from "react";
 import useStore from "../store/use-store";
 import BasicCaption from "../control-item/basic-caption";
 import { ICaption, ITrackItem } from "@designcombo/types";
 import { dispatch } from "@designcombo/events";
 import { EDIT_OBJECT } from "@designcombo/state";
+import useLayoutStore from "../store/use-layout-store";
 
 export const Captions = () => {
   const { tracks, trackItemsMap } = useStore();
+  const { setTrackItem: setLayoutTrackItem } = useLayoutStore();
 
   // Collect all caption items via caption tracks
   const captionTracks = (tracks as any[]).filter(
@@ -20,6 +21,12 @@ export const Captions = () => {
     .filter(Boolean) as (ITrackItem & ICaption)[];
 
   const firstCaption = captionItems[0] ?? null;
+
+  // FloatingControl (Preset picker, font picker) needs trackItem in layout store
+  useEffect(() => {
+    if (firstCaption) setLayoutTrackItem(firstCaption as any);
+    return () => setLayoutTrackItem(null);
+  }, [firstCaption?.id]);
 
   const applyToAll = () => {
     if (!firstCaption || captionItems.length <= 1) return;
