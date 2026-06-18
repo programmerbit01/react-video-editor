@@ -40,10 +40,11 @@ async function runRemotionExport(jobId: string, design: any) {
   await mkdir(exportsDir, { recursive: true });
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
 
-  // Strip trailing /editor path that EDITOR_INTERNAL_ORIGIN may include
+  // Keep /editor in origin — headless Chrome accesses Next.js directly
+  // e.g. http://127.0.0.1:3001/editor so /api/proxy → /editor/api/proxy
   const serverOrigin = (
-    process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001"
-  ).replace(/\/editor\/?$/, "");
+    process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor"
+  ).replace(/\/$/, "");
 
   jobs.set(jobId, { status: "PROCESSING", progress: 5 });
 
