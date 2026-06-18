@@ -2,34 +2,8 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import path from "path";
 import { mkdir } from "fs/promises";
-import { accessSync, constants } from "fs";
 import os from "os";
 import { jobs } from "./jobs";
-
-// Use system Chromium/Chrome instead of letting Remotion download its own binary.
-// Set CHROMIUM_PATH env var to override; falls back to common Linux/Mac locations.
-function getChromiumPath(): string | undefined {
-  const candidates = [
-    process.env.CHROMIUM_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/snap/bin/chromium",
-  ];
-  for (const p of candidates) {
-    if (!p) continue;
-    try { accessSync(p, constants.X_OK); return p; } catch {}
-  }
-  return undefined;
-}
-
-const BROWSER_EXECUTABLE = getChromiumPath();
-if (BROWSER_EXECUTABLE) {
-  console.log("[render-remotion] using system browser:", BROWSER_EXECUTABLE);
-} else {
-  console.log("[render-remotion] no system browser found — Remotion will use its own");
-}
 
 // Bundle is created once and reused for the lifetime of the server process.
 let cachedBundleUrl: string | null = null;
@@ -84,7 +58,6 @@ async function runRemotionExport(jobId: string, design: any) {
     serveUrl,
     id: "main",
     inputProps,
-    ...(BROWSER_EXECUTABLE && { browserExecutable: BROWSER_EXECUTABLE }),
   });
 
   console.log(`[render-remotion] composition: ${composition.width}x${composition.height} @ ${composition.fps}fps, ${composition.durationInFrames} frames (${(composition.durationInFrames / composition.fps).toFixed(1)}s)`);
@@ -97,7 +70,6 @@ async function runRemotionExport(jobId: string, design: any) {
     outputLocation: outputPath,
     inputProps,
     concurrency: Math.max(1, Math.floor((os.cpus().length ?? 2) / 2)),
-    ...(BROWSER_EXECUTABLE && { browserExecutable: BROWSER_EXECUTABLE }),
     onProgress: ({ progress }) => {
       jobs.set(jobId, {
         status: "PROCESSING",
