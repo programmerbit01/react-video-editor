@@ -73,7 +73,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     codec: "h264",
     outputLocation: outputPath,
     inputProps,
-    concurrency: 6,
+    concurrency: 7,
     imageFormat: "jpeg",
     jpegQuality: 90,
     // cache decoded video frames in memory across Chrome instances
