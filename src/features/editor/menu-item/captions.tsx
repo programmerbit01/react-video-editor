@@ -1,6 +1,12 @@
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import useCaptionStyleStore, { CaptionStyle } from "../store/use-caption-style-store";
+import { Button } from "@/components/ui/button";
+import useCaptionStyleStore from "../store/use-caption-style-store";
+import useStore from "../store/use-store";
+import BasicCaption from "../control-item/basic-caption";
+import { ICaption, ITrackItem } from "@designcombo/types";
+import { dispatch } from "@designcombo/events";
+import { EDIT_OBJECT } from "@designcombo/state";
 
 function ColorSwatch({
   label,
@@ -34,69 +40,95 @@ function ColorSwatch({
 export const Captions = () => {
   const style = useCaptionStyleStore();
   const { setStyle } = style;
+  const { trackItemsMap } = useStore();
 
+  // All caption items in the project
+  const captionItems = Object.values(trackItemsMap as Record<string, any>).filter(
+    (item) => item?.type === "caption"
+  ) as (ITrackItem & ICaption)[];
+
+  const firstCaption = captionItems[0] ?? null;
+
+  const applyToAll = () => {
+    if (!firstCaption || captionItems.length <= 1) return;
+    const { words, text, top, left, width, height, ...styleDetails } =
+      (firstCaption as any).details ?? {};
+    const payload: Record<string, any> = {};
+    for (const item of captionItems) {
+      if (item.id !== firstCaption.id) payload[item.id] = { details: styleDetails };
+    }
+    if (Object.keys(payload).length > 0) dispatch(EDIT_OBJECT, { payload });
+  };
+
+  // No captions yet — show defaults panel
+  if (!firstCaption) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-foreground">Caption Defaults</p>
+          <p className="text-xs text-muted-foreground">
+            Applied when you generate captions on a clip.
+          </p>
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-border/40 bg-card/30 p-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground">Font size</Label>
+              <span className="text-xs font-medium tabular-nums">{style.fontSize}px</span>
+            </div>
+            <Slider
+              min={14}
+              max={56}
+              step={1}
+              value={[style.fontSize]}
+              onValueChange={([v]) => setStyle({ fontSize: v })}
+            />
+          </div>
+          <ColorSwatch label="Text color" value={style.color} onChange={(v) => setStyle({ color: v })} />
+          <ColorSwatch label="Active word color" value={style.activeColor} onChange={(v) => setStyle({ activeColor: v })} />
+          <ColorSwatch label="Highlight color" value={style.activeFillColor} onChange={(v) => setStyle({ activeFillColor: v })} />
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Default position</Label>
+            <div className="grid grid-cols-3 gap-1">
+              {(["top", "center", "bottom"] as const).map((pos) => (
+                <button
+                  key={pos}
+                  type="button"
+                  onClick={() => setStyle({ position: pos })}
+                  className={`rounded-lg py-1.5 text-xs font-medium capitalize transition-colors ${
+                    style.position === pos
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background/60 text-muted-foreground hover:bg-background"
+                  }`}
+                >
+                  {pos}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Captions exist — show full BasicCaption controls
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-foreground">Global Caption Defaults</p>
-        <p className="text-xs text-muted-foreground">
-          Applied to all new clips. Override per-clip in the clip&apos;s Captions tab.
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between px-4 pt-4">
+        <p className="text-sm font-semibold text-foreground">
+          Caption Style
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            ({captionItems.length} caption{captionItems.length !== 1 ? "s" : ""})
+          </span>
         </p>
+        {captionItems.length > 1 && (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={applyToAll}>
+            Apply to all
+          </Button>
+        )}
       </div>
-
-      <div className="space-y-4 rounded-2xl border border-border/40 bg-card/30 p-4">
-        {/* Font size */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs text-muted-foreground">Font size</Label>
-            <span className="text-xs font-medium tabular-nums">{style.fontSize}px</span>
-          </div>
-          <Slider
-            min={14}
-            max={56}
-            step={1}
-            value={[style.fontSize]}
-            onValueChange={([v]) => setStyle({ fontSize: v })}
-          />
-        </div>
-
-        <ColorSwatch
-          label="Text color"
-          value={style.color}
-          onChange={(v) => setStyle({ color: v })}
-        />
-        <ColorSwatch
-          label="Active word color"
-          value={style.activeColor}
-          onChange={(v) => setStyle({ activeColor: v })}
-        />
-        <ColorSwatch
-          label="Highlight color"
-          value={style.activeFillColor}
-          onChange={(v) => setStyle({ activeFillColor: v })}
-        />
-
-        {/* Position */}
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Default position</Label>
-          <div className="grid grid-cols-3 gap-1">
-            {(["top", "center", "bottom"] as const).map((pos) => (
-              <button
-                key={pos}
-                type="button"
-                onClick={() => setStyle({ position: pos })}
-                className={`rounded-lg py-1.5 text-xs font-medium capitalize transition-colors ${
-                  style.position === pos
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background/60 text-muted-foreground hover:bg-background"
-                }`}
-              >
-                {pos}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      <BasicCaption trackItem={firstCaption} />
     </div>
   );
 };
