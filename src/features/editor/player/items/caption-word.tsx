@@ -1,8 +1,6 @@
 import React from "react";
 import styled from "@emotion/styled";
 import { css, keyframes } from "@emotion/react";
-import { useCurrentPlayerFrame } from "../../hooks/use-current-frame";
-import useStore from "../../store/use-store";
 import { ANIMATION_CAPTION_LIST } from "./caption-animations";
 import {
   createAnimationFunctions,
@@ -113,6 +111,7 @@ interface CaptionWordProps {
   showObject: string;
   lineIndex?: number;
   currentLine?: number;
+  frame?: number; // absolute Remotion frame — works in both player and renderMedia
 }
 
 export const CaptionWord: React.FC<CaptionWordProps> = ({
@@ -130,11 +129,11 @@ export const CaptionWord: React.FC<CaptionWordProps> = ({
   animationNoneCaption,
   showObject,
   lineIndex,
-  currentLine
+  currentLine,
+  frame = 0
 }) => {
   const fps = 30;
-  const { playerRef } = useStore();
-  const currentFrame = useCurrentPlayerFrame(playerRef!);
+  const currentFrame = frame;
   const { start, end } = word;
   const startAtFrame = ((start + offsetFrom) / 1000) * fps;
   const endAtFrame = ((end + offsetFrom) / 1000) * fps;

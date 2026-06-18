@@ -31,6 +31,7 @@ export default function Caption({
   }
 
   const { fps, frame } = options;
+  const absoluteFrame = frame || 0; // global Remotion frame — correct in both player and renderMedia
   const { details, display, animations } = item as ICaption;
   const { animationIn, animationOut, animationTimed } = getAnimations(
     animations!,
@@ -39,7 +40,7 @@ export default function Caption({
     fps
   );
   const { from, durationInFrames } = calculateFrames(item.display, fps);
-  const currentFrame = (frame || 0) - (item.display.from * fps) / 1000;
+  const currentFrame = absoluteFrame - (item.display.from * fps) / 1000;
   const [firstWord] = details.words;
   const offsetFrom = display.from - firstWord.start;
 
@@ -104,7 +105,8 @@ export default function Caption({
             offsetFrom,
             fps,
             currentFrame,
-            globalOpacity
+            globalOpacity,
+            absoluteFrame
           )}
         </div>
       </ContentAnim>
@@ -388,7 +390,8 @@ function renderWords(
   offsetFrom: number,
   fps: number,
   currentFrame: number,
-  globalOpacity?: number
+  globalOpacity?: number,
+  absoluteFrame?: number
 ) {
   if (
     updatedDetails?.showObject === "line" &&
@@ -401,7 +404,8 @@ function renderWords(
       offsetFrom,
       fps,
       currentFrame,
-      globalOpacity
+      globalOpacity,
+      absoluteFrame
     );
   } else if (updatedDetails?.animation === "customAnimation1") {
     return renderCustomAnimation1Words(
@@ -409,7 +413,8 @@ function renderWords(
       updatedDetails,
       scaleFactor,
       offsetFrom,
-      globalOpacity
+      globalOpacity,
+      absoluteFrame
     );
   } else {
     return renderStandardWords(
@@ -417,7 +422,8 @@ function renderWords(
       updatedDetails,
       scaleFactor,
       offsetFrom,
-      globalOpacity
+      globalOpacity,
+      absoluteFrame
     );
   }
 }
@@ -429,7 +435,8 @@ function renderLineBasedWords(
   offsetFrom: number,
   fps: number,
   currentFrame: number,
-  globalOpacity?: number
+  globalOpacity?: number,
+  absoluteFrame?: number
 ) {
   const wordsPerLine = Math.ceil(
     item.details.words.length / updatedDetails.linesPerCaption
@@ -473,7 +480,8 @@ function renderLineBasedWords(
             globalOpacity,
             undefined,
             lineIndex,
-            currentLine
+            currentLine,
+            absoluteFrame
           )}
           key={`${lineIndex}-${wordIndex}`}
         />
@@ -487,7 +495,8 @@ function renderCustomAnimation1Words(
   updatedDetails: any,
   scaleFactor: number,
   offsetFrom: number,
-  globalOpacity?: number
+  globalOpacity?: number,
+  absoluteFrame?: number
 ) {
   const nonKeywordWords = item.details.words.filter(
     (word: any) => !word.is_keyword
@@ -527,7 +536,10 @@ function renderCustomAnimation1Words(
         offsetFrom,
         updatedDetails.animation || "",
         globalOpacity,
-        "word"
+        "word",
+        undefined,
+        undefined,
+        absoluteFrame
       )}
       key={index}
     />
@@ -539,7 +551,8 @@ function renderStandardWords(
   updatedDetails: any,
   scaleFactor: number,
   offsetFrom: number,
-  globalOpacity?: number
+  globalOpacity?: number,
+  absoluteFrame?: number
 ) {
   return item.details.words.map((word: any, index: number) => (
     <CaptionWord
@@ -549,7 +562,11 @@ function renderStandardWords(
         scaleFactor,
         offsetFrom,
         updatedDetails.animation || "",
-        globalOpacity
+        globalOpacity,
+        undefined,
+        undefined,
+        undefined,
+        absoluteFrame
       )}
       key={index}
     />
@@ -566,7 +583,8 @@ const createCaptionWordProps = (
   globalOpacity?: number,
   showObject?: string,
   lineIndex?: number,
-  currentLine?: number
+  currentLine?: number,
+  frame?: number
 ) => ({
   word,
   offsetFrom,
@@ -582,5 +600,6 @@ const createCaptionWordProps = (
   animationNoneCaption: false,
   showObject: showObject || updatedDetails?.showObject || "page",
   lineIndex,
-  currentLine
+  currentLine,
+  frame,
 });
