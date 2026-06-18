@@ -438,7 +438,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
 
         <div className="flex flex-col gap-1.5">
           <Button onClick={handleExport} className="w-full">
-            Export
+            Export Video
           </Button>
           <TimelineExportMenu stateManager={stateManager} />
         </div>
@@ -459,34 +459,79 @@ const TIMELINE_FORMAT_LABELS: Record<TimelineFormat, string> = {
 const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) => {
   const [open, setOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState("");
+  const [mediaMode, setMediaMode] = useState<"remote" | "local">("remote");
 
   const handleTimelineExport = async (format: TimelineFormat) => {
     setOpen(false);
     setExporting(true);
+    setExportProgress(mediaMode === "local" ? "Building timeline…" : "Exporting…");
     try {
       const design = { id: generateId(), ...stateManager.toJSON() };
       const res = await fetch("/api/export-timeline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ design, format }),
+        body: JSON.stringify({ design, format, mediaMode }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         alert(`Timeline export failed: ${j?.message ?? res.status}`);
         return;
       }
-      const blob = await res.blob();
-      const ext = format === "fcpx" ? "fcpxml" : format === "otio" ? "otio" : "xml";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `timeline.${ext}`;
-      a.click();
-      URL.revokeObjectURL(url);
+
+      if (mediaMode === "local") {
+        // Local mode: download media + package as ZIP
+        const data = await res.json();
+        const { xml, ext, projectName, mediaFiles } = data as {
+          xml: string;
+          ext: string;
+          projectName: string;
+          mediaFiles: Array<{ filename: string; url: string }>;
+        };
+
+        const JSZip = (await import("jszip")).default;
+        const zip = new JSZip();
+        const folder = zip.folder(projectName)!;
+        folder.file(`project.${ext}`, xml);
+        const mediaFolder = folder.folder("media")!;
+
+        let done = 0;
+        await Promise.all(
+          mediaFiles.map(async ({ filename, url }) => {
+            try {
+              const r = await fetch(url);
+              if (r.ok) mediaFolder.file(filename, await r.blob());
+            } catch {}
+            done++;
+            setExportProgress(`Downloading media… ${done}/${mediaFiles.length}`);
+          })
+        );
+
+        setExportProgress("Zipping…");
+        const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = `${projectName}.zip`;
+        a.click();
+        URL.revokeObjectURL(objUrl);
+      } else {
+        // Remote mode: direct file download
+        const blob = await res.blob();
+        const ext = format === "fcpx" ? "fcpxml" : format === "otio" ? "otio" : "xml";
+        const projName = (stateManager.toJSON() as any)?.name?.trim() || "Vapp Export";
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = `${projName}.${ext}`;
+        a.click();
+        URL.revokeObjectURL(objUrl);
+      }
     } catch (e) {
       alert(`Timeline export error: ${e}`);
     } finally {
       setExporting(false);
+      setExportProgress("");
     }
   };
 
@@ -494,13 +539,32 @@ const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) =>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" className="w-full justify-between text-xs" disabled={exporting}>
-          <span>{exporting ? "Exporting…" : "Export Timeline"}</span>
+          <span>{exporting ? exportProgress || "Exporting…" : "Export Timeline"}</span>
           <ChevronDown width={14} />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="bg-background z-[252] w-[--radix-popover-trigger-width] px-2 py-2">
+        {/* Media mode toggle */}
+        <div className="flex items-center gap-1.5 px-3 pb-2">
+          <span className="text-[10px] text-muted-foreground mr-1">Media:</span>
+          {(["remote", "local"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setMediaMode(mode)}
+              className={`rounded px-2 py-0.5 text-[10px] capitalize transition-colors ${
+                mediaMode === mode
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+
         <p className="px-3 pb-1.5 text-[10px] text-muted-foreground uppercase tracking-wide">
-          Import into editor
+          Export format
         </p>
         {(Object.entries(TIMELINE_FORMAT_LABELS) as [TimelineFormat, string][]).map(([fmt, label]) => (
           <div
@@ -512,7 +576,9 @@ const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) =>
           </div>
         ))}
         <p className="px-3 pt-2 text-[10px] text-muted-foreground leading-tight">
-          Cuts & clips only. Animations and text overlays are not exported.
+          {mediaMode === "local"
+            ? "Downloads media + project file as a ZIP folder."
+            : "Cuts & clips only. Uses remote URLs."}
         </p>
       </PopoverContent>
     </Popover>

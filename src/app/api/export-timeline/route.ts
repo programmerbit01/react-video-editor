@@ -7,74 +7,104 @@ export async function POST(request: Request) {
     const { exportTimeline, rational, ZERO, FRAME_RATES } = await import("@chatoctopus/timeline");
 
     const body = await request.json();
-    const { design, format = "fcpx" } = body as { design: any; format: NLEEditor };
+    const { design, format = "fcpx", mediaMode = "remote" } = body as {
+      design: any;
+      format: NLEEditor;
+      mediaMode?: "remote" | "local";
+    };
 
     if (!design) return NextResponse.json({ message: "design required" }, { status: 400 });
 
     const fps = Number(design.fps) || 30;
     const width = Number(design.size?.width) || 1920;
     const height = Number(design.size?.height) || 1080;
-    const frameRate = FRAME_RATES["30"]; // rational(30, 1)
+    const frameRate = FRAME_RATES["30"];
 
     const msToRational = (ms: number) => {
-      // ms → seconds → frame-aligned rational
       const frames = Math.round((ms / 1000) * fps);
       return rational(frames, fps);
     };
 
+    // If src is a proxy URL (/api/proxy?url=<encoded>), extract the real URL
+    const resolveMediaUrl = (s: string): string => {
+      if (!s) return s;
+      if (s.startsWith("http")) return s;
+      try {
+        const proxyMatch = s.match(/[?&]url=([^&]+)/);
+        if (proxyMatch) return decodeURIComponent(proxyMatch[1]);
+      } catch {}
+      return s;
+    };
+
     const itemsMap: Record<string, any> = design.trackItemsMap ?? {};
 
-    // Build one video and one audio track per source track
-    const videoItems: TrackItem[] = [];
-    const audioItems: TrackItem[] = [];
+    // Track media files for local mode (url → deduplicated filename)
+    const mediaFiles: Array<{ filename: string; url: string }> = [];
+    const urlToFilename = new Map<string, string>();
+    const usedFilenames = new Set<string>();
 
-    // Collect all video/audio clips sorted by timeline position
+    const getLocalFilename = (url: string): string => {
+      if (urlToFilename.has(url)) return urlToFilename.get(url)!;
+      const raw = url.split("/").pop()?.split("?")[0] ?? "media";
+      let name = raw;
+      let counter = 1;
+      while (usedFilenames.has(name)) {
+        const dot = raw.lastIndexOf(".");
+        name = dot >= 0 ? `${raw.slice(0, dot)}_${counter}${raw.slice(dot)}` : `${raw}_${counter}`;
+        counter++;
+      }
+      usedFilenames.add(name);
+      urlToFilename.set(url, name);
+      mediaFiles.push({ filename: name, url });
+      return name;
+    };
+
     const allClips = Object.values(itemsMap)
       .filter((item: any) => ["video", "audio", "image"].includes(item.type))
       .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
 
-    // Sort by track ordering so items respect track lanes
-    // For simplicity: video clips → V1 track, audio clips → A1 track
-    // (Multi-track support would require more complex mapping)
     const videoClips = allClips.filter((i: any) => i.type === "video" || i.type === "image");
     const audioClips = allClips.filter((i: any) => i.type === "audio");
 
     const buildTrackItems = (clips: any[]): TrackItem[] => {
       const result: TrackItem[] = [];
-      let cursor = 0; // current timeline position in ms
+      let cursor = 0;
 
       for (const clip of clips) {
         const from = Number(clip.display?.from ?? 0);
         const to = Number(clip.display?.to ?? 0);
         if (to <= from) continue;
 
-        // Insert gap if there's empty space before this clip
         if (from > cursor) {
           const gap: Gap = {
             kind: "gap",
-            sourceRange: {
-              startTime: ZERO,
-              duration: msToRational(from - cursor),
-            },
+            sourceRange: { startTime: ZERO, duration: msToRational(from - cursor) },
           };
           result.push(gap);
         }
 
         const trimFrom = Number(clip.trim?.from ?? 0);
         const clipDurationMs = to - from;
-        const src: string = clip.details?.src ?? "";
+        const rawSrc: string = clip.details?.src ?? "";
+        const resolvedUrl = resolveMediaUrl(rawSrc);
 
-        const mediaRef = src
+        let targetUrl = resolvedUrl;
+        if (mediaMode === "local" && resolvedUrl) {
+          const filename = getLocalFilename(resolvedUrl);
+          targetUrl = `./media/${filename}`;
+        }
+
+        const availableDurationMs = trimFrom + clipDurationMs;
+
+        const mediaRef = resolvedUrl
           ? {
               type: "external" as const,
-              name: src.split("/").pop() ?? "media",
-              targetUrl: src.startsWith("http") ? src : `file://${src}`,
+              name: resolvedUrl.split("/").pop()?.split("?")[0] ?? "media",
+              targetUrl,
               mediaKind: (clip.type === "image" ? "image" : "video") as "video" | "image",
               availableRange: {
-                startTime: msToRational(trimFrom),
-                duration: msToRational(
-                  Number(clip.trim?.to ?? clip.duration ?? clipDurationMs) - trimFrom
-                ),
+                startTime: ZERO,
+                duration: msToRational(availableDurationMs),
               },
             }
           : { type: "missing" as const, name: clip.name ?? "missing" };
@@ -98,48 +128,47 @@ export async function POST(request: Request) {
     };
 
     const tracks: Track[] = [];
-
     if (videoClips.length > 0) {
-      tracks.push({
-        kind: "video",
-        name: "V1",
-        items: buildTrackItems(videoClips),
-      });
+      tracks.push({ kind: "video", name: "V1", items: buildTrackItems(videoClips) });
     }
-
     if (audioClips.length > 0) {
-      tracks.push({
-        kind: "audio",
-        name: "A1",
-        items: buildTrackItems(audioClips),
-      });
+      tracks.push({ kind: "audio", name: "A1", items: buildTrackItems(audioClips) });
     }
 
     if (tracks.length === 0) {
       return NextResponse.json({ message: "No video or audio clips found in design" }, { status: 400 });
     }
 
+    const projectName = (design.name as string | undefined)?.trim() || "Vapp Export";
+
     const timeline: Timeline = {
-      name: design.name ?? "Vapp Export",
-      format: {
-        width,
-        height,
-        frameRate,
-        audioRate: 48000,
-      },
+      name: projectName,
+      format: { width, height, frameRate, audioRate: 48000 },
       tracks,
     };
 
     const warnings: string[] = [];
-    const output = exportTimeline(timeline, format, {
+    const xmlOutput = exportTimeline(timeline, format, {
       onWarning: (msg) => warnings.push(msg),
     });
 
     const ext = format === "fcpx" ? "fcpxml" : format === "otio" ? "otio" : "xml";
-    const filename = `vapp-export.${ext}`;
-    const contentType = format === "otio" ? "application/json" : "application/xml";
 
-    return new Response(output, {
+    // Local mode: return JSON so client can build ZIP
+    if (mediaMode === "local") {
+      return NextResponse.json({
+        xml: xmlOutput,
+        ext,
+        projectName,
+        mediaFiles,
+        warnings,
+      });
+    }
+
+    // Remote mode: return file directly
+    const filename = `${projectName}.${ext}`;
+    const contentType = format === "otio" ? "application/json" : "application/xml";
+    return new Response(xmlOutput, {
       status: 200,
       headers: {
         "Content-Type": contentType,

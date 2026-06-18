@@ -1,15 +1,14 @@
 import { Button } from "@/components/ui/button";
-import { useState } from "react";
-import { ICaption, ITrackItem } from "@designcombo/types";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { useState, useEffect, useRef } from "react";
+import { ITrackItem } from "@designcombo/types";
 import { Loader2, CheckCircle2 } from "lucide-react";
 import useCaptionTranscribeStore, { TranscriptResult } from "../store/use-caption-transcribe-store";
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import useStore from "../store/use-store";
 import { millisecondsToHHMMSS } from "../utils/format";
 import useCaptionStyleStore from "../store/use-caption-style-store";
-import BasicCaption from "./basic-caption";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT } from "@designcombo/state";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -208,11 +207,27 @@ function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style
   );
 }
 
+// ── color swatch ──────────────────────────────────────────────────────────────
+
+function ColorSwatch({ color, onChange }: { color: string; onChange: (c: string) => void }) {
+  return (
+    <label className="relative flex h-6 w-6 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-border/60">
+      <span className="absolute inset-0 rounded-full" style={{ background: color }} />
+      <input
+        type="color"
+        value={color}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+      />
+    </label>
+  );
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) {
   const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
-  const { tracks, trackItemsMap } = useStore();
+  const { tracks } = useStore();
   const globalStyle = useCaptionStyleStore();
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -226,20 +241,30 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
   const captionTrack = (tracks as any[]).find((t) => t.id === captionTrackId);
   const captionCount = captionTrack?.items?.length ?? 0;
 
-  // First caption item — used as the "template" for BasicCaption styling
-  const firstCaptionId: string | undefined = captionTrack?.items?.[0];
-  const firstCaptionItem = firstCaptionId ? (trackItemsMap as any)[firstCaptionId] as ITrackItem & ICaption : null;
+  // Local style state — mirrors globalStyle defaults
+  const [style, setStyle] = useState({
+    fontSize: globalStyle.fontSize,
+    color: globalStyle.color,
+    activeColor: globalStyle.activeColor,
+    activeFillColor: globalStyle.activeFillColor,
+    backgroundColor: globalStyle.backgroundColor,
+    position: globalStyle.position as "top" | "center" | "bottom",
+    highlightWords: false,
+  });
 
-  // Copy style from first caption to all other captions in this track
-  const applyStyleToAll = () => {
-    if (!firstCaptionItem || !captionTrack?.items?.length) return;
-    const { words, text, top, left, width, height, ...styleDetails } = (firstCaptionItem as any).details ?? {};
-    const payload: Record<string, any> = {};
-    for (const id of captionTrack.items) {
-      if (id !== firstCaptionId) payload[id] = { details: styleDetails };
-    }
-    if (Object.keys(payload).length > 0) dispatch(EDIT_OBJECT, { payload });
-  };
+  const isFirstRender = useRef(true);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Re-apply captions whenever style changes (debounced)
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    if (!transcript || captionCount === 0) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      applyCaption(trackItem, transcript, style);
+    }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [style]);
 
   const handleGenerate = async () => {
     if (!src) return;
@@ -352,15 +377,7 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
           </Button>
         ) : (
           <Button
-            onClick={() => applyCaption(trackItem, transcript, {
-              fontSize: globalStyle.fontSize,
-              color: globalStyle.color,
-              activeColor: globalStyle.activeColor,
-              activeFillColor: globalStyle.activeFillColor,
-              backgroundColor: globalStyle.backgroundColor,
-              position: globalStyle.position,
-              highlightWords: false,
-            })}
+            onClick={() => applyCaption(trackItem, transcript, style)}
             className="w-full"
           >
             Apply Captions
@@ -368,22 +385,89 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
         )
       )}
 
-      {/* ── Built-in caption styling (shown when captions are on timeline) ── */}
-      {captionCount > 0 && firstCaptionItem && (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between px-1">
-            <p className="text-xs font-semibold text-foreground">Caption Style</p>
-            {captionCount > 1 && (
-              <button
-                type="button"
-                onClick={applyStyleToAll}
-                className="text-[11px] text-primary hover:underline"
-              >
-                Apply to all ({captionCount})
-              </button>
-            )}
+      {/* ── Caption Style (shown when captions are applied) ── */}
+      {captionCount > 0 && (
+        <div className="flex flex-col gap-3 rounded-xl border border-border/50 bg-card/40 p-3">
+          <p className="text-xs font-semibold text-foreground">Caption Style</p>
+
+          {/* Font size */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground">Font size</Label>
+              <span className="text-xs text-muted-foreground">{style.fontSize}px</span>
+            </div>
+            <Slider
+              min={10}
+              max={80}
+              step={1}
+              value={[style.fontSize]}
+              onValueChange={([v]) => setStyle((s) => ({ ...s, fontSize: v }))}
+            />
           </div>
-          <BasicCaption trackItem={firstCaptionItem} />
+
+          {/* Text color */}
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Text color</Label>
+            <ColorSwatch
+              color={style.color}
+              onChange={(c) => setStyle((s) => ({ ...s, color: c }))}
+            />
+          </div>
+
+          {/* Highlight active word toggle */}
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Highlight active word</Label>
+            <button
+              type="button"
+              onClick={() => setStyle((s) => ({ ...s, highlightWords: !s.highlightWords }))}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${style.highlightWords ? "bg-primary" : "bg-muted"}`}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${style.highlightWords ? "translate-x-4" : "translate-x-1"}`}
+              />
+            </button>
+          </div>
+
+          {/* Active word color + highlight bg (only when highlight is on) */}
+          {style.highlightWords && (
+            <>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-muted-foreground">Active word color</Label>
+                <ColorSwatch
+                  color={style.activeColor}
+                  onChange={(c) => setStyle((s) => ({ ...s, activeColor: c }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-muted-foreground">Highlight color</Label>
+                <ColorSwatch
+                  color={style.activeFillColor}
+                  onChange={(c) => setStyle((s) => ({ ...s, activeFillColor: c }))}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Position */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-xs text-muted-foreground">Position</Label>
+            <div className="flex gap-1.5">
+              {(["top", "center", "bottom"] as const).map((pos) => (
+                <button
+                  key={pos}
+                  type="button"
+                  onClick={() => setStyle((s) => ({ ...s, position: pos }))}
+                  className={`flex-1 rounded-md border px-2 py-1 text-xs capitalize transition-colors ${
+                    style.position === pos
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border/50 text-muted-foreground hover:border-border"
+                  }`}
+                >
+                  {pos}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
