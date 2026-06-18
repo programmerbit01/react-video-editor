@@ -75,8 +75,9 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
         if (!payload) throw new Error("Payload is not defined");
 
-        const { muted } = useTrackVisibilityStore.getState();
+        const { muted, hidden } = useTrackVisibilityStore.getState();
         const mutedTrackIds = Object.keys(muted).filter((id) => muted[id]);
+        const hiddenTrackIds = Object.keys(hidden).filter((id) => hidden[id]);
 
         const isRemotion = exportEngine === "remotion";
         const apiBase = isRemotion ? "/api/render-remotion" : "/api/render";
@@ -90,6 +91,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
               fps: 30,
               maxDim,
               mutedTrackIds,
+              hiddenTrackIds,
               format: exportType,
               quality: exportQuality,
             },

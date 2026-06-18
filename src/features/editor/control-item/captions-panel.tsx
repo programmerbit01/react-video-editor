@@ -1,7 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { ITrackItem } from "@designcombo/types";
 import { Loader2, CheckCircle2 } from "lucide-react";
 import useCaptionTranscribeStore, { TranscriptResult } from "../store/use-caption-transcribe-store";
@@ -202,54 +200,14 @@ function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style
   );
 }
 
-function ColorSwatch({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <label className="relative flex h-8 w-full cursor-pointer items-center gap-2 rounded-xl border border-border/60 bg-background/60 px-2 hover:bg-background/80">
-        <span className="h-4 w-4 shrink-0 rounded-md border border-border/60" style={{ backgroundColor: value }} />
-        <span className="text-xs font-mono text-muted-foreground">{value}</span>
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-        />
-      </label>
-    </div>
-  );
-}
-
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) {
   const { resultsByMedia, setTranscriptResult } = useCaptionTranscribeStore();
   const { tracks } = useStore();
   const globalStyle = useCaptionStyleStore();
-  const [style, setStyle] = useState(() => ({
-    fontSize: globalStyle.fontSize,
-    color: globalStyle.color,
-    activeColor: globalStyle.activeColor,
-    activeFillColor: globalStyle.activeFillColor,
-    backgroundColor: globalStyle.backgroundColor,
-    position: globalStyle.position,
-    highlightWords: false
-  }));
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
-  const isFirstRender = useRef(true);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Auto-apply style changes in real-time when captions are already applied
-  useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return; }
-    if (!transcript || captionCount === 0) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      applyCaption(trackItem, transcript, style);
-    }, 400);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [style]);
 
   const src = (trackItem as any)?.details?.src as string | undefined;
   const transcript: TranscriptResult | undefined =
@@ -359,68 +317,32 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
         </div>
       )}
 
-      {/* ── Style controls (always visible once transcript exists) ── */}
+      {/* ── Apply / Remove (visible once transcript exists) ── */}
       {transcript && (
-        <>
-          <div className="space-y-3 rounded-2xl bg-card/30 p-3">
-            <p className="text-xs font-semibold text-foreground">Caption Style</p>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs text-muted-foreground">Font size</Label>
-                <span className="text-xs font-medium tabular-nums">{style.fontSize}px</span>
-              </div>
-              <Slider min={14} max={56} step={1} value={[style.fontSize]}
-                onValueChange={([v]) => setStyle((s) => ({ ...s, fontSize: v }))} />
-            </div>
-            <ColorSwatch label="Text color" value={style.color} onChange={(v) => setStyle((s) => ({ ...s, color: v }))} />
-
-            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-border/50 bg-background/40 px-3 py-2">
-              <span className="text-xs text-muted-foreground">Highlight active word</span>
-              <div
-                onClick={() => setStyle((s) => ({ ...s, highlightWords: !s.highlightWords }))}
-                className={`relative h-5 w-9 rounded-full transition-colors ${style.highlightWords ? "bg-primary" : "bg-muted"}`}
-              >
-                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${style.highlightWords ? "translate-x-4" : "translate-x-0.5"}`} />
-              </div>
-            </label>
-
-            {style.highlightWords && (
-              <>
-                <ColorSwatch label="Active word color" value={style.activeColor} onChange={(v) => setStyle((s) => ({ ...s, activeColor: v }))} />
-                <ColorSwatch label="Highlight color" value={style.activeFillColor} onChange={(v) => setStyle((s) => ({ ...s, activeFillColor: v }))} />
-              </>
-            )}
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Position</Label>
-              <div className="grid grid-cols-3 gap-1">
-                {(["top", "center", "bottom"] as const).map((pos) => (
-                  <button key={pos} type="button"
-                    onClick={() => setStyle((s) => ({ ...s, position: pos }))}
-                    className={`rounded-lg py-1.5 text-xs font-medium capitalize transition-colors ${
-                      style.position === pos
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-background/60 text-muted-foreground hover:bg-background"
-                    }`}
-                  >{pos}</button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {captionCount > 0 ? (
-            <Button
-              onClick={() => removeCaption(trackItem)}
-              variant="outline"
-              className="w-full text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
-            >
-              Remove Captions
-            </Button>
-          ) : (
-            <Button onClick={() => applyCaption(trackItem, transcript, style)} className="w-full">
-              Apply Captions
-            </Button>
-          )}
-        </>
+        captionCount > 0 ? (
+          <Button
+            onClick={() => removeCaption(trackItem)}
+            variant="outline"
+            className="w-full text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+          >
+            Remove Captions
+          </Button>
+        ) : (
+          <Button
+            onClick={() => applyCaption(trackItem, transcript, {
+              fontSize: globalStyle.fontSize,
+              color: globalStyle.color,
+              activeColor: globalStyle.activeColor,
+              activeFillColor: globalStyle.activeFillColor,
+              backgroundColor: globalStyle.backgroundColor,
+              position: globalStyle.position,
+              highlightWords: false,
+            })}
+            className="w-full"
+          >
+            Apply Captions
+          </Button>
+        )
       )}
     </div>
   );

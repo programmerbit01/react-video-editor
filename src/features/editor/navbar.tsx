@@ -436,11 +436,84 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
           </p>
         </div>
 
-        <div>
+        <div className="flex flex-col gap-1.5">
           <Button onClick={handleExport} className="w-full">
             Export
           </Button>
+          <TimelineExportMenu stateManager={stateManager} />
         </div>
+      </PopoverContent>
+    </Popover>
+  );
+};
+
+type TimelineFormat = "fcpx" | "premiere" | "resolve" | "otio";
+
+const TIMELINE_FORMAT_LABELS: Record<TimelineFormat, string> = {
+  fcpx: "Final Cut Pro (.fcpxml)",
+  premiere: "Adobe Premiere (.xml)",
+  resolve: "DaVinci Resolve (.xml)",
+  otio: "OpenTimelineIO (.otio)",
+};
+
+const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) => {
+  const [open, setOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const handleTimelineExport = async (format: TimelineFormat) => {
+    setOpen(false);
+    setExporting(true);
+    try {
+      const design = { id: generateId(), ...stateManager.toJSON() };
+      const res = await fetch("/api/export-timeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ design, format }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(`Timeline export failed: ${j?.message ?? res.status}`);
+        return;
+      }
+      const blob = await res.blob();
+      const ext = format === "fcpx" ? "fcpxml" : format === "otio" ? "otio" : "xml";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `timeline.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`Timeline export error: ${e}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" className="w-full justify-between text-xs" disabled={exporting}>
+          <span>{exporting ? "Exporting…" : "Export Timeline"}</span>
+          <ChevronDown width={14} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="bg-background z-[252] w-[--radix-popover-trigger-width] px-2 py-2">
+        <p className="px-3 pb-1.5 text-[10px] text-muted-foreground uppercase tracking-wide">
+          Import into editor
+        </p>
+        {(Object.entries(TIMELINE_FORMAT_LABELS) as [TimelineFormat, string][]).map(([fmt, label]) => (
+          <div
+            key={fmt}
+            className="flex h-8 cursor-pointer items-center rounded-sm px-3 text-xs hover:bg-zinc-800"
+            onClick={() => handleTimelineExport(fmt)}
+          >
+            {label}
+          </div>
+        ))}
+        <p className="px-3 pt-2 text-[10px] text-muted-foreground leading-tight">
+          Cuts & clips only. Animations and text overlays are not exported.
+        </p>
       </PopoverContent>
     </Popover>
   );

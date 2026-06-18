@@ -13,6 +13,7 @@
 		"format": "biome format . --write"
 	},
 	"dependencies": {
+		"@chatoctopus/timeline": "^0.2.0",
 		"@designcombo/animations": "^5.5.8",
 		"@designcombo/events": "^1.0.2",
 		"@designcombo/frames": "^0.0.3",

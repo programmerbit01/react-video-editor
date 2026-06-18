@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import Composition from "../features/editor/player/composition";
 import useStore from "../features/editor/store/use-store";
+import useTrackVisibilityStore from "../features/editor/store/use-track-visibility-store";
 
 // Rewrite relative /api/ paths to absolute so headless Chrome can load them.
 function rewriteUrls(design: any, serverOrigin: string): any {
@@ -12,13 +13,16 @@ function rewriteUrls(design: any, serverOrigin: string): any {
 interface RenderRootProps {
   design?: any;
   serverOrigin?: string;
+  mutedMap?: Record<string, boolean>;
+  hiddenMap?: Record<string, boolean>;
 }
 
-const RenderRoot = ({ design, serverOrigin }: RenderRootProps) => {
-  // Synchronously populate the Zustand store before Composition mounts.
+const RenderRoot = ({ design, serverOrigin, mutedMap = {}, hiddenMap = {} }: RenderRootProps) => {
+  // Synchronously populate the Zustand stores before Composition mounts.
   useMemo(() => {
     if (!design) return;
     const d = serverOrigin ? rewriteUrls(design, serverOrigin) : design;
+    useTrackVisibilityStore.setState({ muted: mutedMap, hidden: hiddenMap });
     useStore.setState({
       trackItemIds: d.trackItemIds ?? [],
       trackItemsMap: d.trackItemsMap ?? {},

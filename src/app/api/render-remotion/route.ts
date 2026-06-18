@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import path from "path";
 import { mkdir } from "fs/promises";
-import os from "os";
 import { jobs } from "./jobs";
 
 // Bundle is created once and reused for the lifetime of the server process.
@@ -33,7 +32,7 @@ async function getBundleUrl(): Promise<string> {
   return cachedBundleUrl;
 }
 
-async function runRemotionExport(jobId: string, design: any) {
+async function runRemotionExport(jobId: string, design: any, options: any) {
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
   const exportsDir = path.join(process.cwd(), "public", "exports");
@@ -52,8 +51,13 @@ async function runRemotionExport(jobId: string, design: any) {
 
   jobs.set(jobId, { status: "PROCESSING", progress: 10 });
 
-  // selectComposition runs calculateMetadata to get real width/height/duration
-  const inputProps = { design, serverOrigin };
+  // Build muted/hidden maps for useTrackVisibilityStore in RenderRoot
+  const mutedMap: Record<string, boolean> = {};
+  const hiddenMap: Record<string, boolean> = {};
+  for (const id of (options?.mutedTrackIds ?? [])) mutedMap[id] = true;
+  for (const id of (options?.hiddenTrackIds ?? [])) hiddenMap[id] = true;
+
+  const inputProps = { design, serverOrigin, mutedMap, hiddenMap };
   const composition = await selectComposition({
     serveUrl,
     id: "main",
@@ -87,7 +91,7 @@ async function runRemotionExport(jobId: string, design: any) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { design } = body;
+    const { design, options } = body;
     if (!design) {
       return NextResponse.json({ message: "design required" }, { status: 400 });
     }
@@ -95,7 +99,7 @@ export async function POST(request: Request) {
     const jobId = randomBytes(8).toString("hex");
     jobs.set(jobId, { status: "PENDING", progress: 0 });
 
-    runRemotionExport(jobId, design).catch((err) => {
+    runRemotionExport(jobId, design, options).catch((err) => {
       console.error(`[render-remotion] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
       jobs.set(jobId, {

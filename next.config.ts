@@ -20,6 +20,7 @@ const nextConfig: NextConfig = {
 		'@remotion/compositor-linux-arm64-musl',
 		'@remotion/compositor-win32-x64-msvc',
 		'esbuild',
+		'@chatoctopus/timeline',
 	],
 };
 
