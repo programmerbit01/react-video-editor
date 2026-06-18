@@ -70,11 +70,14 @@ async function runRemotionExport(jobId: string, design: any) {
     outputLocation: outputPath,
     inputProps,
     concurrency: 6,
+    imageFormat: "jpeg",
+    jpegQuality: 90,
+    // cache decoded video frames in memory across Chrome instances
+    offthreadVideoCacheSizeInBytes: 200 * 1024 * 1024,
     onProgress: ({ progress }) => {
-      jobs.set(jobId, {
-        status: "PROCESSING",
-        progress: Math.round(15 + progress * 83),
-      });
+      const pct = Math.round(15 + progress * 83);
+      jobs.set(jobId, { status: "PROCESSING", progress: pct });
+      if (pct % 10 === 0) console.log(`[render-remotion] job ${jobId}: ${pct}%`);
     },
   });
 
