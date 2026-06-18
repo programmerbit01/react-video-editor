@@ -100,7 +100,12 @@ function buildCaptionItem(trackItem: ITrackItem, segment: any, segIdx: number, s
     name: "caption",
     isMain: false,
     display: { from: displayFrom, to: displayTo },
-    metadata: { sourceTrackItemId: trackItem.id, addedCaption: true },
+    metadata: {
+      sourceTrackItemId: trackItem.id,
+      addedCaption: true,
+      // groupCaptionItems() in preset-picker and caption-words groups by sourceUrl
+      sourceUrl: (trackItem as any)?.details?.src ?? "",
+    },
     details: {
       text: String(segment.text || "").trim(),
       fontSize: style.fontSize,
