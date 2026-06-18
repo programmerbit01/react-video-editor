@@ -60,6 +60,7 @@ async function runRemotionExport(jobId: string, design: any) {
     inputProps,
   });
 
+  console.log(`[render-remotion] composition: ${composition.width}x${composition.height} @ ${composition.fps}fps, ${composition.durationInFrames} frames (${(composition.durationInFrames / composition.fps).toFixed(1)}s)`);
   jobs.set(jobId, { status: "PROCESSING", progress: 15 });
 
   await renderMedia({

@@ -16,7 +16,17 @@ const RemotionRoot = () => (
     calculateMetadata={async ({ props }) => {
       const design = (props as any).design;
       if (!design) return {};
-      const durationMs = Number(design.duration) || 5000;
+
+      // Prefer design.duration; fall back to max display.to across all track items
+      let durationMs = Number(design.duration) || 0;
+      if (!durationMs && design.trackItemsMap) {
+        const items = Object.values(design.trackItemsMap) as any[];
+        durationMs = Math.max(0, ...items.map((it: any) => Number(it.display?.to) || 0));
+      }
+      if (!durationMs) durationMs = 5000;
+
+      console.log("[remotion] duration:", durationMs, "ms →", Math.ceil((durationMs / 1000) * 30), "frames");
+
       return {
         fps: 30,
         durationInFrames: Math.max(1, Math.ceil((durationMs / 1000) * 30)),
