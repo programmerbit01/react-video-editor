@@ -154,9 +154,18 @@ export async function POST(request: Request) {
     };
 
     const warnings: string[] = [];
-    const xmlOutput = exportTimeline(timeline, format, {
+    let xmlOutput: string = exportTimeline(timeline, format, {
       onWarning: (msg) => warnings.push(msg),
     });
+
+    // Fix paths for local mode: library resolves ./media/ → absolute server path.
+    // Replace back to relative so NLEs find media next to the project file.
+    if (mediaMode === "local") {
+      const cwd = process.cwd().replace(/\\/g, "/");
+      xmlOutput = xmlOutput
+        .replace(new RegExp(`file://${cwd}/media/`, "g"), "./media/")
+        .replace(/file:\/\/\/[^"']*\/media\//g, "./media/");
+    }
 
     const ext = format === "fcpx" ? "fcpxml" : format === "otio" ? "otio" : "xml";
 

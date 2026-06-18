@@ -495,17 +495,17 @@ const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) =>
         folder.file(`project.${ext}`, xml);
         const mediaFolder = folder.folder("media") ?? folder;
 
+        // Fetch via server proxy to avoid CORS issues with R2 URLs
         let done = 0;
-        await Promise.all(
-          mediaFiles.map(async ({ filename, url }) => {
-            try {
-              const r = await fetch(url);
-              if (r.ok) mediaFolder.file(filename, await r.blob());
-            } catch {}
-            done++;
-            setExportProgress(`Downloading media… ${done}/${mediaFiles.length}`);
-          })
-        );
+        for (const { filename, url } of mediaFiles) {
+          try {
+            const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+            const r = await fetch(proxyUrl);
+            if (r.ok) mediaFolder.file(filename, await r.blob());
+          } catch {}
+          done++;
+          setExportProgress(`Downloading media… ${done}/${mediaFiles.length}`);
+        }
 
         setExportProgress("Zipping…");
         const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
