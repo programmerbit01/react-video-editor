@@ -40,12 +40,16 @@ function ColorSwatch({
 export const Captions = () => {
   const style = useCaptionStyleStore();
   const { setStyle } = style;
-  const { trackItemsMap } = useStore();
+  const { tracks, trackItemsMap } = useStore();
 
-  // All caption items in the project
-  const captionItems = Object.values(trackItemsMap as Record<string, any>).filter(
-    (item) => item?.type === "caption"
-  ) as (ITrackItem & ICaption)[];
+  // Collect all caption items via caption tracks (same pattern as captions-panel.tsx)
+  const captionTracks = (tracks as any[]).filter(
+    (t) => t.metadata?.captionTrack || t.type === "caption"
+  );
+  const allCaptionIds: string[] = captionTracks.flatMap((t) => t.items ?? []);
+  const captionItems = allCaptionIds
+    .map((id) => (trackItemsMap as any)[id])
+    .filter(Boolean) as (ITrackItem & ICaption)[];
 
   const firstCaption = captionItems[0] ?? null;
 
