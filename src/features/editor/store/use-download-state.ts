@@ -4,6 +4,7 @@ import useTrackVisibilityStore from "./use-track-visibility-store";
 
 export type ExportQuality = "high" | "medium" | "low";
 export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
+export type ExportEngine = "ffmpeg" | "remotion";
 
 // Longest-side max dimension — server uses canvas AR to compute actual W×H
 const RESOLUTION_MAX_DIM: Record<ExportResolution, number> = {
@@ -24,6 +25,7 @@ interface DownloadState {
   exportType: "json" | "mp4" | "fb-whatsapp" | "fb-web-highres";
   exportQuality: ExportQuality;
   exportResolution: ExportResolution;
+  exportEngine: ExportEngine;
   progress: number;
   error: string | null;
   output?: Output;
@@ -35,6 +37,7 @@ interface DownloadState {
     setExportType: (exportType: "json" | "mp4" | "fb-whatsapp" | "fb-web-highres") => void;
     setExportQuality: (q: ExportQuality) => void;
     setExportResolution: (r: ExportResolution) => void;
+    setExportEngine: (engine: ExportEngine) => void;
     setProgress: (progress: number) => void;
     setState: (state: Partial<DownloadState>) => void;
     setOutput: (output: Output) => void;
@@ -49,6 +52,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
   exportType: "mp4",
   exportQuality: "high",
   exportResolution: "1080p",
+  exportEngine: "ffmpeg",
   progress: 0,
   error: null,
   displayProgressModal: false,
@@ -58,6 +62,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
     setExportType: (exportType) => set({ exportType }),
     setExportQuality: (exportQuality) => set({ exportQuality }),
     setExportResolution: (exportResolution) => set({ exportResolution }),
+    setExportEngine: (exportEngine) => set({ exportEngine }),
     setProgress: (progress) => set({ progress }),
     setState: (state) => set({ ...state }),
     setOutput: (output) => set({ output }),
@@ -66,14 +71,17 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
     startExport: async () => {
       try {
         set({ exporting: true, displayProgressModal: true, progress: 0, error: null });
-        const { payload, exportQuality, exportResolution, exportType } = get();
+        const { payload, exportQuality, exportResolution, exportType, exportEngine } = get();
         const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
         if (!payload) throw new Error("Payload is not defined");
 
         const { muted } = useTrackVisibilityStore.getState();
         const mutedTrackIds = Object.keys(muted).filter((id) => muted[id]);
 
-        const response = await fetch(`/api/render`, {
+        const isRemotion = exportEngine === "remotion";
+        const apiBase = isRemotion ? "/api/render-remotion" : "/api/render";
+
+        const response = await fetch(apiBase, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -95,7 +103,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
 
         const checkStatus = async () => {
           try {
-            const statusResponse = await fetch(`/api/render/${jobId}`, {
+            const statusResponse = await fetch(`${apiBase}/${jobId}`, {
               headers: { "Content-Type": "application/json" },
             });
             if (!statusResponse.ok) throw new Error("Failed to fetch export status.");

@@ -306,9 +306,14 @@ const RESOLUTION_LABELS = {
   "2k":    "2K — Ultra quality",
 };
 
+const ENGINE_INFO: Record<string, { label: string; hint: string }> = {
+  ffmpeg: { label: "FFmpeg", hint: "Fast — animations limited" },
+  remotion: { label: "Remotion", hint: "All animations & transitions — slower" },
+};
+
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const isMediumScreen = useIsMediumScreen();
-  const { actions, exportType, exportQuality, exportResolution } = useDownloadState();
+  const { actions, exportType, exportQuality, exportResolution, exportEngine } = useDownloadState();
   const { size } = useStore();
   const [isExportTypeOpen, setIsExportTypeOpen] = useState(false);
   const [isQualityOpen, setIsQualityOpen] = useState(false);
@@ -406,6 +411,30 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
             ))}
           </PopoverContent>
         </Popover>
+
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
+            Export Engine
+          </p>
+          <div className="flex gap-1 rounded-md border border-border p-0.5">
+            {(["ffmpeg", "remotion"] as const).map((e) => (
+              <button
+                key={e}
+                onClick={() => actions.setExportEngine(e)}
+                className={`flex-1 rounded px-2 py-1 text-xs transition-colors ${
+                  exportEngine === e
+                    ? "bg-secondary text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {ENGINE_INFO[e].label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground leading-tight">
+            {ENGINE_INFO[exportEngine].hint}
+          </p>
+        </div>
 
         <div>
           <Button onClick={handleExport} className="w-full">
