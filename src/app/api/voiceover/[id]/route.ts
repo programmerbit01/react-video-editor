@@ -43,13 +43,15 @@ export async function GET(
       pollData?.generation_details ||
       {};
 
+    const outputType = generationDetails.output_type || (pollData?.raw?.output_type) || "audio";
     const outputUrl =
+      generationDetails.output_video_url ||
       generationDetails.output_audio_url ||
       pollData?.output_url ||
       pollData?.raw?.output_url ||
       "";
 
-    return NextResponse.json({ status, done, failed, output_url: outputUrl, generation_details: generationDetails });
+    return NextResponse.json({ status, done, failed, output_url: outputUrl, output_type: outputType, generation_details: generationDetails });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ message: "Internal server error", status: "unknown", done: false, failed: false }, { status: 500 });

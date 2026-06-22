@@ -78,6 +78,7 @@ function VoiceOverPanel() {
   const [step, setStep] = useState("");
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [resultUrl, setResultUrl] = useState<string>("");
+  const [resultType, setResultType] = useState<"audio" | "video">("audio");
   const [err, setErr] = useState<string>("");
   const srcRef = useRef<HTMLInputElement>(null);
   const smpRef = useRef<HTMLInputElement>(null);
@@ -165,9 +166,10 @@ function VoiceOverPanel() {
         if (!pr.ok) { if (pr.status >= 500) continue; break; }
         const pd = await pr.json();
         if (pd.done) {
-          const out = pd.output_url || pd.generation_details?.output_audio_url || "";
+          const out = pd.output_url || pd.generation_details?.output_video_url || pd.generation_details?.output_audio_url || "";
           if (!out) throw new Error("Done but no output URL");
           setResultUrl(out);
+          setResultType((pd.output_type || pd.generation_details?.output_type || "audio") as "audio" | "video");
           toast.success("Voice conversion complete!");
           loadHistory(1, false);
           return;
@@ -192,7 +194,10 @@ function VoiceOverPanel() {
     color: active ? "#ff6b00" : "#888",
   });
 
-  const AudioCard = ({ label, file, blobUrl, inputRef, onFile }: {
+  const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"]);
+  const isVideo = (f: File | null) => f ? VIDEO_EXTS.has(("." + f.name.split(".").pop()!).toLowerCase()) : false;
+
+  const MediaCard = ({ label, file, blobUrl, inputRef, onFile }: {
     label: string; file: File | null; blobUrl: string;
     inputRef: React.RefObject<HTMLInputElement | null>;
     onFile: (f: File) => void;
@@ -209,12 +214,14 @@ function VoiceOverPanel() {
             {file ? file.name : "Drop / click to upload"}
           </div>
         </div>
-        <input ref={inputRef} type="file" accept="audio/*" style={{ display: "none" }}
+        <input ref={inputRef} type="file" accept="audio/*,video/*" style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
       </div>
       {blobUrl && (
         <div style={{ borderTop: "1px solid #222", padding: "4px 10px 6px" }}>
-          <audio controls src={blobUrl} style={{ width: "100%", height: 26, display: "block" }} />
+          {isVideo(file)
+            ? <video controls src={blobUrl} style={{ width: "100%", maxHeight: 120, display: "block", borderRadius: 4 }} />
+            : <audio controls src={blobUrl} style={{ width: "100%", height: 26, display: "block" }} />}
         </div>
       )}
     </div>
@@ -238,9 +245,9 @@ function VoiceOverPanel() {
       {/* ── NEW CONVERSION ── */}
       {activeTab === "new" && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, gap: 0 }}>
-          <AudioCard label="Source Audio (to convert)" file={srcFile} blobUrl={srcBlobUrl} inputRef={srcRef}
+          <MediaCard label="Source Audio / Video (to convert)" file={srcFile} blobUrl={srcBlobUrl} inputRef={srcRef}
             onFile={(f) => { if (srcBlobUrl) URL.revokeObjectURL(srcBlobUrl); setSrcFile(f); setSrcBlobUrl(URL.createObjectURL(f)); setResultUrl(""); setErr(""); }} />
-          <AudioCard label="Voice Sample (target voice, 10–60s)" file={smpFile} blobUrl={smpBlobUrl} inputRef={smpRef}
+          <MediaCard label="Voice Sample (target voice, 10–60s)" file={smpFile} blobUrl={smpBlobUrl} inputRef={smpRef}
             onFile={(f) => { if (smpBlobUrl) URL.revokeObjectURL(smpBlobUrl); setSmpFile(f); setSmpBlobUrl(URL.createObjectURL(f)); setResultUrl(""); setErr(""); }} />
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
@@ -270,7 +277,9 @@ function VoiceOverPanel() {
               <div style={{ padding: 10 }}>
                 {loading && <p style={{ color: "#444", fontSize: 12, margin: 0, fontStyle: "italic" }}>Processing… takes 1–3 min</p>}
                 {err && <p style={{ color: "#f06060", fontSize: 12, margin: 0 }}>{err}</p>}
-                {resultUrl && <audio controls src={resultUrl} autoPlay style={{ width: "100%", display: "block" }} />}
+                {resultUrl && resultType === "video"
+                  ? <video controls src={resultUrl} autoPlay style={{ width: "100%", display: "block", borderRadius: 4 }} />
+                  : resultUrl && <audio controls src={resultUrl} autoPlay style={{ width: "100%", display: "block" }} />}
               </div>
             </div>
           )}
@@ -333,14 +342,18 @@ function VoiceOverPanel() {
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
             {histItem ? (() => {
               const gd = histItem.generation_details || {};
-              const outUrl = gd.output_audio_url || histItem.output_url || "";
+              const outUrl = gd.output_video_url || gd.output_audio_url || histItem.output_url || "";
+              const outType = gd.output_type || (gd.source_is_video ? "video" : "audio");
               const srcUrl = gd.source_audio_url || histItem.inputs?.source_audio_url || "";
+              const srcIsVideo = gd.source_is_video || false;
               return (
                 <>
                   {srcUrl && (
                     <div style={{ background: "#1a1a1a", borderRadius: 8, padding: "8px 10px" }}>
                       <div style={{ fontSize: 9, color: "#555", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 5 }}>Source</div>
-                      <audio controls src={srcUrl} style={{ width: "100%", height: 26, display: "block" }} />
+                      {srcIsVideo
+                        ? <video controls src={srcUrl} style={{ width: "100%", maxHeight: 120, display: "block", borderRadius: 4 }} />
+                        : <audio controls src={srcUrl} style={{ width: "100%", height: 26, display: "block" }} />}
                     </div>
                   )}
                   {outUrl && (
@@ -349,7 +362,9 @@ function VoiceOverPanel() {
                         <span style={{ fontSize: 9, color: "#4caf50", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1 }}>Converted</span>
                         <a href={outUrl} download style={{ marginLeft: "auto", fontSize: 10, color: "#ff6b00", textDecoration: "none", fontWeight: 600 }}>Download</a>
                       </div>
-                      <audio controls src={outUrl} autoPlay style={{ width: "100%", display: "block" }} />
+                      {outType === "video"
+                        ? <video controls src={outUrl} autoPlay style={{ width: "100%", display: "block", borderRadius: 4 }} />
+                        : <audio controls src={outUrl} autoPlay style={{ width: "100%", display: "block" }} />}
                     </div>
                   )}
                 </>
