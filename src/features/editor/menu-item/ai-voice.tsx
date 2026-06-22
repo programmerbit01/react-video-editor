@@ -65,6 +65,44 @@ function fileBasename(url: string) {
 
 const API_BASE = typeof window !== "undefined" && window.location.pathname.startsWith("/editor") ? "/editor" : "";
 
+const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"]);
+function isVideoFile(f: File | null) {
+  return f ? VIDEO_EXTS.has(("." + f.name.split(".").pop()!).toLowerCase()) : false;
+}
+
+function MediaCard({ label, file, blobUrl, inputRef, onFile }: {
+  label: string; file: File | null; blobUrl: string;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onFile: (f: File) => void;
+}) {
+  const vid = isVideoFile(file);
+  return (
+    <div style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", cursor: "pointer" }}
+        onClick={() => inputRef.current?.click()}>
+        <div style={{ width: 28, height: 28, borderRadius: 6, background: file ? "rgba(255,107,0,0.12)" : "#222", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Upload size={13} color={file ? "#ff6b00" : "#555"} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 9, color: "#555", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1 }}>{label}</div>
+          <div style={{ fontSize: 11, color: file ? "#dde0f0" : "#444", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+            {file ? file.name : "Drop / click to upload"}
+          </div>
+        </div>
+        <input ref={inputRef} type="file" accept="audio/*,video/*" style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
+      </div>
+      {blobUrl && (
+        <div style={{ borderTop: "1px solid #222", padding: "4px 10px 6px" }}>
+          {vid
+            ? <video controls src={blobUrl} style={{ width: "100%", maxHeight: 120, display: "block", borderRadius: 4 }} />
+            : <audio controls src={blobUrl} style={{ width: "100%", height: 26, display: "block" }} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Voice Over sub-panel ───────────────────────────────────────────────────
 function VoiceOverPanel() {
   const [activeTab, setActiveTab] = useState<"new" | "history">("new");
@@ -194,38 +232,6 @@ function VoiceOverPanel() {
     color: active ? "#ff6b00" : "#888",
   });
 
-  const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"]);
-  const isVideo = (f: File | null) => f ? VIDEO_EXTS.has(("." + f.name.split(".").pop()!).toLowerCase()) : false;
-
-  const MediaCard = ({ label, file, blobUrl, inputRef, onFile }: {
-    label: string; file: File | null; blobUrl: string;
-    inputRef: React.RefObject<HTMLInputElement | null>;
-    onFile: (f: File) => void;
-  }) => (
-    <div style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", cursor: "pointer" }}
-        onClick={() => inputRef.current?.click()}>
-        <div style={{ width: 28, height: 28, borderRadius: 6, background: file ? "rgba(255,107,0,0.12)" : "#222", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-          <Upload size={13} color={file ? "#ff6b00" : "#555"} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 9, color: "#555", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1 }}>{label}</div>
-          <div style={{ fontSize: 11, color: file ? "#dde0f0" : "#444", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
-            {file ? file.name : "Drop / click to upload"}
-          </div>
-        </div>
-        <input ref={inputRef} type="file" accept="audio/*,video/*" style={{ display: "none" }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
-      </div>
-      {blobUrl && (
-        <div style={{ borderTop: "1px solid #222", padding: "4px 10px 6px" }}>
-          {isVideo(file)
-            ? <video controls src={blobUrl} style={{ width: "100%", maxHeight: 120, display: "block", borderRadius: 4 }} />
-            : <audio controls src={blobUrl} style={{ width: "100%", height: 26, display: "block" }} />}
-        </div>
-      )}
-    </div>
-  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
