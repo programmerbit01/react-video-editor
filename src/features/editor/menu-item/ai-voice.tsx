@@ -34,16 +34,15 @@ function getVappParams() {
 }
 
 async function uploadToR2(file: File): Promise<string> {
-  const { vappHost, token, baseUrl } = getVappParams();
+  const { baseUrl, token } = getVappParams();
   const form = new FormData();
   form.append("file", file);
-  const url = vappHost
-    ? `${vappHost}/api/vapp/upload?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
-    : `/api/vapp/upload`;
-  const res = await fetch(url, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${baseUrl}/api/v1/upload_file`, { method: "POST", headers, body: form });
+  if (!res.ok) { const t = await res.text(); throw new Error(`Upload failed: ${res.status} — ${t.slice(0, 120)}`); }
   const data = await res.json();
-  const r2Url = data.directUrl || data.url || data.file_url || data.data?.url;
+  const r2Url = data.url || data.file_url || data.storage_url;
   if (!r2Url) throw new Error("No URL from upload");
   return r2Url;
 }
