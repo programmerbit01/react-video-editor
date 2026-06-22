@@ -63,6 +63,8 @@ function fileBasename(url: string) {
   try { return decodeURIComponent(url.split("/").pop()!.split("?")[0]) || "—"; } catch { return url.slice(-32); }
 }
 
+const API_BASE = typeof window !== "undefined" && window.location.pathname.startsWith("/editor") ? "/editor" : "";
+
 // ── Voice Over sub-panel ───────────────────────────────────────────────────
 function VoiceOverPanel() {
   const [activeTab, setActiveTab] = useState<"new" | "history">("new");
@@ -99,9 +101,8 @@ function VoiceOverPanel() {
     else loadingMoreRef.current = true;
     try {
       const { baseUrl, token } = getVappParams();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch(`${baseUrl}/vapp/user/jobs?perPage=${HIST_SIZE}&page=${page}&app_name=voiceover`, { headers });
+      const qs = new URLSearchParams({ baseUrl, token, page: String(page), perPage: String(HIST_SIZE) });
+      const res = await fetch(`${API_BASE}/api/voiceover?${qs}`);
       if (!res.ok) return;
       const data = await res.json();
       const items = (data.items || []).filter((j: any) => j.app_name === "voiceover");
@@ -144,37 +145,34 @@ function VoiceOverPanel() {
     timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - t0Ref.current) / 1000)), 1000);
     try {
       const { baseUrl, token } = getVappParams();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
 
       const [srcUrl, smpUrl] = await Promise.all([uploadToR2(srcFile), uploadToR2(smpFile)]);
 
       setStep("Queued…");
-      const sr = await fetch(`${baseUrl}/vapp/voiceover`, {
-        method: "POST", headers,
-        body: JSON.stringify({ source_audio_url: srcUrl, voice_sample_url: smpUrl, speaker_count: 1 }),
+      const sr = await fetch(`${API_BASE}/api/voiceover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseUrl, token, source_audio_url: srcUrl, voice_sample_url: smpUrl, speaker_count: 1 }),
       });
-      if (!sr.ok) { const t = await sr.text(); let m = t; try { m = JSON.parse(t)?.detail || t; } catch {} throw new Error(m); }
+      if (!sr.ok) { const t = await sr.json().catch(() => ({})); throw new Error(t?.message || "Failed to start voiceover"); }
       const { job_id } = await sr.json();
       setStep("Converting voice…");
 
-      const FAIL = new Set(["failed", "error", "cancelled", "canceled"]);
+      const pollQs = new URLSearchParams({ baseUrl, token });
       for (let i = 0; i < 300; i++) {
         await new Promise(r => setTimeout(r, 3000));
-        const pr = await fetch(`${baseUrl}/api/v1/predictions/${job_id}/result`, { headers });
+        const pr = await fetch(`${API_BASE}/api/voiceover/${job_id}?${pollQs}`);
         if (!pr.ok) { if (pr.status >= 500) continue; break; }
         const pd = await pr.json();
-        const st = (pd.status || "").toLowerCase();
-        if (st === "completed" || st === "succeeded" || st === "done") {
-          const gd = pd.raw?.generation_details || pd.generation_details || {};
-          const out = gd.output_audio_url || pd.output_url || pd.raw?.output_url || "";
+        if (pd.done) {
+          const out = pd.output_url || pd.generation_details?.output_audio_url || "";
           if (!out) throw new Error("Done but no output URL");
           setResultUrl(out);
           toast.success("Voice conversion complete!");
           loadHistory(1, false);
           return;
         }
-        if (FAIL.has(st)) throw new Error(pd.message || pd.error || "Voiceover failed");
+        if (pd.failed) throw new Error(pd.message || "Voiceover failed");
       }
       throw new Error("Timed out");
     } catch (e: any) {
