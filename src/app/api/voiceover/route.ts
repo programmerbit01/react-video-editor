@@ -6,8 +6,8 @@ const DEFAULT_VAPP_BASE = process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const baseUrl = String(body.baseUrl || DEFAULT_VAPP_BASE).replace(/\/+$/, "");
     const token = String(body.token || "").replace(/^Bearer\s+/i, "").trim();
+    const baseUrl = DEFAULT_VAPP_BASE;
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const baseUrl = String(searchParams.get("baseUrl") || DEFAULT_VAPP_BASE).replace(/\/+$/, "");
+    const baseUrl = DEFAULT_VAPP_BASE;
     const token = String(searchParams.get("token") || "").replace(/^Bearer\s+/i, "").trim();
     const page = searchParams.get("page") || "1";
     const perPage = searchParams.get("perPage") || "10";

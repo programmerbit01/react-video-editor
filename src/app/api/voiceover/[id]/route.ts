@@ -17,8 +17,8 @@ export async function GET(
     }
 
     const { searchParams } = new URL(request.url);
-    const baseUrl = String(searchParams.get("baseUrl") || DEFAULT_VAPP_BASE).replace(/\/+$/, "");
     const token = String(searchParams.get("token") || "").replace(/^Bearer\s+/i, "").trim();
+    const baseUrl = DEFAULT_VAPP_BASE;
 
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
