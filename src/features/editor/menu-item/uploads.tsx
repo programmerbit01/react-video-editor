@@ -406,7 +406,13 @@ export const Uploads = () => {
       </div>
 
       {/* Scrollable grid */}
-      <div className="flex-1 overflow-y-auto overscroll-contain px-4 min-h-0">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 min-h-0"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 150 && hasMore && !loadingMore)
+            handleLoadMore();
+        }}
+      >
         {/* Loading state */}
         {loading && (
           <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">

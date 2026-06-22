@@ -184,7 +184,13 @@ export const Videos = () => {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-4">
+      <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-4"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 150 && hasNextPage && !pexelsLoading)
+            handleLoadMore();
+        }}
+      >
         <div className="grid grid-cols-3 gap-2 pb-2">
           {pexelsVideos.map((video, index) => (
             <VideoItem key={video.id || index} video={video}
