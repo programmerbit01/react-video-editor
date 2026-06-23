@@ -482,6 +482,119 @@ Use a Zustand `alignmentReady` flag. While `false`, show a subtle "syncing…" i
 
 ---
 
+---
+
+## 🎙️ AI Voice & Voice Over
+
+The **AI Voice** tab (`src/features/editor/menu-item/ai-voice.tsx`) has two sub-panels: **AI Voice Generation** (TTS) and **Voice Over** (voice conversion via SeedVC).
+
+---
+
+### Voice Over — how it works end-to-end
+
+```
+Editor (browser)
+  → POST /editor/api/voiceover          (Next.js server-side proxy)
+  → vapp_server POST /vapp/voiceover    (FastAPI, localhost:8091)
+  → wgp_server POST /voiceover          (FastAPI, port 7870)
+      → SeedVC voice conversion
+      → (if source is video) ffmpeg merge converted audio back into video
+  → R2 upload → output_url returned
+```
+
+**Why a server-side proxy?**
+`vapp2.tomtap.ai/vapp/voiceover` returns 404 via Cloudflare (proxy only exposes certain paths). The Next.js route at `src/app/api/voiceover/route.ts` calls `http://127.0.0.1:8091` internally, bypassing Cloudflare entirely.
+
+---
+
+### Editor proxy routes
+
+| File | Method | Purpose |
+|------|--------|---------|
+| `src/app/api/voiceover/route.ts` | POST | Start voiceover job — proxies to `vapp_server /vapp/voiceover` |
+| `src/app/api/voiceover/route.ts` | GET | Fetch job history — proxies to `vapp_server /vapp/user/jobs?app_name=voiceover` |
+| `src/app/api/voiceover/[id]/route.ts` | GET | Poll job status — proxies to `vapp_server /api/v1/predictions/{id}/result` |
+
+All proxy routes use `DEFAULT_VAPP_BASE = process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091"` — never the client-provided `baseUrl`, which would go through Cloudflare.
+
+---
+
+### VoiceOverPanel — UI flow
+
+**File:** `src/features/editor/menu-item/ai-voice.tsx`
+
+1. User uploads **Source Audio/Video** (the content to convert) and **Voice Sample** (10–60s reference clip).
+2. On "Convert Voice" click → POST to `/editor/api/voiceover` with both files + token.
+3. Panel polls `/editor/api/voiceover/{job_id}` every 3 s until `done = true`.
+4. Result plays in `<audio>` or `<video>` depending on `output_type` returned by the server.
+5. History panel lists past jobs from GET `/editor/api/voiceover` with infinite scroll.
+
+**Component identity note:** `MediaCard` and `isVideoFile` are defined at **module level** (not inside the component function). Defining them inside would cause React to see a new component type on every render, unmounting the `<video>`/`<audio>` element and breaking playback.
+
+---
+
+### vapp_server — voiceover route (`vapp_server.py`)
+
+1. Receives source file + voice sample multipart upload.
+2. Calls wgp_server `/voiceover` (SeedVC voice conversion).
+3. wgp_server returns a WAV file.
+4. **If source was a video file** (`.mp4`, `.mov`, `.webm`, etc.) — ffmpeg merges the converted WAV into the original video:
+   ```
+   ffmpeg -i original_video -i converted.wav \
+     -c:v copy -c:a aac -b:a 192k \
+     -map 0:v:0 -map 1:a:0 -shortest \
+     output_voiceover.mp4
+   ```
+5. Uploads output to R2, updates PocketBase job record with `output_type`, `output_video_url`/`output_audio_url`, `source_is_video`.
+
+---
+
+### wgp_server — SeedVC voice conversion
+
+**File:** `wgp_server.py` → `voiceover_audio()`, delegates to `SeedVCBridge.replace_audio_file()`
+
+- Uses **SeedVC v1.0 Speech** mode (25 diffusion steps, `cfg_rate=0.5`).
+- Models offloaded via `mmgp` — stays in CPU RAM between requests, chunks to VRAM only during inference.
+- **cuDNN GRU fix** (`postprocessing/seedvc/modules/rmvpe.py`): For long audio, cuDNN's GRU rejects non-contiguous tensors. Fixed by chunking input into 2000-frame windows and running GRU sequentially with hidden state passed between chunks.
+
+---
+
+### Kokoro TTS (external, for fast long-form TTS)
+
+For long-form TTS (50+ minute audio), all autoregressive models in wan2gp (OmniVoice, Scenema, IndexTTS) take 2–3 hours on a 3090. **Kokoro v1.0** (flow-matching, non-autoregressive) generates the same audio in ~1–2 minutes.
+
+**Installed at:** `http://192.168.50.161:7770` (TTS-WebUI, `/home/para/vapp_tts/`)
+
+```bash
+# start
+bash /home/para/vapp_tts/start.sh
+# stop
+pkill -f "python server.py"
+```
+
+**Kokoro extension bug fix** (`venv/lib/python3.11/site-packages/tts_webui_extension/kokoro/main.py`): Gradio 5.x returns the display label (`"🇺🇸 🚺 Heart ❤️"`) instead of the internal voice code (`"af_heart"`). Fixed by resolving the display name via `CHOICES.get(voice, voice)` at the start of `tts()` and `tokenize_first()`.
+
+**Recommended voice:** `af_heart` (American English female, best quality).
+
+**Workflow for voice cloning on long audio:**
+1. Kokoro TTS → generate neutral voice audio (~2 min for 50 min script)
+2. wgp_server SeedVC → convert to target voice (~5–8 min)
+3. Total: ~10 min vs 3 hrs with OmniVoice direct
+
+---
+
+### Relevant files
+
+| File | Role |
+|------|------|
+| `src/features/editor/menu-item/ai-voice.tsx` | AI Voice + VoiceOver UI panel |
+| `src/app/api/voiceover/route.ts` | Next.js proxy — start job + fetch history |
+| `src/app/api/voiceover/[id]/route.ts` | Next.js proxy — poll job status |
+| `vapp_server/vapp_server.py` | Voiceover route, ffmpeg video merge, R2 upload |
+| `wan2gp/postprocessing/seedvc/modules/rmvpe.py` | GRU chunking fix for long audio |
+
+---
+
 ## 📝 License
 
 Copyright © 2025 [DesignCombo](https://designcombo.dev/).

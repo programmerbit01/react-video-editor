@@ -20,25 +20,11 @@ const MENU_ITEMS = [
     color: "text-sky-300"
   },
   {
-    id: "videos",
+    id: "stock",
     icon: Icons.video,
-    label: "Video",
-    ariaLabel: "Add and manage video content",
+    label: "Stock",
+    ariaLabel: "Stock media — video, images, audio",
     color: "text-rose-300"
-  },
-  {
-    id: "images",
-    icon: Icons.image,
-    label: "Picture",
-    ariaLabel: "Add and manage images",
-    color: "text-emerald-300"
-  },
-  {
-    id: "audios",
-    icon: Icons.audio,
-    label: "Audio",
-    ariaLabel: "Add and manage audio content",
-    color: "text-yellow-300"
   },
   {
     id: "texts",

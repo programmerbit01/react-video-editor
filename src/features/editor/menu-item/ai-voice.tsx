@@ -623,13 +623,13 @@ export const AiVoice = () => {
 
       {/* Voice Over panel */}
       {activeMainTab === "voiceover" && (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "10px 16px" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflowY: "auto", padding: "10px 16px" }}>
           <VoiceOverPanel />
         </div>
       )}
 
       {/* TTS panel */}
-      {activeMainTab === "tts" && <div className="space-y-4 p-4">
+      {activeMainTab === "tts" && <div className="space-y-4 p-4" style={{ overflowY: "auto", flex: 1 }}>
         {/* Text Input */}
         <div className="space-y-2">
           <Label className="font-sans text-xs font-semibold">

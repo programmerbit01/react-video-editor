@@ -14,7 +14,8 @@ export type IMenuItem =
   | "elements"
   | "ai-voice"
   | "sfx"
-  | "vapp";
+  | "vapp"
+  | "stock";
 export interface ILayoutState {
   cropTarget: ITrackItem | null;
   trackItem: ITrackItem | null;

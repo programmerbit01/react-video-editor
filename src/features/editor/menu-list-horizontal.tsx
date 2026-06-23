@@ -30,24 +30,14 @@ const menuItems: MenuItemData[] = [
     icon: Icons.type
   },
   {
-    id: "videos",
-    label: "Video",
+    id: "stock",
+    label: "Stock",
     icon: Icons.video
   },
   {
     id: "captions",
     label: "Captions",
     icon: Icons.captions
-  },
-  {
-    id: "images",
-    label: "Images",
-    icon: Icons.image
-  },
-  {
-    id: "audios",
-    label: "Audio",
-    icon: Icons.audio
   },
   {
     id: "transitions",

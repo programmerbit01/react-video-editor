@@ -12,6 +12,7 @@ import { Uploads } from "./uploads";
 import { AiVoice } from "./ai-voice";
 import { SFX } from "./sfx";
 import { VappMedia } from "./vapp-media";
+import { Stock } from "./stock";
 
 const ActiveMenuItem = () => {
   const { activeMenuItem } = useLayoutStore();
@@ -24,6 +25,9 @@ const ActiveMenuItem = () => {
   }
   if (activeMenuItem === "shapes") {
     return <Elements />;
+  }
+  if (activeMenuItem === "stock") {
+    return <Stock />;
   }
   if (activeMenuItem === "videos") {
     return <Videos />;
