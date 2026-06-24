@@ -4,37 +4,10 @@ import { Button } from "@/components/ui/button";
 import { CircleCheckIcon, XCircleIcon, XIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
+import { processFileUpload } from "@/utils/upload-service";
 import { useEffect, useRef, useState } from "react";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-
-async function uploadFileToCloud(fileUrl: string): Promise<string> {
-  // Fetch the rendered file
-  const res = await fetch(fileUrl);
-  if (!res.ok) throw new Error(`Failed to fetch video: ${res.status}`);
-  const blob = await res.blob();
-  const fileName = `render_${Date.now()}.mp4`;
-
-  // Get presigned URL
-  const presignRes = await fetch("/api/uploads/presign", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId: "PJ1nkaufw0hZPyhN7bWCP", fileNames: [fileName] }),
-  });
-  if (!presignRes.ok) throw new Error(`Presign failed: ${presignRes.status}`);
-  const { uploads } = await presignRes.json();
-  const { presignedUrl, url: publicUrl } = uploads[0];
-
-  // Upload to R2
-  const putRes = await fetch(presignedUrl, {
-    method: "PUT",
-    headers: { "Content-Type": "video/mp4" },
-    body: blob,
-  });
-  if (!putRes.ok) throw new Error(`Upload failed: ${putRes.status}`);
-
-  return publicUrl;
-}
 
 const DownloadProgressModal = () => {
   const { progress, displayProgressModal, output, error, actions } =
@@ -73,7 +46,6 @@ const DownloadProgressModal = () => {
     }
   }, [displayProgressModal]);
 
-  // Auto-download as soon as export completes
   useEffect(() => {
     if (isCompleted && output?.url && !autoDownloaded) {
       setAutoDownloaded(true);
@@ -82,20 +54,31 @@ const DownloadProgressModal = () => {
   }, [isCompleted, output]);
 
   const handleDownload = async () => {
-    if (output?.url) {
-      await download(output.url, "untitled.mp4");
-    }
+    if (output?.url) await download(output.url, "untitled.mp4");
   };
 
+  // Same flow as timeline "Upload to library"
   const handleUploadToCloud = async () => {
     if (!output?.url || cloudState !== "idle") return;
     setCloudState("uploading");
     try {
-      const url = await uploadFileToCloud(output.url);
-      setCloudUrl(url);
-      setCloudState("done");
-    } catch (e) {
-      console.error("Cloud upload failed:", e);
+      const res = await fetch(output.url);
+      const blob = await res.blob();
+      const file = new File([blob], `render_${Date.now()}.mp4`, { type: "video/mp4" });
+      const uploadData = await processFileUpload(`render-upload-${Date.now()}`, file, {
+        onProgress: () => {},
+        onStatus: (_, status) => {
+          if (status === "failed") setCloudState("error");
+        },
+      });
+      const url = uploadData?.filePath || uploadData?.metadata?.uploadedUrl || uploadData?.url;
+      if (url) {
+        setCloudUrl(url);
+        setCloudState("done");
+      } else {
+        setCloudState("error");
+      }
+    } catch {
       setCloudState("error");
     }
   };
@@ -149,7 +132,7 @@ const DownloadProgressModal = () => {
 
             {cloudState === "done" && cloudUrl && (
               <div className="flex flex-col items-center gap-1 w-full max-w-sm px-4">
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL (R2)</div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL</div>
                 <div className="flex w-full items-center gap-2">
                   <input
                     readOnly
@@ -157,11 +140,7 @@ const DownloadProgressModal = () => {
                     className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                     onClick={(e) => (e.target as HTMLInputElement).select()}
                   />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => navigator.clipboard.writeText(cloudUrl)}
-                  >
+                  <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(cloudUrl)}>
                     Copy
                   </Button>
                 </div>
@@ -178,27 +157,20 @@ const DownloadProgressModal = () => {
             <div className="max-h-40 w-full overflow-auto rounded-md bg-zinc-900 px-4 py-3 text-xs text-zinc-300 font-mono whitespace-pre-wrap">
               {error}
             </div>
-            <Button
-              variant="outline"
-              onClick={() => {
-                actions.setDisplayProgressModal(false);
-              }}
-            >
+            <Button variant="outline" onClick={() => actions.setDisplayProgressModal(false)}>
               Close
             </Button>
           </div>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-4">
-            <div className="text-5xl font-semibold">
-              {Math.floor(progress)}%
-            </div>
+            <div className="text-5xl font-semibold">{Math.floor(progress)}%</div>
             <div className="font-bold">Exporting...</div>
             <div className="text-sm tabular-nums text-muted-foreground">{fmt(elapsed)}</div>
             <div className="text-center text-zinc-500">
               <div>Closing the browser will not cancel the export.</div>
               <div>The video will be saved in your space.</div>
             </div>
-            <Button variant={"outline"} onClick={() => actions.setDisplayProgressModal(false)}>
+            <Button variant="outline" onClick={() => actions.setDisplayProgressModal(false)}>
               Cancel
             </Button>
           </div>
