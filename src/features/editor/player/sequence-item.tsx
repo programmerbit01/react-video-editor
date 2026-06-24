@@ -45,7 +45,6 @@ export const SequenceItem: Record<
   shape: (item, options) => Shape({ item: item as IShape, options }),
   video: (item, options) => Video({ item: item as IVideo, options }),
   audio: (item, options) => Audio({ item: item as IAudio, options }),
-  image: (item, options) => Image({ item: item as IImage, options }),
   illustration: (item, options) =>
     Illustration({ item: item as IIllustration, options }),
   progressBar: (item, options) =>
