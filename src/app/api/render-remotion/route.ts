@@ -124,7 +124,9 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     if (cloudUrl) {
       jobs.set(jobId, { status: "COMPLETED", progress: 100, cloud_url: cloudUrl });
     }
-    const videoUrl = cloudUrl || `/editor/api/render-remotion/${jobId}/download`;
+    // Absolute URL — vapp_server (same machine) can fetch this even if R2 upload failed
+    const editorBase = (process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor").replace(/\/$/, "");
+    const videoUrl = cloudUrl || `${editorBase}/api/render-remotion/${jobId}/download`;
     fetch(`${callbackBase}/vapp/render_callback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
