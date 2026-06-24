@@ -7,13 +7,12 @@ import { jobs } from "./jobs";
 async function uploadToR2(jobId: string, outputPath: string): Promise<string | null> {
   try {
     const fileName = `render_${jobId}.mp4`;
-    const internalOrigin = (process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor").replace(/\/$/, "");
 
-    // Get presigned URL
-    const presignRes = await fetch(`${internalOrigin}/api/uploads/presign`, {
+    // Call external presign service directly (avoids self-HTTP issues)
+    const presignRes = await fetch("https://upload-file-j43uyuaeza-uc.a.run.app/presigned", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "render", fileNames: [fileName] }),
+      body: JSON.stringify({ userId: "PJ1nkaufw0hZPyhN7bWCP", fileNames: [fileName] }),
     });
     if (!presignRes.ok) throw new Error(`presign failed: ${presignRes.status}`);
     const { uploads } = await presignRes.json();

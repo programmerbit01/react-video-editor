@@ -8,8 +8,36 @@ import { useEffect, useRef, useState } from "react";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
+async function uploadFileToCloud(fileUrl: string): Promise<string> {
+  // Fetch the rendered file
+  const res = await fetch(fileUrl);
+  if (!res.ok) throw new Error(`Failed to fetch video: ${res.status}`);
+  const blob = await res.blob();
+  const fileName = `render_${Date.now()}.mp4`;
+
+  // Get presigned URL
+  const presignRes = await fetch("/api/uploads/presign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: "PJ1nkaufw0hZPyhN7bWCP", fileNames: [fileName] }),
+  });
+  if (!presignRes.ok) throw new Error(`Presign failed: ${presignRes.status}`);
+  const { uploads } = await presignRes.json();
+  const { presignedUrl, url: publicUrl } = uploads[0];
+
+  // Upload to R2
+  const putRes = await fetch(presignedUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "video/mp4" },
+    body: blob,
+  });
+  if (!putRes.ok) throw new Error(`Upload failed: ${putRes.status}`);
+
+  return publicUrl;
+}
+
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, output, error, actions, uploadToCloud } =
+  const { progress, displayProgressModal, output, error, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
@@ -18,6 +46,9 @@ const DownloadProgressModal = () => {
   const [autoDownloaded, setAutoDownloaded] = useState(false);
   const startRef = useRef<number | null>(null);
   const finalRef = useRef<number>(0);
+
+  const [cloudState, setCloudState] = useState<"idle" | "uploading" | "done" | "error">("idle");
+  const [cloudUrl, setCloudUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (displayProgressModal && !isCompleted && !isFailed) {
@@ -33,7 +64,13 @@ const DownloadProgressModal = () => {
   }, [displayProgressModal, isCompleted, isFailed]);
 
   useEffect(() => {
-    if (!displayProgressModal) { startRef.current = null; setElapsed(0); setAutoDownloaded(false); }
+    if (!displayProgressModal) {
+      startRef.current = null;
+      setElapsed(0);
+      setAutoDownloaded(false);
+      setCloudState("idle");
+      setCloudUrl(null);
+    }
   }, [displayProgressModal]);
 
   // Auto-download as soon as export completes
@@ -47,6 +84,19 @@ const DownloadProgressModal = () => {
   const handleDownload = async () => {
     if (output?.url) {
       await download(output.url, "untitled.mp4");
+    }
+  };
+
+  const handleUploadToCloud = async () => {
+    if (!output?.url || cloudState !== "idle") return;
+    setCloudState("uploading");
+    try {
+      const url = await uploadFileToCloud(output.url);
+      setCloudUrl(url);
+      setCloudState("done");
+    } catch (e) {
+      console.error("Cloud upload failed:", e);
+      setCloudState("error");
     }
   };
 
@@ -80,31 +130,46 @@ const DownloadProgressModal = () => {
                 </div>
               )}
             </div>
-            <Button variant="outline" size="sm" onClick={handleDownload}>
-              Download again
-            </Button>
-            {output?.cloudUrl ? (
+
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleDownload}>
+                Download again
+              </Button>
+              {cloudState === "idle" && (
+                <Button variant="outline" size="sm" onClick={handleUploadToCloud}>
+                  Upload to Cloud
+                </Button>
+              )}
+              {cloudState === "uploading" && (
+                <Button variant="outline" size="sm" disabled>
+                  Uploading…
+                </Button>
+              )}
+            </div>
+
+            {cloudState === "done" && cloudUrl && (
               <div className="flex flex-col items-center gap-1 w-full max-w-sm px-4">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL (R2)</div>
                 <div className="flex w-full items-center gap-2">
                   <input
                     readOnly
-                    value={output.cloudUrl}
+                    value={cloudUrl}
                     className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                     onClick={(e) => (e.target as HTMLInputElement).select()}
                   />
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => navigator.clipboard.writeText(output!.cloudUrl!)}
+                    onClick={() => navigator.clipboard.writeText(cloudUrl)}
                   >
                     Copy
                   </Button>
                 </div>
               </div>
-            ) : uploadToCloud ? (
-              <div className="text-xs text-muted-foreground/60">Uploading to cloud…</div>
-            ) : null}
+            )}
+            {cloudState === "error" && (
+              <div className="text-xs text-red-400">Upload failed. Try again.</div>
+            )}
           </div>
         ) : isFailed ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6">
