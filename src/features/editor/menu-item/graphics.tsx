@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { dispatch } from "@designcombo/events";
-import { ADD_ITEMS } from "@designcombo/state";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getCurrentTime } from "../utils/time";
+import { getStateManagerRef } from "../utils/state-manager-ref";
 import { Plus, Trash2 } from "lucide-react";
 
 type GraphicType = "barchart" | "linechart" | "statcard" | "bulletlist";
@@ -34,6 +33,73 @@ const LABEL_STYLE: React.CSSProperties = {
   display: "block"
 };
 
+function addGraphicItem(
+  type: GraphicType,
+  details: Record<string, unknown>,
+  durationMs: number
+) {
+  const sm = getStateManagerRef();
+  if (!sm) return;
+
+  const state = sm.getState();
+  const from = getCurrentTime();
+  const to = from + durationMs;
+  const id = generateId();
+
+  const newItem = {
+    id,
+    name: type,
+    type,
+    display: { from, to },
+    details,
+    metadata: {}
+  };
+
+  // Find or create a suitable track ("helper" type accepts overlay items)
+  let tracks: any[] = [...(state.tracks || [])];
+  let targetTrack = tracks.find(
+    (t: any) => t.type === "helper" || t.type === "image"
+  );
+
+  if (!targetTrack) {
+    targetTrack = {
+      id: generateId(),
+      type: "helper",
+      items: [],
+      muted: false,
+      accepts: []
+    };
+    tracks = [...tracks, targetTrack];
+  } else {
+    // Replace the track object so we don't mutate in place
+    tracks = tracks.map((t: any) =>
+      t.id === targetTrack.id
+        ? { ...t, items: [...t.items, id] }
+        : t
+    );
+    // Mark the track as already updated
+    targetTrack = null;
+  }
+
+  // If we just created a new track, add the item id to it
+  if (targetTrack) {
+    tracks = tracks.map((t: any) =>
+      t.id === targetTrack.id
+        ? { ...t, items: [id] }
+        : t
+    );
+  }
+
+  const trackItemsMap = { ...(state.trackItemsMap || {}), [id]: newItem };
+  const trackItemIds = [...(state.trackItemIds || []), id];
+  const duration = Math.max(state.duration || 0, to);
+
+  sm.updateState(
+    { trackItemsMap, trackItemIds, tracks, duration },
+    { updateHistory: true, kind: "add" }
+  );
+}
+
 export const Graphics = () => {
   const [activeType, setActiveType] = useState<GraphicType>("barchart");
   const [duration, setDuration] = useState(7);
@@ -55,7 +121,9 @@ export const Graphics = () => {
   // Bullet list state
   const [bulletTitle, setBulletTitle] = useState("");
   const [bulletEmoji, setBulletEmoji] = useState("✅");
-  const [bulletItems, setBulletItems] = useState("First point\nSecond point\nThird point");
+  const [bulletItems, setBulletItems] = useState(
+    "First point\nSecond point\nThird point"
+  );
 
   const addDataRow = () =>
     setDataRows((prev) => [...prev, { label: "", value: "0" }]);
@@ -69,10 +137,6 @@ export const Graphics = () => {
     );
 
   const handleAdd = () => {
-    const from = getCurrentTime();
-    const to = from + duration * 1000;
-    const id = generateId();
-
     let details: Record<string, unknown> = {};
 
     if (activeType === "barchart") {
@@ -108,19 +172,7 @@ export const Graphics = () => {
       };
     }
 
-    dispatch(ADD_ITEMS, {
-      payload: {
-        trackItems: [
-          {
-            id,
-            type: activeType,
-            display: { from, to },
-            details,
-            metadata: {}
-          }
-        ]
-      }
-    });
+    addGraphicItem(activeType, details, duration * 1000);
   };
 
   return (
@@ -140,23 +192,36 @@ export const Graphics = () => {
           flexShrink: 0
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", marginBottom: 10 }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "#fff",
+            marginBottom: 10
+          }}
+        >
           Graphics
         </div>
         <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
-          {(["barchart", "linechart", "statcard"] as GraphicType[]).map((t) => (
-            <button
-              key={t}
-              style={TAB_STYLE(activeType === t)}
-              onClick={() => setActiveType(t)}
-            >
-              {t === "barchart" ? "Bar" : t === "linechart" ? "Line" : "Stat"}
-            </button>
-          ))}
+          {(["barchart", "linechart", "statcard"] as GraphicType[]).map(
+            (t) => (
+              <button
+                key={t}
+                style={TAB_STYLE(activeType === t)}
+                onClick={() => setActiveType(t)}
+              >
+                {t === "barchart" ? "Bar" : t === "linechart" ? "Line" : "Stat"}
+              </button>
+            )
+          )}
         </div>
         <div style={{ display: "flex", gap: 4 }}>
           <button
-            style={{ ...TAB_STYLE(activeType === "bulletlist"), flex: "none", width: "100%" }}
+            style={{
+              ...TAB_STYLE(activeType === "bulletlist"),
+              flex: "none",
+              width: "100%"
+            }}
             onClick={() => setActiveType("bulletlist")}
           >
             Bullet List
@@ -212,7 +277,10 @@ export const Graphics = () => {
               <label style={LABEL_STYLE}>Data rows</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {dataRows.map((row, i) => (
-                  <div key={i} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <div
+                    key={i}
+                    style={{ display: "flex", gap: 4, alignItems: "center" }}
+                  >
                     <Input
                       value={row.label}
                       onChange={(e) => updateRow(i, "label", e.target.value)}
@@ -379,7 +447,10 @@ export const Graphics = () => {
           flexShrink: 0
         }}
       >
-        <Button onClick={handleAdd} className="w-full h-8 text-xs cursor-pointer">
+        <Button
+          onClick={handleAdd}
+          className="w-full h-8 text-xs cursor-pointer"
+        >
           + Add to Timeline
         </Button>
       </div>
