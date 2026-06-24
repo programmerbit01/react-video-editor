@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, output, error, actions } =
+  const { progress, displayProgressModal, output, error, actions, uploadToCloud } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
@@ -83,6 +83,28 @@ const DownloadProgressModal = () => {
             <Button variant="outline" size="sm" onClick={handleDownload}>
               Download again
             </Button>
+            {output?.cloudUrl ? (
+              <div className="flex flex-col items-center gap-1 w-full max-w-sm px-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL (R2)</div>
+                <div className="flex w-full items-center gap-2">
+                  <input
+                    readOnly
+                    value={output.cloudUrl}
+                    className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigator.clipboard.writeText(output!.cloudUrl!)}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              </div>
+            ) : uploadToCloud ? (
+              <div className="text-xs text-muted-foreground/60">Uploading to cloud…</div>
+            ) : null}
           </div>
         ) : isFailed ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6">

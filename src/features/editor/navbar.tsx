@@ -333,7 +333,7 @@ const ENGINE_INFO: Record<string, { label: string; hint: string }> = {
 
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const isMediumScreen = useIsMediumScreen();
-  const { actions, exportType, exportQuality, exportResolution, exportEngine } = useDownloadState();
+  const { actions, exportType, exportQuality, exportResolution, exportEngine, uploadToCloud, output } = useDownloadState();
   const { size } = useStore();
   const [isExportTypeOpen, setIsExportTypeOpen] = useState(false);
   const [isQualityOpen, setIsQualityOpen] = useState(false);
@@ -456,10 +456,59 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
           </p>
         </div>
 
+        {/* Upload to Cloud checkbox */}
+        <div className="flex items-center gap-2">
+          <input
+            id="upload-cloud"
+            type="checkbox"
+            checked={uploadToCloud}
+            onChange={(e) => actions.setUploadToCloud(e.target.checked)}
+            className="h-3.5 w-3.5 accent-amber-400 cursor-pointer"
+          />
+          <label htmlFor="upload-cloud" className="text-xs text-muted-foreground cursor-pointer select-none">
+            Upload to Cloud (R2)
+          </label>
+        </div>
+
         <div className="flex flex-col gap-1.5">
           <Button onClick={handleExport} className="w-full">
             Export Video
           </Button>
+
+          {/* After export: show download + cloud URL */}
+          {output?.url && (
+            <div className="flex flex-col gap-1 pt-1 border-t border-border">
+              <a
+                href={output.url}
+                download
+                className="text-xs text-center text-amber-400 hover:underline"
+              >
+                ↓ Download
+              </a>
+              {output.cloudUrl ? (
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Cloud URL</span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      readOnly
+                      value={output.cloudUrl}
+                      className="flex-1 text-[10px] bg-background border border-border rounded px-1.5 py-0.5 text-foreground"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                    />
+                    <button
+                      className="text-[10px] text-amber-400 hover:underline shrink-0"
+                      onClick={() => navigator.clipboard.writeText(output.cloudUrl!)}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ) : uploadToCloud ? (
+                <span className="text-[10px] text-muted-foreground text-center">Uploading to cloud…</span>
+              ) : null}
+            </div>
+          )}
+
           <TimelineExportMenu stateManager={stateManager} />
         </div>
       </PopoverContent>

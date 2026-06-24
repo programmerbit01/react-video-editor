@@ -1,8 +1,40 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import path from "path";
-import { mkdir } from "fs/promises";
+import { mkdir, readFile } from "fs/promises";
 import { jobs } from "./jobs";
+
+async function uploadToR2(jobId: string, outputPath: string): Promise<string | null> {
+  try {
+    const fileName = `render_${jobId}.mp4`;
+    const internalOrigin = (process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor").replace(/\/$/, "");
+
+    // Get presigned URL
+    const presignRes = await fetch(`${internalOrigin}/api/uploads/presign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "render", fileNames: [fileName] }),
+    });
+    if (!presignRes.ok) throw new Error(`presign failed: ${presignRes.status}`);
+    const { uploads } = await presignRes.json();
+    const { presignedUrl, url: publicUrl } = uploads[0];
+
+    // Upload file to R2
+    const fileBuffer = await readFile(outputPath);
+    const putRes = await fetch(presignedUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "video/mp4" },
+      body: fileBuffer,
+    });
+    if (!putRes.ok) throw new Error(`R2 PUT failed: ${putRes.status}`);
+
+    console.log(`[render-remotion] uploaded to R2: ${publicUrl}`);
+    return publicUrl;
+  } catch (e) {
+    console.warn(`[render-remotion] R2 upload failed for ${jobId}:`, e);
+    return null;
+  }
+}
 
 // Bundle is created once and reused for the lifetime of the server process.
 let cachedBundleUrl: string | null = null;
@@ -87,14 +119,19 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
 
   jobs.set(jobId, { status: "COMPLETED", progress: 100 });
 
-  // Notify vapp_server so wait_for_job MCP tool wakes up immediately
+  // Upload to R2 and notify vapp_server with public URL
   const callbackBase = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
-  const videoUrl = `${process.env.EDITOR_PUBLIC_BASE || ""}/editor/api/render-remotion/${jobId}/download`;
-  fetch(`${callbackBase}/vapp/render_callback`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job_id: jobId, status: "COMPLETED", video_url: videoUrl }),
-  }).catch(() => {}); // fire-and-forget, non-blocking
+  uploadToR2(jobId, outputPath).then((cloudUrl) => {
+    if (cloudUrl) {
+      jobs.set(jobId, { status: "COMPLETED", progress: 100, cloud_url: cloudUrl });
+    }
+    const videoUrl = cloudUrl || `/editor/api/render-remotion/${jobId}/download`;
+    fetch(`${callbackBase}/vapp/render_callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: jobId, status: "COMPLETED", video_url: videoUrl }),
+    }).catch(() => {});
+  });
 }
 
 export async function POST(request: Request) {
@@ -140,6 +177,7 @@ export async function GET(request: Request) {
       status: job.status,
       progress: job.progress,
       error: job.error,
+      cloud_url: job.cloud_url || null,
       presigned_url:
         job.status === "COMPLETED"
           ? `/api/render-remotion/${id}/download`

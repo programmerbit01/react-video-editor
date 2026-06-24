@@ -16,6 +16,7 @@ export async function GET(
       status: job.status,
       progress: job.progress,
       error: job.error,
+      cloud_url: job.cloud_url || null,
       presigned_url:
         job.status === "COMPLETED"
           ? `/api/render-remotion/${id}/download`

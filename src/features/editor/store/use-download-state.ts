@@ -17,6 +17,7 @@ const RESOLUTION_MAX_DIM: Record<ExportResolution, number> = {
 interface Output {
   url: string;
   type: string;
+  cloudUrl?: string;
 }
 
 interface DownloadState {
@@ -26,6 +27,7 @@ interface DownloadState {
   exportQuality: ExportQuality;
   exportResolution: ExportResolution;
   exportEngine: ExportEngine;
+  uploadToCloud: boolean;
   progress: number;
   error: string | null;
   output?: Output;
@@ -38,6 +40,7 @@ interface DownloadState {
     setExportQuality: (q: ExportQuality) => void;
     setExportResolution: (r: ExportResolution) => void;
     setExportEngine: (engine: ExportEngine) => void;
+    setUploadToCloud: (v: boolean) => void;
     setProgress: (progress: number) => void;
     setState: (state: Partial<DownloadState>) => void;
     setOutput: (output: Output) => void;
@@ -53,6 +56,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
   exportQuality: "high",
   exportResolution: "1080p",
   exportEngine: "remotion",
+  uploadToCloud: false,
   progress: 0,
   error: null,
   displayProgressModal: false,
@@ -63,6 +67,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
     setExportQuality: (exportQuality) => set({ exportQuality }),
     setExportResolution: (exportResolution) => set({ exportResolution }),
     setExportEngine: (exportEngine) => set({ exportEngine }),
+    setUploadToCloud: (uploadToCloud) => set({ uploadToCloud }),
     setProgress: (progress) => set({ progress }),
     setState: (state) => set({ ...state }),
     setOutput: (output) => set({ output }),
@@ -119,7 +124,12 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             set({ progress });
 
             if (status === "COMPLETED") {
-              set({ exporting: false, output: { url, type: get().exportType } });
+              const cloudUrl = statusInfo.render.cloud_url || undefined;
+              set({ exporting: false, output: { url, type: get().exportType, cloudUrl } });
+              // Keep polling until cloud_url arrives (R2 upload is async after render)
+              if (!cloudUrl && get().uploadToCloud) {
+                setTimeout(checkStatus, 3000);
+              }
             } else if (status === "PROCESSING" || status === "PENDING") {
               setTimeout(checkStatus, 2500);
             } else if (status === "FAILED") {
