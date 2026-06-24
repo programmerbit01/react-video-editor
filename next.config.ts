@@ -26,7 +26,6 @@ const nextConfig: NextConfig = {
 	serverExternalPackages: [
 		'@napi-rs/canvas',
 		'remotion',
-		'recharts',
 		'@remotion/bundler',
 		'@remotion/renderer',
 		// platform-specific native compositor binaries — webpack must not bundle these
