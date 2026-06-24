@@ -140,8 +140,26 @@ export default function Navbar({
     triggerSaveSuccess();
   };
 
+  const patchDesignMetadata = (data: Record<string, unknown>): Record<string, unknown> => {
+    const map = (data?.trackItemsMap ?? {}) as Record<string, Record<string, unknown>>;
+    for (const [, item] of Object.entries(map)) {
+      if (item?.type !== "video") continue;
+      const details = (item.details ?? {}) as Record<string, unknown>;
+      const meta = (item.metadata ?? {}) as Record<string, unknown>;
+      if (!meta.previewUrl && details.src) {
+        // decode proxy URL if needed so the browser can load the thumbnail cross-origin
+        let src = String(details.src);
+        if (src.startsWith("/api/proxy?url=")) {
+          try { src = decodeURIComponent(src.replace("/api/proxy?url=", "")); } catch {}
+        }
+        item.metadata = { ...meta, previewUrl: src };
+      }
+    }
+    return data;
+  };
+
   const handleLoadProject = (project: SavedProject) => {
-    dispatch(DESIGN_LOAD, { payload: project.data });
+    dispatch(DESIGN_LOAD, { payload: patchDesignMetadata(project.data as Record<string, unknown>) });
     setTitle(project.name);
     setProjectName(project.name);
     setCurrentProjectId(project.id);

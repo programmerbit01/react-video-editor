@@ -132,8 +132,8 @@ interface VideoProps extends TrimmableProps {
   trim: ITrim;
   duration: number;
   src: string;
-  metadata: Partial<IMetadata> & {
-    previewUrl: string;
+  metadata?: Partial<IMetadata> & {
+    previewUrl?: string;
   };
 }
 class Video extends Trimmable {
@@ -207,7 +207,7 @@ class Video extends Trimmable {
     this.transparentCorners = false;
     this.hasBorders = false;
 
-    this.previewUrl = props.metadata.previewUrl;
+    this.previewUrl = props.metadata?.previewUrl ?? "";
     this.initOffscreenCanvas();
     this.initialize();
   }
