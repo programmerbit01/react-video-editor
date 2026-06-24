@@ -30,7 +30,8 @@ export default function BarChart({
 
   const maxValue = Math.max(...data.map((d) => d.value), 1);
 
-  const progress = interpolate(frame, [0, 30], [0, 1], {
+  // Start at 2% so bars are visible at frame 0; grow to 100% by frame 30
+  const progress = interpolate(frame, [0, 30], [0.02, 1], {
     extrapolateRight: "clamp"
   });
 

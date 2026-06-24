@@ -4,7 +4,8 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  ResponsiveContainer
+  ResponsiveContainer,
+  ReferenceDot
 } from "recharts";
 import { interpolate, useCurrentFrame } from "remotion";
 
@@ -26,25 +27,16 @@ export default function LineChart({
 }: LineChartProps) {
   const frame = useCurrentFrame();
 
+  // All points visible from frame 0; each Y-value animates from 0 → final
+  // so the line "rises" into place rather than drawing point-by-point.
   const progress = interpolate(frame, [0, 60], [0, 1], {
     extrapolateRight: "clamp"
   });
 
-  const visibleCount = Math.max(1, Math.ceil(progress * points.length));
-  const visibleData = points.slice(0, visibleCount).map((p, i) => {
-    if (i < visibleCount - 1) return p;
-    const prevCount = visibleCount - 1;
-    const segProgress =
-      points.length > 1 ? progress * points.length - prevCount : 1;
-    return {
-      ...p,
-      value:
-        prevCount > 0
-          ? points[prevCount - 1].value +
-            (p.value - points[prevCount - 1].value) * segProgress
-          : p.value * segProgress
-    };
-  });
+  const animatedData = points.map((p) => ({
+    ...p,
+    value: p.value * progress
+  }));
 
   return (
     <div
@@ -77,7 +69,7 @@ export default function LineChart({
       <div style={{ width: "100%", flex: 1, minHeight: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
           <RechartsLineChart
-            data={visibleData}
+            data={animatedData}
             margin={{ top: 40, right: 40, left: 40, bottom: 40 }}
           >
             <CartesianGrid
@@ -91,6 +83,7 @@ export default function LineChart({
               tickLine={false}
             />
             <YAxis
+              domain={[0, Math.max(...points.map((p) => p.value), 1)]}
               tick={{ fill: "#ffffff", fontSize: 24, fontFamily: "sans-serif" }}
               axisLine={{ stroke: "rgba(255,255,255,0.3)" }}
               tickLine={false}

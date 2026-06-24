@@ -15,7 +15,8 @@ export default function StatCard({
 }: StatCardProps) {
   const frame = useCurrentFrame();
 
-  const animatedValue = interpolate(frame, [0, 45], [0, value], {
+  // Start at 2% of value at frame 0 so the number is non-zero immediately
+  const animatedValue = interpolate(frame, [0, 45], [value * 0.02, value], {
     extrapolateRight: "clamp"
   });
 

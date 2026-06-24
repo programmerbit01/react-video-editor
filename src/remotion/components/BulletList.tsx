@@ -46,19 +46,15 @@ export default function BulletList({
           const delay = index * 15;
           const localFrame = Math.max(0, frame - delay);
 
+          // Slide-only animation — items always have opacity 1 so they're
+          // visible at frame 0 (just offset), not invisible like with fade-in
           const slideProgress = spring({
             frame: localFrame,
             fps,
             config: { damping: 14, stiffness: 100, mass: 0.8 }
           });
 
-          const opacity = spring({
-            frame: localFrame,
-            fps,
-            config: { damping: 20, stiffness: 120, mass: 0.5 }
-          });
-
-          const translateX = (1 - slideProgress) * -60;
+          const translateX = (1 - slideProgress) * -80;
 
           return (
             <div
@@ -67,7 +63,6 @@ export default function BulletList({
                 display: "flex",
                 alignItems: "center",
                 gap: 24,
-                opacity,
                 transform: `translateX(${translateX}px)`
               }}
             >
