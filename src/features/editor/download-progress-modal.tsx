@@ -57,13 +57,23 @@ const DownloadProgressModal = () => {
     if (output?.url) await download(output.url, "untitled.mp4");
   };
 
-  // Same flow as timeline "Upload to library"
   const handleUploadToCloud = async () => {
     if (!output?.url || cloudState !== "idle") return;
+
+    // render_callback already uploaded to R2 — use that URL directly, no re-upload needed
+    if (output.publicUrl) {
+      setCloudUrl(output.publicUrl);
+      setCloudState("done");
+      return;
+    }
+
+    // Fallback: fetch local video and upload via vapp server
     setCloudState("uploading");
     try {
       const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-      const fetchUrl = `${window.location.origin}${basePath}${output.url}`;
+      const fetchUrl = output.url.startsWith("http")
+        ? output.url
+        : `${window.location.origin}${basePath}${output.url}`;
       const res = await fetch(fetchUrl);
       if (!res.ok) throw new Error(`fetch ${res.status}`);
       const blob = await res.blob();

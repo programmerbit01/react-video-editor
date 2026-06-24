@@ -16,6 +16,7 @@ const RESOLUTION_MAX_DIM: Record<ExportResolution, number> = {
 
 interface Output {
   url: string;
+  publicUrl?: string;
   type: string;
 }
 
@@ -115,11 +116,11 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             if (!statusResponse.ok) throw new Error("Failed to fetch export status.");
 
             const statusInfo = await statusResponse.json();
-            const { status, progress, presigned_url: url, error } = statusInfo.render;
+            const { status, progress, presigned_url: url, error, public_url: publicUrl } = statusInfo.render;
             set({ progress });
 
             if (status === "COMPLETED") {
-              set({ exporting: false, output: { url, type: get().exportType } });
+              set({ exporting: false, output: { url, publicUrl, type: get().exportType } });
             } else if (status === "PROCESSING" || status === "PENDING") {
               setTimeout(checkStatus, 2500);
             } else if (status === "FAILED") {
