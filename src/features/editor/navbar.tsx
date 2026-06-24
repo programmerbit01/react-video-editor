@@ -76,6 +76,33 @@ export default function Navbar({
     setSavedProjects(getSavedProjects());
   }, [isProjectsOpen]);
 
+  // Sync AI-rendered projects from vapp server into localStorage on mount
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const vappHost = (params.get("vappHost") || "").replace(/\/+$/, "");
+      if (!vappHost) return;
+      fetch(`${vappHost}/vapp/projects`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data?.projects?.length) return;
+          const existing = getSavedProjects();
+          const existingIds = new Set(existing.map((p: SavedProject) => p.id));
+          let added = false;
+          for (const proj of data.projects) {
+            if (!existingIds.has(proj.id)) {
+              const projects = getSavedProjects();
+              projects.unshift(proj as SavedProject);
+              localStorage.setItem("vapp_saved_projects", JSON.stringify(projects));
+              added = true;
+            }
+          }
+          if (added) setSavedProjects(getSavedProjects());
+        })
+        .catch(() => {});
+    } catch {}
+  }, []);
+
   const handleUndo = () => dispatch(HISTORY_UNDO);
   const handleRedo = () => dispatch(HISTORY_REDO);
 
