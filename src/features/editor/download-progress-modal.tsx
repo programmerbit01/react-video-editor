@@ -62,7 +62,10 @@ const DownloadProgressModal = () => {
     if (!output?.url || cloudState !== "idle") return;
     setCloudState("uploading");
     try {
-      const res = await fetch(output.url);
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+      const fetchUrl = `${window.location.origin}${basePath}${output.url}`;
+      const res = await fetch(fetchUrl);
+      if (!res.ok) throw new Error(`fetch ${res.status}`);
       const blob = await res.blob();
       const file = new File([blob], `render_${Date.now()}.mp4`, { type: "video/mp4" });
       const uploadData = await processFileUpload(`render-upload-${Date.now()}`, file, {
