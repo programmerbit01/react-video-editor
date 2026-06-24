@@ -11,3 +11,7 @@ export { default as ProgressFrame } from "./progress-frame";
 export { default as RadialAudioBars } from "./radial-audio-bars";
 export { default as HillAudioBars } from "./hill-audio-bars";
 export { default as WaveAudioBars } from "./wave-audio-bars";
+export { default as BarChart } from "./bar-chart";
+export { default as LineChart } from "./line-chart";
+export { default as StatCard } from "./stat-card";
+export { default as BulletList } from "./bullet-list";

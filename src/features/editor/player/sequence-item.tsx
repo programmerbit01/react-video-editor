@@ -28,7 +28,11 @@ import {
   Shape,
   Text,
   Video,
-  WaveAudioBars
+  WaveAudioBars,
+  BarChart,
+  LineChart,
+  StatCard,
+  BulletList
 } from "./items";
 import { SequenceItemOptions } from "./base-sequence";
 
@@ -55,5 +59,9 @@ export const SequenceItem: Record<
   progressFrame: (item, options) =>
     ProgressFrame({ item: item as IProgressFrame, options }),
   radialAudioBars: (item, options) =>
-    RadialAudioBars({ item: item as IRadialAudioBars, options })
+    RadialAudioBars({ item: item as IRadialAudioBars, options }),
+  barchart: (item, options) => BarChart({ item, options }),
+  linechart: (item, options) => LineChart({ item, options }),
+  statcard: (item, options) => StatCard({ item, options }),
+  bulletlist: (item, options) => BulletList({ item, options })
 };

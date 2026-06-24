@@ -13,6 +13,7 @@ import { AiVoice } from "./ai-voice";
 import { SFX } from "./sfx";
 import { VappMedia } from "./vapp-media";
 import { Stock } from "./stock";
+import { Graphics } from "./graphics";
 
 const ActiveMenuItem = () => {
   const { activeMenuItem } = useLayoutStore();
@@ -64,6 +65,10 @@ const ActiveMenuItem = () => {
 
   if (activeMenuItem === "vapp") {
     return <VappMedia />;
+  }
+
+  if (activeMenuItem === "graphics") {
+    return <Graphics />;
   }
 
   return null;

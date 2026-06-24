@@ -9,6 +9,7 @@ import {
   TooltipTrigger
 } from "@/components/ui/tooltip";
 import useStore from "./store/use-store";
+import { BarChart2 } from "lucide-react";
 
 // Define menu items configuration for better maintainability
 const MENU_ITEMS = [
@@ -39,6 +40,13 @@ const MENU_ITEMS = [
     label: "Transitions",
     ariaLabel: "Add transition effects",
     color: "text-cyan-300"
+  },
+  {
+    id: "graphics",
+    icon: BarChart2,
+    label: "Graphics",
+    ariaLabel: "Add animated charts and graphics",
+    color: "text-purple-300"
   },
   {
     id: "captions",

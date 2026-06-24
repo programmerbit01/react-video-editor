@@ -86,6 +86,7 @@
 		"react-markdown": "10",
 		"react-resizable-panels": "^3.0.2",
 		"react-syntax-highlighter": "^15.6.1",
+		"recharts": "^3.9.0",
 		"remark-gfm": "4",
 		"remeda": "2",
 		"remotion": "^4.0.461",
