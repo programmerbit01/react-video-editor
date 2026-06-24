@@ -79,10 +79,7 @@ export default function Navbar({
   // Sync AI-rendered projects from vapp server into localStorage on mount
   useEffect(() => {
     try {
-      const params = new URLSearchParams(window.location.search);
-      const vappHost = (params.get("vappHost") || "").replace(/\/+$/, "");
-      if (!vappHost) return;
-      fetch(`${vappHost}/vapp/projects`)
+      fetch(`/editor/api/vapp-projects`)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (!data?.projects?.length) return;
