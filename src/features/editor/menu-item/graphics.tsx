@@ -116,6 +116,8 @@ export const Graphics = () => {
   // Bar / Line chart state
   const [chartTitle, setChartTitle] = useState("");
   const [chartColor, setChartColor] = useState("#6c63ff");
+  const [yLabel, setYLabel] = useState("");
+  const [xLabel, setXLabel] = useState("");
   const [dataRows, setDataRows] = useState<DataRow[]>([
     { label: "A", value: "100" },
     { label: "B", value: "200" }
@@ -152,6 +154,8 @@ export const Graphics = () => {
       details = {
         title: chartTitle,
         color: chartColor,
+        yLabel,
+        xLabel,
         data: dataRows.map((r) => ({
           label: r.label,
           value: Number(r.value) || 0
@@ -161,6 +165,8 @@ export const Graphics = () => {
       details = {
         title: chartTitle,
         color: chartColor,
+        yLabel,
+        xLabel,
         points: dataRows.map((r) => ({
           label: r.label,
           value: Number(r.value) || 0
@@ -280,6 +286,26 @@ export const Graphics = () => {
                 <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
                   {chartColor}
                 </span>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={LABEL_STYLE}>X-axis Label</label>
+                <Input
+                  value={xLabel}
+                  onChange={(e) => setXLabel(e.target.value)}
+                  placeholder="e.g. Year"
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={LABEL_STYLE}>Y-axis Label</label>
+                <Input
+                  value={yLabel}
+                  onChange={(e) => setYLabel(e.target.value)}
+                  placeholder="e.g. Population"
+                  className="h-7 text-xs"
+                />
               </div>
             </div>
             <div>

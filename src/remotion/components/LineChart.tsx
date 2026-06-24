@@ -18,12 +18,16 @@ interface LineChartProps {
   points?: DataPoint[];
   title?: string;
   color?: string;
+  yLabel?: string;
+  xLabel?: string;
 }
 
 export default function LineChart({
   points = [],
   title = "",
-  color = "#6c63ff"
+  color = "#6c63ff",
+  yLabel = "",
+  xLabel = ""
 }: LineChartProps) {
   const frame = useCurrentFrame();
 
@@ -81,12 +85,37 @@ export default function LineChart({
               tick={{ fill: "#ffffff", fontSize: 28, fontFamily: "sans-serif" }}
               axisLine={{ stroke: "rgba(255,255,255,0.3)" }}
               tickLine={false}
+              label={
+                xLabel
+                  ? {
+                      value: xLabel,
+                      position: "insideBottom",
+                      offset: -10,
+                      fill: "rgba(255,255,255,0.6)",
+                      fontSize: 22,
+                      fontFamily: "sans-serif"
+                    }
+                  : undefined
+              }
             />
             <YAxis
               domain={[0, Math.max(...points.map((p) => p.value), 1)]}
               tick={{ fill: "#ffffff", fontSize: 24, fontFamily: "sans-serif" }}
               axisLine={{ stroke: "rgba(255,255,255,0.3)" }}
               tickLine={false}
+              label={
+                yLabel
+                  ? {
+                      value: yLabel,
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 10,
+                      fill: "rgba(255,255,255,0.6)",
+                      fontSize: 22,
+                      fontFamily: "sans-serif"
+                    }
+                  : undefined
+              }
             />
             <Line
               type="monotone"
