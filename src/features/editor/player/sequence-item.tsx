@@ -63,5 +63,15 @@ export const SequenceItem: Record<
   barchart: (item, options) => BarChart({ item, options }),
   linechart: (item, options) => LineChart({ item, options }),
   statcard: (item, options) => StatCard({ item, options }),
-  bulletlist: (item, options) => BulletList({ item, options })
+  bulletlist: (item, options) => BulletList({ item, options }),
+  // Graphic items stored as "image" type so the timeline Fabric renderer works.
+  // Route to the correct component based on metadata.graphicType.
+  image: (item, options) => {
+    const graphicType = (item as any).metadata?.graphicType;
+    if (graphicType === "barchart") return BarChart({ item, options });
+    if (graphicType === "linechart") return LineChart({ item, options });
+    if (graphicType === "statcard") return StatCard({ item, options });
+    if (graphicType === "bulletlist") return BulletList({ item, options });
+    return Image({ item: item as IImage, options });
+  }
 };

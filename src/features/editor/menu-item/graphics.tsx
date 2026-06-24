@@ -55,13 +55,16 @@ function addGraphicItem(
     playerRef?.current?.seekTo(Math.round((previewMs / 1000) * fps));
   }, 80);
 
+  // Use "image" as the timeline-facing type so the Fabric.js timeline renderer
+  // doesn't throw "No class registered for Barchart". The real graphic type is
+  // stored in metadata.graphicType and checked by sequence-item.tsx in the player.
   const newItem = {
     id,
     name: type,
-    type,
+    type: "image",
     display: { from, to },
     details,
-    metadata: {}
+    metadata: { graphicType: type }
   };
 
   // Find or create a suitable track ("helper" type accepts overlay items)
