@@ -58,6 +58,12 @@ export const Video = ({
               playbackRate={playbackRate}
               src={details.src}
               volume={options.isMuted ? 0 : (details.volume ?? 100) / 100}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                display: "block"
+              }}
             />
           </div>
         </MaskAnim>
