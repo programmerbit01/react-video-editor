@@ -214,55 +214,51 @@ export default function Navbar({
             </div>
 
             <PopoverContent align="center" className="z-[250] w-72 p-2" sideOffset={6}>
-              <p className="mb-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Saved Projects
-              </p>
               {savedProjects.length === 0 ? (
-                <p className="px-2 py-4 text-center text-sm text-muted-foreground">
-                  No saved projects yet
-                </p>
-              ) : (
-                <div className="flex flex-col gap-0.5 max-h-72 overflow-y-auto">
-                  {savedProjects.map((project) => {
-                    const isActive = project.id === currentProjectId;
-                    return (
-                      <div
-                        key={project.id}
-                        onClick={() => handleLoadProject(project)}
-                        className={`group flex items-center justify-between rounded-md px-2 py-2 cursor-pointer transition-colors ${
-                          isActive ? "bg-accent" : "hover:bg-accent"
-                        }`}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className={`truncate text-sm font-medium ${isActive ? "text-foreground" : ""}`}>
-                            {project.name}
-                            {isActive && (
-                              <span className="ml-2 text-xs text-muted-foreground font-normal">(current)</span>
-                            )}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(project.savedAt).toLocaleDateString(undefined, {
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
-                          onClick={(e) => handleDeleteProject(e, project.id)}
-                          title="Delete"
-                        >
-                          <Trash2 className="size-3" />
-                        </Button>
+                <p className="px-2 py-4 text-center text-sm text-muted-foreground">No saved projects yet</p>
+              ) : (() => {
+                const userProjects = savedProjects.filter(p => !p.id.startsWith("ai_"));
+                const aiProjects   = savedProjects.filter(p => p.id.startsWith("ai_"));
+                const renderItem   = (project: SavedProject) => {
+                  const isActive = project.id === currentProjectId;
+                  return (
+                    <div
+                      key={project.id}
+                      onClick={() => handleLoadProject(project)}
+                      className={`group flex items-center justify-between rounded-md px-2 py-2 cursor-pointer transition-colors ${isActive ? "bg-accent" : "hover:bg-accent"}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className={`truncate text-sm font-medium ${isActive ? "text-foreground" : ""}`}>
+                          {project.name}
+                          {isActive && <span className="ml-2 text-xs text-muted-foreground font-normal">(current)</span>}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(project.savedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </p>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                      <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive" onClick={(e) => handleDeleteProject(e, project.id)} title="Delete">
+                        <Trash2 className="size-3" />
+                      </Button>
+                    </div>
+                  );
+                };
+                return (
+                  <div className="flex flex-col max-h-80 overflow-y-auto">
+                    {userProjects.length > 0 && (
+                      <>
+                        <p className="mb-1 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Your Projects</p>
+                        <div className="flex flex-col gap-0.5 mb-2">{userProjects.map(renderItem)}</div>
+                      </>
+                    )}
+                    {aiProjects.length > 0 && (
+                      <>
+                        <p className="mb-1 px-2 text-xs font-semibold text-violet-400 uppercase tracking-wide">AI Projects</p>
+                        <div className="flex flex-col gap-0.5">{aiProjects.map(renderItem)}</div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
             </PopoverContent>
           </Popover>
         )}
