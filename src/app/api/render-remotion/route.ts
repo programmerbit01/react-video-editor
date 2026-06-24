@@ -86,6 +86,15 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   });
 
   jobs.set(jobId, { status: "COMPLETED", progress: 100 });
+
+  // Notify vapp_server so wait_for_job MCP tool wakes up immediately
+  const callbackBase = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
+  const videoUrl = `${process.env.EDITOR_PUBLIC_BASE || ""}/editor/api/render-remotion/${jobId}/download`;
+  fetch(`${callbackBase}/vapp/render_callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId, status: "COMPLETED", video_url: videoUrl }),
+  }).catch(() => {}); // fire-and-forget, non-blocking
 }
 
 export async function POST(request: Request) {
@@ -102,11 +111,14 @@ export async function POST(request: Request) {
     runRemotionExport(jobId, design, options).catch((err) => {
       console.error(`[render-remotion] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
-      jobs.set(jobId, {
-        status: "FAILED",
-        progress: current?.progress ?? 0,
-        error: err.message,
-      });
+      jobs.set(jobId, { status: "FAILED", progress: current?.progress ?? 0, error: err.message });
+      // Notify vapp_server of failure
+      const callbackBase = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
+      fetch(`${callbackBase}/vapp/render_callback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId, status: "FAILED", error: err.message }),
+      }).catch(() => {});
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });
