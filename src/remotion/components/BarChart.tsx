@@ -95,12 +95,14 @@ export default function BarChart({
               isAnimationActive={false}
               radius={[8, 8, 0, 0]}
             >
-              <LabelList
-                dataKey="animatedValue"
-                position="top"
-                formatter={(v: unknown) => Math.round(Number(v))}
-                style={{ fill: "#ffffff", fontSize: 24, fontFamily: "sans-serif" }}
-              />
+              {progress > 0.5 && (
+                <LabelList
+                  dataKey="animatedValue"
+                  position="top"
+                  formatter={(v: unknown) => Math.round(Number(v))}
+                  style={{ fill: "#ffffff", fontSize: 24, fontFamily: "sans-serif" }}
+                />
+              )}
               {animatedData.map((_, index) => (
                 <Cell key={`cell-${index}`} fill={color} />
               ))}

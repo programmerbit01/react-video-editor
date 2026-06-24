@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getCurrentTime } from "../utils/time";
 import { getStateManagerRef } from "../utils/state-manager-ref";
+import useStore from "../store/use-store";
 import { Plus, Trash2 } from "lucide-react";
 
 type GraphicType = "barchart" | "linechart" | "statcard" | "bulletlist";
@@ -45,6 +46,14 @@ function addGraphicItem(
   const from = getCurrentTime();
   const to = from + durationMs;
   const id = generateId();
+  // Seek 2 seconds into the clip after adding so the animation is fully
+  // complete in the preview (bars grown, line drawn, stat counted up, etc.)
+  const previewMs = from + Math.min(2000, durationMs * 0.5);
+  const fps = useStore.getState().fps || 30;
+  const playerRef = useStore.getState().playerRef;
+  setTimeout(() => {
+    playerRef?.current?.seekTo(Math.round((previewMs / 1000) * fps));
+  }, 80);
 
   const newItem = {
     id,
