@@ -71,7 +71,7 @@ const DownloadProgressModal = () => {
           if (status === "failed") setCloudState("error");
         },
       });
-      const url = uploadData?.filePath || uploadData?.metadata?.uploadedUrl || uploadData?.url;
+      const url = uploadData?.metadata?.directUrl || uploadData?.filePath || uploadData?.url;
       if (url) {
         setCloudUrl(url);
         setCloudState("done");
