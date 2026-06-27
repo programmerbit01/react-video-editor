@@ -147,12 +147,9 @@ export default function Navbar({
       const details = (item.details ?? {}) as Record<string, unknown>;
       const meta = (item.metadata ?? {}) as Record<string, unknown>;
       if (!meta.previewUrl && details.src) {
-        // decode proxy URL if needed so the browser can load the thumbnail cross-origin
-        let src = String(details.src);
-        if (src.startsWith("/api/proxy?url=")) {
-          try { src = decodeURIComponent(src.replace("/api/proxy?url=", "")); } catch {}
-        }
-        item.metadata = { ...meta, previewUrl: src };
+        // Keep the same-origin proxy URL for video fallback thumbnails.
+        // Direct R2/public URLs can be blocked by CORS on remote/tunnel origins.
+        item.metadata = { ...meta, previewUrl: String(details.src) };
       }
     }
     return data;

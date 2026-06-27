@@ -368,16 +368,16 @@ export const Uploads = () => {
         video.load();
       };
 
-      if (displaySrc && displaySrc !== playerSrc) {
-        trySource(displaySrc, true, () => {
-          if (playerSrc) {
-            trySource(playerSrc, false, () => finalize());
+      if (playerSrc) {
+        trySource(playerSrc, true, () => {
+          if (displaySrc && displaySrc !== playerSrc) {
+            trySource(displaySrc, true, () => finalize());
           } else {
             finalize();
           }
         });
-      } else if (playerSrc) {
-        trySource(playerSrc, false, () => finalize());
+      } else if (displaySrc) {
+        trySource(displaySrc, true, () => finalize());
       } else {
         finalize();
       }
