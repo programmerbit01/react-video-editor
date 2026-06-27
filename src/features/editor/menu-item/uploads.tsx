@@ -39,11 +39,25 @@ const normalizeMediaSrc = (src?: string) => {
   return src;
 };
 
+const isLocalEditorOrigin = () => {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.");
+};
+
+const isTempUploadUrl = (src?: string) => String(src || "").includes("/temp_upload/");
+
 const getPlayerSrc = (item: any) =>
   normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
 
-const getDisplaySrc = (item: any) =>
-  normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
+const getDisplaySrc = (item: any) => {
+  const directSrc = normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
+  const proxySrc = getPlayerSrc(item);
+  if (isVideo(item) && isVappItem(item) && (!isLocalEditorOrigin() || isTempUploadUrl(directSrc))) {
+    return proxySrc || directSrc;
+  }
+  return directSrc || proxySrc;
+};
 
 const getVappParams = () => {
   if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
@@ -396,8 +410,9 @@ export const Uploads = () => {
 
     const data = await res.json();
     const rawItems: any[] = data.items || [];
+    const stableItems = rawItems.filter((item: any) => !isTempUploadUrl(item?.url));
 
-    const items = (rawItems.map(toUploadItem).filter(Boolean) as any[])
+    const items = (stableItems.map(toUploadItem).filter(Boolean) as any[])
       // client-side safety sort: newest first by ISO date string (lexicographic = correct for ISO)
       .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
