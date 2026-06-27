@@ -32,6 +32,12 @@ async function getBundleUrl(): Promise<string> {
   return cachedBundleUrl;
 }
 
+// delayRender timeout. The default (~30s) intermittently fails on a cold bundle
+// or under CPU contention (concurrency spawns several headless Chrome instances)
+// with "Waiting for root component to load … not cleared after 28000ms".
+// 2 minutes gives the bundle/root ample time to evaluate and render.
+const RENDER_TIMEOUT_MS = 120_000;
+
 async function runRemotionExport(jobId: string, design: any, options: any) {
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
@@ -62,6 +68,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     serveUrl,
     id: "main",
     inputProps,
+    timeoutInMilliseconds: RENDER_TIMEOUT_MS,
   });
 
   console.log(`[render-remotion] composition: ${composition.width}x${composition.height} @ ${composition.fps}fps, ${composition.durationInFrames} frames (${(composition.durationInFrames / composition.fps).toFixed(1)}s)`);
@@ -74,6 +81,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     outputLocation: outputPath,
     inputProps,
     concurrency: 7,
+    timeoutInMilliseconds: RENDER_TIMEOUT_MS,
     imageFormat: "jpeg",
     jpegQuality: 90,
     // cache decoded video frames in memory across Chrome instances
