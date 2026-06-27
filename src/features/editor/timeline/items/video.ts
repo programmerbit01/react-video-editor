@@ -304,7 +304,11 @@ class Video extends Trimmable {
     return new Promise<void>((resolve) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
-      img.src = `${fallbackThumbnail}?t=${Date.now()}`;
+      const needsCacheBust =
+        fallbackThumbnail.startsWith("http://") ||
+        fallbackThumbnail.startsWith("https://") ||
+        fallbackThumbnail.startsWith("/");
+      img.src = needsCacheBust ? `${fallbackThumbnail}${fallbackThumbnail.includes("?") ? "&" : "?"}t=${Date.now()}` : fallbackThumbnail;
       img.onload = () => {
         // Create a temporary canvas to resize the image
         const canvas = document.createElement("canvas");
