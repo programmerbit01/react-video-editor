@@ -9,6 +9,17 @@ import ModalUpload from "@/components/modal-upload";
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, MouseEvent, SetStateAction } from "react";
 
+type CachedMediaMeta = {
+  width?: number;
+  height?: number;
+  duration?: number;
+  previewUrl?: string;
+};
+
+const mediaMetaCache = new Map<string, CachedMediaMeta>();
+const mediaMetaInflight = new Map<string, Promise<CachedMediaMeta>>();
+const PREWARM_LIMIT = 20;
+
 const getLabel = (item: any) =>
   item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
 
@@ -27,6 +38,12 @@ const normalizeMediaSrc = (src?: string) => {
   if (src.startsWith("/uploads/")) return `/editor${src}`;
   return src;
 };
+
+const getPlayerSrc = (item: any) =>
+  normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
+
+const getDisplaySrc = (item: any) =>
+  normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
 
 const getVappParams = () => {
   if (typeof window === "undefined") return { vappHost: "", token: "", baseUrl: "" };
@@ -88,7 +105,7 @@ const VideoThumb = ({ src }: { src: string }) => {
 
 const Thumb = ({ item }: { item: any }) => {
   // Use direct CDN URL for display — faster, no proxy hop, HTML tags don't need CORS
-  const src = normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
+  const src = getDisplaySrc(item);
   if (isAudio(item)) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-white/5">
@@ -124,7 +141,7 @@ const UploadGridItem = ({
   setActivePreviewId: Dispatch<SetStateAction<string | null>>;
 }) => {
   const mediaId = String(item.id || item.url);
-  const src = normalizeMediaSrc(item.metadata?.directUrl || item.metadata?.uploadedUrl || item.url);
+  const src = getDisplaySrc(item);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -223,6 +240,121 @@ export const Uploads = () => {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
 
+  const ensureImageMeta = async (item: any): Promise<CachedMediaMeta> => {
+    const src = getDisplaySrc(item);
+    if (!src) return {};
+    const cached = mediaMetaCache.get(src);
+    if (cached?.width && cached?.height) return cached;
+    const existing = mediaMetaInflight.get(src);
+    if (existing) return existing;
+
+    const task = new Promise<CachedMediaMeta>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const meta = {
+          ...(mediaMetaCache.get(src) || {}),
+          width: img.naturalWidth || 1920,
+          height: img.naturalHeight || 1080,
+        };
+        mediaMetaCache.set(src, meta);
+        mediaMetaInflight.delete(src);
+        resolve(meta);
+      };
+      img.onerror = () => {
+        const meta = mediaMetaCache.get(src) || {};
+        mediaMetaInflight.delete(src);
+        resolve(meta);
+      };
+      img.src = src;
+    });
+
+    mediaMetaInflight.set(src, task);
+    return task;
+  };
+
+  const ensureVideoMeta = async (item: any): Promise<CachedMediaMeta> => {
+    const src = getPlayerSrc(item);
+    if (!src) return {};
+    const cached = mediaMetaCache.get(src);
+    if (cached?.duration && cached?.width && cached?.height && cached?.previewUrl) return cached;
+    const existing = mediaMetaInflight.get(src);
+    if (existing) return existing;
+
+    const task = new Promise<CachedMediaMeta>((resolve) => {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = "anonymous";
+
+      let settled = false;
+      const finalize = (patch: CachedMediaMeta = {}) => {
+        if (settled) return;
+        settled = true;
+        const meta = {
+          ...(mediaMetaCache.get(src) || {}),
+          ...patch,
+        };
+        mediaMetaCache.set(src, meta);
+        mediaMetaInflight.delete(src);
+        resolve(meta);
+      };
+
+      const captureFrame = () => {
+        try {
+          const width = video.videoWidth || 1920;
+          const height = video.videoHeight || 1080;
+          const aspect = width && height ? width / height : 16 / 9;
+          const targetHeight = 40;
+          const targetWidth = Math.max(1, Math.round(targetHeight * aspect));
+          const canvas = document.createElement("canvas");
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return finalize({ duration: Math.round((video.duration || 10) * 1000), width, height });
+          ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+          finalize({
+            duration: Math.round((video.duration || 10) * 1000),
+            width,
+            height,
+            previewUrl: canvas.toDataURL("image/jpeg", 0.72),
+          });
+        } catch {
+          finalize({
+            duration: Math.round((video.duration || 10) * 1000),
+            width: video.videoWidth || 1920,
+            height: video.videoHeight || 1080,
+          });
+        }
+      };
+
+      const seekToPreviewFrame = () => {
+        const seekTime = Number.isFinite(video.duration) && video.duration > 1 ? 1 : 0;
+        try {
+          video.currentTime = seekTime;
+        } catch {
+          captureFrame();
+        }
+      };
+
+      const timer = window.setTimeout(() => finalize(), 6000);
+      video.onloadedmetadata = seekToPreviewFrame;
+      video.onseeked = () => {
+        window.clearTimeout(timer);
+        captureFrame();
+      };
+      video.onerror = () => {
+        window.clearTimeout(timer);
+        finalize();
+      };
+      video.src = src;
+      video.load();
+    });
+
+    mediaMetaInflight.set(src, task);
+    return task;
+  };
+
   const fetchPage = async (pageNum: number) => {
     const { vappHost, token, baseUrl } = getVappParams();
     const apiUrl = `${vappHost}/api/vapp/media?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}&page=${pageNum}`;
@@ -266,6 +398,19 @@ export const Uploads = () => {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    const recentVappItems = uploads.filter((u: any) => isVappItem(u)).slice(0, PREWARM_LIMIT);
+    recentVappItems.forEach((item: any) => {
+      if (isVideo(item)) {
+        void ensureVideoMeta(item);
+        return;
+      }
+      if (!isAudio(item)) {
+        void ensureImageMeta(item);
+      }
+    });
+  }, [uploads]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     setFetchError(null);
@@ -281,7 +426,7 @@ export const Uploads = () => {
   };
 
   const handleAdd = async (item: any) => {
-    const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
+    const src = getPlayerSrc(item);
 
     if (isAudio(item)) {
       const audioMeta: Record<string, any> = {};
@@ -305,23 +450,12 @@ export const Uploads = () => {
     if (isVideo(item)) {
       let duration = 10000, width = 1920, height = 1080;
       try {
-        const meta = await new Promise<{ duration: number; width: number; height: number }>(
-          (resolve, reject) => {
-            const el = document.createElement("video");
-            el.preload = "metadata";
-            el.onloadedmetadata = () => resolve({
-              duration: Math.round(el.duration * 1000) || 10000,
-              width: el.videoWidth || 1920,
-              height: el.videoHeight || 1080,
-            });
-            el.onerror = reject;
-            el.src = src;
-            el.load();
-          }
-        );
-        duration = meta.duration; width = meta.width; height = meta.height;
+        const meta = await ensureVideoMeta(item);
+        duration = meta.duration || 10000;
+        width = meta.width || 1920;
+        height = meta.height || 1080;
       } catch {}
-      const videoMeta: Record<string, any> = { previewUrl: "" };
+      const videoMeta: Record<string, any> = { previewUrl: mediaMetaCache.get(src)?.previewUrl || "" };
       if (item.stt && typeof item.stt === "object") {
         videoMeta.transcriptData = item.stt;
         setTranscriptResult(src, item.stt);
@@ -341,13 +475,9 @@ export const Uploads = () => {
 
     let width = 1920, height = 1080;
     try {
-      const meta = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve({ width: img.naturalWidth || 1920, height: img.naturalHeight || 1080 });
-        img.onerror = reject;
-        img.src = src;
-      });
-      width = meta.width; height = meta.height;
+      const meta = await ensureImageMeta(item);
+      width = meta.width || 1920;
+      height = meta.height || 1080;
     } catch {}
     dispatch(ADD_IMAGE, {
       payload: { id: generateId(), type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: {} },
