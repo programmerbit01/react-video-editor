@@ -48,6 +48,16 @@ import {
   type SavedProject,
 } from "./utils/project-storage";
 
+const toProxyMediaSrc = (src: unknown) => {
+  const raw = String(src || "");
+  if (!raw) return "";
+  if (raw.startsWith("/api/proxy?url=") || raw.startsWith("/editor/api/proxy?url=")) return raw;
+  if (raw.includes("rpublic.tomtap.ai")) {
+    return `/api/proxy?url=${encodeURIComponent(raw)}`;
+  }
+  return raw;
+};
+
 export default function Navbar({
   user,
   stateManager,
@@ -143,13 +153,21 @@ export default function Navbar({
   const patchDesignMetadata = (data: Record<string, unknown>): Record<string, unknown> => {
     const map = (data?.trackItemsMap ?? {}) as Record<string, Record<string, unknown>>;
     for (const [, item] of Object.entries(map)) {
-      if (item?.type !== "video") continue;
       const details = (item.details ?? {}) as Record<string, unknown>;
       const meta = (item.metadata ?? {}) as Record<string, unknown>;
-      if (!meta.previewUrl && details.src) {
-        // Keep the same-origin proxy URL for video fallback thumbnails.
-        // Direct R2/public URLs can be blocked by CORS on remote/tunnel origins.
-        item.metadata = { ...meta, previewUrl: String(details.src) };
+      const proxiedSrc = toProxyMediaSrc(details.src);
+
+      if (proxiedSrc && proxiedSrc !== details.src) {
+        item.details = { ...details, src: proxiedSrc };
+      }
+
+      if (item?.type === "video") {
+        const normalizedPreview = toProxyMediaSrc(meta.previewUrl || proxiedSrc || details.src);
+        if (normalizedPreview && normalizedPreview !== meta.previewUrl) {
+          item.metadata = { ...meta, previewUrl: normalizedPreview };
+        } else if (!meta.previewUrl && proxiedSrc) {
+          item.metadata = { ...meta, previewUrl: proxiedSrc };
+        }
       }
     }
     return data;
