@@ -273,85 +273,117 @@ export const Uploads = () => {
   };
 
   const ensureVideoMeta = async (item: any): Promise<CachedMediaMeta> => {
-    const src = getPlayerSrc(item);
-    if (!src) return {};
-    const cached = mediaMetaCache.get(src);
+    const playerSrc = getPlayerSrc(item);
+    const displaySrc = getDisplaySrc(item);
+    const cacheKey = playerSrc || displaySrc;
+    if (!cacheKey) return {};
+    const cached = mediaMetaCache.get(cacheKey);
     if (cached?.duration && cached?.width && cached?.height && cached?.previewUrl) return cached;
-    const existing = mediaMetaInflight.get(src);
+    const existing = mediaMetaInflight.get(cacheKey);
     if (existing) return existing;
 
     const task = new Promise<CachedMediaMeta>((resolve) => {
-      const video = document.createElement("video");
-      video.preload = "metadata";
-      video.muted = true;
-      video.playsInline = true;
-      video.crossOrigin = "anonymous";
-
       let settled = false;
       const finalize = (patch: CachedMediaMeta = {}) => {
         if (settled) return;
         settled = true;
         const meta = {
-          ...(mediaMetaCache.get(src) || {}),
+          ...(mediaMetaCache.get(cacheKey) || {}),
           ...patch,
         };
-        mediaMetaCache.set(src, meta);
-        mediaMetaInflight.delete(src);
+        if (playerSrc) mediaMetaCache.set(playerSrc, meta);
+        if (displaySrc) mediaMetaCache.set(displaySrc, meta);
+        mediaMetaInflight.delete(cacheKey);
         resolve(meta);
       };
 
-      const captureFrame = () => {
-        try {
-          const width = video.videoWidth || 1920;
-          const height = video.videoHeight || 1080;
-          const aspect = width && height ? width / height : 16 / 9;
-          const targetHeight = 40;
-          const targetWidth = Math.max(1, Math.round(targetHeight * aspect));
-          const canvas = document.createElement("canvas");
-          canvas.width = targetWidth;
-          canvas.height = targetHeight;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return finalize({ duration: Math.round((video.duration || 10) * 1000), width, height });
-          ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
-          finalize({
-            duration: Math.round((video.duration || 10) * 1000),
-            width,
-            height,
-            previewUrl: canvas.toDataURL("image/jpeg", 0.72),
-          });
-        } catch {
-          finalize({
+      const trySource = (sourceUrl: string, allowCanvasCapture: boolean, onDone: () => void) => {
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        video.muted = true;
+        video.playsInline = true;
+        if (allowCanvasCapture) video.crossOrigin = "anonymous";
+
+        const finishWithMeta = (previewUrl = "") => {
+          const nextMeta: CachedMediaMeta = {
             duration: Math.round((video.duration || 10) * 1000),
             width: video.videoWidth || 1920,
             height: video.videoHeight || 1080,
-          });
-        }
-      };
+          };
+          if (previewUrl) nextMeta.previewUrl = previewUrl;
+          if (nextMeta.previewUrl || !allowCanvasCapture) {
+            finalize(nextMeta);
+          } else {
+            onDone();
+          }
+        };
 
-      const seekToPreviewFrame = () => {
-        const seekTime = Number.isFinite(video.duration) && video.duration > 1 ? 1 : 0;
-        try {
-          video.currentTime = seekTime;
-        } catch {
+        const captureFrame = () => {
+          try {
+            const width = video.videoWidth || 1920;
+            const height = video.videoHeight || 1080;
+            const aspect = width && height ? width / height : 16 / 9;
+            const targetHeight = 40;
+            const targetWidth = Math.max(1, Math.round(targetHeight * aspect));
+            const canvas = document.createElement("canvas");
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return finishWithMeta();
+            ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+            finishWithMeta(canvas.toDataURL("image/jpeg", 0.72));
+          } catch {
+            finishWithMeta();
+          }
+        };
+
+        const timer = window.setTimeout(() => {
+          if (allowCanvasCapture) onDone();
+          else finalize();
+        }, allowCanvasCapture ? 3500 : 6000);
+
+        video.onloadedmetadata = () => {
+          if (!allowCanvasCapture) {
+            window.clearTimeout(timer);
+            finishWithMeta();
+            return;
+          }
+          const seekTime = Number.isFinite(video.duration) && video.duration > 1 ? 1 : 0;
+          try {
+            video.currentTime = seekTime;
+          } catch {
+            window.clearTimeout(timer);
+            finishWithMeta();
+          }
+        };
+        video.onseeked = () => {
+          window.clearTimeout(timer);
           captureFrame();
-        }
+        };
+        video.onerror = () => {
+          window.clearTimeout(timer);
+          onDone();
+        };
+        video.src = sourceUrl;
+        video.load();
       };
 
-      const timer = window.setTimeout(() => finalize(), 6000);
-      video.onloadedmetadata = seekToPreviewFrame;
-      video.onseeked = () => {
-        window.clearTimeout(timer);
-        captureFrame();
-      };
-      video.onerror = () => {
-        window.clearTimeout(timer);
+      if (displaySrc && displaySrc !== playerSrc) {
+        trySource(displaySrc, true, () => {
+          if (playerSrc) {
+            trySource(playerSrc, false, () => finalize());
+          } else {
+            finalize();
+          }
+        });
+      } else if (playerSrc) {
+        trySource(playerSrc, false, () => finalize());
+      } else {
         finalize();
-      };
-      video.src = src;
-      video.load();
+      }
     });
 
-    mediaMetaInflight.set(src, task);
+    mediaMetaInflight.set(cacheKey, task);
     return task;
   };
 
