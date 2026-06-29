@@ -98,9 +98,21 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     timeoutInMilliseconds: RENDER_TIMEOUT_MS,
   });
 
-  console.log(`[render-remotion] composition: ${composition.width}x${composition.height} @ ${composition.fps}fps, ${composition.durationInFrames} frames (${(composition.durationInFrames / composition.fps).toFixed(1)}s)`);
-  jobs.set(jobId, { status: "PROCESSING", progress: 15 });
-  console.log(`[render-remotion] concurrency=${RENDER_CONCURRENCY} hwAccel=if-possible gl=${RENDER_GL || "(default)"}`);
+  const totalCores = os.cpus()?.length || 0;
+  const videoSecs = composition.durationInFrames / composition.fps;
+  const renderCfg = {
+    concurrency: RENDER_CONCURRENCY,
+    cores: totalCores,
+    gpu: RENDER_GL ? `on (${RENDER_GL})` : "off",
+    hwAccel: "if-possible",
+  };
+  console.log(
+    `[render-remotion] ▶ START job=${jobId} | ${composition.width}x${composition.height}@${composition.fps}fps ` +
+    `${composition.durationInFrames}f (${videoSecs.toFixed(1)}s video) | concurrency=${renderCfg.concurrency}/${totalCores}cores ` +
+    `gpu=${renderCfg.gpu} hwAccel=${renderCfg.hwAccel}`
+  );
+  jobs.set(jobId, { status: "PROCESSING", progress: 15, ...renderCfg });
+  const _t0 = Date.now();
 
   await renderMedia({
     composition,
@@ -125,7 +137,30 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     },
   });
 
-  jobs.set(jobId, { status: "COMPLETED", progress: 100 });
+  // Render speed metrics — so you can SEE if the cores/GPU/hwAccel actually help.
+  const renderSecs = (Date.now() - _t0) / 1000;
+  const fps = composition.durationInFrames / Math.max(0.001, renderSecs);
+  const speedX = videoSecs / Math.max(0.001, renderSecs); // >1 = faster than realtime
+  let sizeMB = 0;
+  try {
+    const { statSync } = await import("fs");
+    sizeMB = statSync(outputPath).size / (1024 * 1024);
+  } catch {}
+  console.log(
+    `[render-remotion] ✓ DONE job=${jobId} | ${renderSecs.toFixed(1)}s render for ${videoSecs.toFixed(1)}s video ` +
+    `(${speedX.toFixed(2)}x realtime, ${fps.toFixed(1)} render-fps) | ${sizeMB.toFixed(1)}MB | ` +
+    `concurrency=${RENDER_CONCURRENCY} gpu=${RENDER_GL || "off"}`
+  );
+  jobs.set(jobId, {
+    status: "COMPLETED",
+    progress: 100,
+    render_seconds: Math.round(renderSecs),
+    render_fps: Math.round(fps * 10) / 10,
+    speed_x: Math.round(speedX * 100) / 100,
+    size_mb: Math.round(sizeMB * 10) / 10,
+    concurrency: RENDER_CONCURRENCY,
+    gpu: RENDER_GL ? `on (${RENDER_GL})` : "off",
+  });
 
   // Notify vapp_server — it fetches the MP4 from local URL and uploads to R2
   const callbackBase = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
