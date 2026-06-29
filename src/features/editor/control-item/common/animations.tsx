@@ -100,11 +100,55 @@ const GlobalAnimationToggle = () => {
   );
 };
 
+// Ken Burns — slow pan/zoom on stills (and optionally video).
+// Stored on details.kenBurns; the player Image/Video renderers read it.
+const KEN_BURNS_OPTIONS: { value: string; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "zoomIn", label: "Zoom In" },
+  { value: "zoomOut", label: "Zoom Out" },
+  { value: "panLeft", label: "Pan Left" },
+  { value: "panRight", label: "Pan Right" },
+  { value: "panUp", label: "Pan Up" },
+  { value: "panDown", label: "Pan Down" },
+  { value: "zoomInPanLeft", label: "Zoom + Pan Left" },
+  { value: "zoomInPanRight", label: "Zoom + Pan Right" },
+];
+
+const KenBurnsSelect = () => {
+  const { activeIds, trackItemsMap } = useStore();
+  const currentItem = trackItemsMap[activeIds[0]] as any;
+  const value = currentItem?.details?.kenBurns || "off";
+  const onChange = (v: string) => {
+    if (!activeIds[0]) return;
+    dispatch(EDIT_OBJECT, {
+      payload: { [activeIds[0]]: { details: { kenBurns: v } } },
+    });
+  };
+  return (
+    <div className="flex items-center gap-2 pb-2 border-b border-border/50">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
+        Ken Burns
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="text-xs bg-secondary text-foreground border border-border rounded px-1.5 py-0.5 cursor-pointer outline-none"
+      >
+        {KEN_BURNS_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+};
+
 export const Animations = ({ properties, trackItem }: PresetTextProps) => {
+  const isMedia = trackItem?.type === "image" || trackItem?.type === "video";
   return (
     <div className="flex flex-col gap-2 py-4">
       <Label className="font-sans text-xs font-semibold">Animations</Label>
       <GlobalAnimationToggle />
+      {isMedia && <KenBurnsSelect />}
       <SelectaAnimation trackItem={trackItem} />
     </div>
   );

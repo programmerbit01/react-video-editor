@@ -5,6 +5,7 @@ import { calculateContainerStyles, calculateMediaStyles } from "../styles";
 import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
 import { OffthreadVideo } from "remotion";
+import { kenBurnsTransform } from "./ken-burns";
 
 export const Video = ({
   item,
@@ -31,6 +32,13 @@ export const Video = ({
   const { durationInFrames } = calculateFrames(item.display, fps);
   const currentFrame = (frame || 0) - (item.display.from * fps) / 1000;
 
+  // Ken Burns: optional slow pan/zoom (subtle motion on archival footage too).
+  const kbTransform = kenBurnsTransform(
+    (details as any)?.kenBurns,
+    currentFrame,
+    durationInFrames
+  );
+
   const children = (
     <BoxAnim
       style={calculateContainerStyles(details, crop, {
@@ -51,7 +59,12 @@ export const Video = ({
           keyframeAnimations={animationTimed}
           frame={frame || 0}
         >
-          <div style={calculateMediaStyles(details, crop)}>
+          <div
+            style={{
+              ...calculateMediaStyles(details, crop),
+              ...(kbTransform ? { overflow: "hidden" } : {})
+            }}
+          >
             <OffthreadVideo
               startFrom={(item.trim?.from! / 1000) * fps}
               endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
@@ -62,7 +75,10 @@ export const Video = ({
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                display: "block"
+                display: "block",
+                ...(kbTransform
+                  ? { transform: kbTransform, transformOrigin: "center center" }
+                  : {})
               }}
             />
           </div>

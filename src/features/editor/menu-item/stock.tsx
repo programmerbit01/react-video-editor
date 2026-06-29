@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { Film, ImageIcon, Music } from "lucide-react";
+import { Film, ImageIcon, Music, Landmark } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Videos } from "./videos";
 import { Images } from "./images";
 import { Audios } from "./audios";
+import { Archival } from "./archival";
 
-type StockTab = "video" | "images" | "sound";
+type StockTab = "video" | "images" | "archival" | "sound";
 
 const TABS: { id: StockTab; icon: typeof Film; label: string }[] = [
-  { id: "video",  icon: Film,      label: "Video"  },
-  { id: "images", icon: ImageIcon, label: "Images" },
-  { id: "sound",  icon: Music,     label: "Sound"  },
+  { id: "video",    icon: Film,      label: "Video"    },
+  { id: "images",   icon: ImageIcon, label: "Images"   },
+  { id: "archival", icon: Landmark,  label: "Archival" },
+  { id: "sound",    icon: Music,     label: "Sound"    },
 ];
 
 export const Stock = () => {
@@ -40,9 +42,10 @@ export const Stock = () => {
 
       {/* Content */}
       <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
-        {tab === "video"  && <Videos />}
-        {tab === "images" && <Images />}
-        {tab === "sound"  && <Audios />}
+        {tab === "video"    && <Videos />}
+        {tab === "images"   && <Images />}
+        {tab === "archival" && <Archival />}
+        {tab === "sound"    && <Audios />}
       </div>
     </div>
   );

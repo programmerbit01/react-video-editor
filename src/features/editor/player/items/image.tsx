@@ -5,6 +5,7 @@ import { calculateContainerStyles, calculateMediaStyles } from "../styles";
 import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
 import { Img } from "remotion";
+import { kenBurnsTransform } from "./ken-burns";
 
 export default function Image({
   item,
@@ -30,6 +31,13 @@ export default function Image({
   const { durationInFrames } = calculateFrames(item.display, fps);
   const currentFrame = (frame || 0) - (item.display.from * fps) / 1000;
 
+  // Ken Burns: slow pan/zoom on the still, driven by the current frame.
+  const kbTransform = kenBurnsTransform(
+    (details as any)?.kenBurns,
+    currentFrame,
+    durationInFrames
+  );
+
   const children = (
     <BoxAnim
       style={calculateContainerStyles(details, crop, {
@@ -52,7 +60,11 @@ export default function Image({
         >
           <div
             id={`${item.id}-reveal-mask`}
-            style={calculateMediaStyles(details, crop)}
+            style={{
+              ...calculateMediaStyles(details, crop),
+              // Ken Burns scales/translates the image past its box — clip it.
+              ...(kbTransform ? { overflow: "hidden" } : {})
+            }}
           >
             {/* image layer */}
             <Img
@@ -62,7 +74,10 @@ export default function Image({
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                display: "block"
+                display: "block",
+                ...(kbTransform
+                  ? { transform: kbTransform, transformOrigin: "center center" }
+                  : {})
               }}
             />
           </div>
