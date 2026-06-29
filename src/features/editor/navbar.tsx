@@ -39,6 +39,8 @@ import { ShortcutsModal } from "./shortcuts-modal";
 import { ModeToggle } from "@/components/ui/mode-toggle";
 import { SaveProjectModal } from "./save-project-modal";
 import useScriptGuideStore, { ScriptSegment } from "./store/use-script-guide-store";
+import { LOOKS } from "./player/film-look";
+import { Clapperboard } from "lucide-react";
 import { parseTimeToMs } from "./store/use-script-guide-store";
 import {
   getSavedProjects,
@@ -135,8 +137,11 @@ export default function Navbar({
   };
 
   const handleSaveProject = (name: string) => {
+    const sm = stateManager.toJSON() as Record<string, unknown>;
     const data = {
-      ...(stateManager.toJSON() as Record<string, unknown>),
+      ...sm,
+      // persist the scene-wide Film Look so reopening restores it
+      metadata: { ...(sm.metadata as object), look: useStore.getState().look },
       ...(rawJson ? { _guidedScript: rawJson } : {}),
     };
     if (currentProjectId) {
@@ -175,6 +180,9 @@ export default function Navbar({
 
   const handleLoadProject = (project: SavedProject) => {
     dispatch(DESIGN_LOAD, { payload: patchDesignMetadata(project.data as Record<string, unknown>) });
+    // restore the saved Film Look into the live store (preview + next render)
+    const savedLook = (project.data as any)?.metadata?.look;
+    useStore.getState().setLook(typeof savedLook === "string" ? savedLook : "off");
     setTitle(project.name);
     setProjectName(project.name);
     setCurrentProjectId(project.id);
@@ -312,6 +320,7 @@ export default function Navbar({
       {/* Right: theme + shortcuts + download */}
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
+          <LookPicker />
           <ScriptGuideButton />
           <div className="rounded-full border border-border/70 bg-background/80 p-0.5 shadow-sm">
             <ModeToggle />
@@ -739,6 +748,55 @@ const ResizeOption = ({
         <div className="text-xs text-muted-foreground">{description}</div>
       </div>
     </div>
+  );
+};
+
+// Phase 1 — Film Look: scene-wide grade + grain preset picker. Manual surface
+// for the same `look` value the MCP sets via assemble_timeline(look=...).
+const LookPicker = () => {
+  const { look, setLook } = useStore();
+  const [open, setOpen] = useState(false);
+  const active = LOOKS.find((l) => l.id === look) ?? LOOKS[0];
+  const isOn = active.id !== "off";
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`pointer-events-auto h-8 gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+            isOn
+              ? "border-amber-500/60 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+              : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+          title="Film Look — global colour grade & grain"
+        >
+          <Clapperboard className="size-3.5" />
+          <span className="hidden sm:inline">{isOn ? active.label : "Look"}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="bg-background z-[251] w-56 px-2 py-2" sideOffset={6}>
+        <p className="px-2 pb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          Film Look
+        </p>
+        {LOOKS.map((l) => (
+          <div
+            key={l.id}
+            onClick={() => { setLook(l.id); setOpen(false); }}
+            className={`flex h-8 cursor-pointer items-center justify-between rounded-sm px-3 text-sm transition-colors hover:bg-accent ${
+              l.id === look ? "bg-accent font-medium" : ""
+            }`}
+          >
+            <span>{l.label}</span>
+            {l.id === look && <span className="text-[10px] text-muted-foreground">●</span>}
+          </div>
+        ))}
+        <p className="px-2 pt-2 text-[10px] leading-tight text-muted-foreground">
+          Applies to preview &amp; final render. Content-agnostic.
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 };
 

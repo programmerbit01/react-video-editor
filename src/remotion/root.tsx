@@ -35,6 +35,8 @@ const RenderRoot = ({ design, serverOrigin, mutedMap = {}, hiddenMap = {} }: Ren
       duration: d.duration ?? 0,
       activeIds: [],
       sceneMoveableRef: null,
+      // Phase 1 — Film Look: carried scene-wide in design.metadata.look.
+      look: d.metadata?.look ?? "off",
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

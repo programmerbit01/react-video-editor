@@ -1,6 +1,7 @@
 import { IDesign } from "@designcombo/types";
 import { create } from "zustand";
 import useTrackVisibilityStore from "./use-track-visibility-store";
+import useStore from "./use-store";
 
 export type ExportQuality = "high" | "medium" | "low";
 export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
@@ -80,6 +81,15 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         const mutedTrackIds = Object.keys(muted).filter((id) => muted[id]);
         const hiddenTrackIds = Object.keys(hidden).filter((id) => hidden[id]);
 
+        // Phase 1 — Film Look: carry the scene-wide grade preset into the render
+        // payload so the manual GUI export matches the editor preview. The MCP
+        // path sets design.metadata.look itself.
+        const { look } = useStore.getState();
+        const designWithLook = {
+          ...payload,
+          metadata: { ...(payload as any).metadata, look },
+        } as IDesign;
+
         const isRemotion = exportEngine === "remotion";
         const apiBase = isRemotion ? "/api/render-remotion" : "/api/render";
 
@@ -87,7 +97,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            design: payload,
+            design: designWithLook,
             options: {
               fps: 30,
               maxDim,

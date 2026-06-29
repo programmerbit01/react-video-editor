@@ -5,7 +5,8 @@ import { EDIT_OBJECT, ENTER_EDIT_MODE } from "@designcombo/state";
 import { groupTrackItems } from "../utils/track-items";
 import { TransitionSeries, Transitions } from "@designcombo/transitions";
 import { calculateTextHeight } from "../utils/text";
-import { useCurrentFrame } from "remotion";
+import { useCurrentFrame, AbsoluteFill } from "remotion";
+import { FilmLook, gradeFilterFor } from "./film-look";
 import useStore from "../store/use-store";
 import useTrackVisibilityStore from "../store/use-track-visibility-store";
 import { ITrack } from "@designcombo/types";
@@ -21,7 +22,8 @@ const Composition = () => {
     transitionsMap,
     structure,
     activeIds,
-    tracks
+    tracks,
+    look
   } = useStore();
   const { hidden, muted } = useTrackVisibilityStore();
   const frame = useCurrentFrame();
@@ -203,7 +205,7 @@ const Composition = () => {
     return () => subscription.unsubscribe();
   }, [editableTextId]);
 
-  return (
+  const content = (
     <>
       {groupedItems.map((group, index) => {
         if (group.length === 1) {
@@ -251,6 +253,20 @@ const Composition = () => {
           </TransitionSeries>
         );
       })}
+    </>
+  );
+
+  // Film Look "off" → return the timeline exactly as before (zero regression).
+  const grade = gradeFilterFor(look);
+  if (grade === "none") return content;
+
+  // Active look → recolour the shots with the grade filter, then lay the
+  // grain/vignette texture on top. The overlay is pointer-events:none so it
+  // never interferes with editor selection/editing.
+  return (
+    <>
+      <AbsoluteFill style={{ filter: grade }}>{content}</AbsoluteFill>
+      <FilmLook look={look} />
     </>
   );
 };

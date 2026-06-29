@@ -47,6 +47,12 @@ interface ITimelineStore {
   setSnapEnabled: (snapEnabled: boolean) => void;
   viewTimeline: boolean;
   setViewTimeline: (viewTimeline: boolean) => void;
+
+  // Phase 1 — Film Look: global color-grade + grain preset applied above all
+  // shots. Content-agnostic, optional ("off" = no-op). Stored scene-wide so both
+  // the editor preview and server render read the same value.
+  look: string;
+  setLook: (look: string) => void;
 }
 
 const useStore = create<ITimelineStore>((set) => ({
@@ -66,6 +72,9 @@ const useStore = create<ITimelineStore>((set) => ({
   setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
   viewTimeline: true,
   setViewTimeline: (viewTimeline) => set({ viewTimeline }),
+
+  look: "off",
+  setLook: (look) => set({ look }),
 
   timeline: null,
   duration: 1000,
