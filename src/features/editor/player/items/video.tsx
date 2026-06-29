@@ -82,7 +82,12 @@ export const Video = ({
                 objectFit: "cover",
                 display: "block",
                 ...(kbTransform
-                  ? { transform: kbTransform, transformOrigin: "center center" }
+                  ? {
+                      transform: kbTransform,
+                      transformOrigin: "center center",
+                      willChange: "transform",
+                      backfaceVisibility: "hidden" as const,
+                    }
                   : {})
               }}
             />

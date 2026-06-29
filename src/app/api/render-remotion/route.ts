@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import path from "path";
+import os from "os";
+import { execSync } from "child_process";
 import { mkdir } from "fs/promises";
 import { jobs } from "./jobs";
 
@@ -38,6 +40,31 @@ async function getBundleUrl(): Promise<string> {
 // 2 minutes gives the bundle/root ample time to evaluate and render.
 const RENDER_TIMEOUT_MS = 120_000;
 
+// Concurrency = parallel headless-Chrome render workers; the biggest single-machine
+// speed lever. Default to (cores - 1), capped 4..16, overridable via env.
+const RENDER_CONCURRENCY = (() => {
+  const env = parseInt(process.env.REMOTION_CONCURRENCY || "", 10);
+  if (Number.isFinite(env) && env > 0) return env;
+  const cores = os.cpus()?.length || 8;
+  return Math.max(4, Math.min(cores - 1, 16));
+})();
+
+// GPU GL backend for headless-Chrome rendering. AUTO: if an NVIDIA GPU is
+// detected (nvidia-smi present, e.g. the 3090 box) we default to "angle" so the
+// GPU is used; on Mac / GPU-less servers we leave it on Remotion's CPU default.
+// Override anytime: REMOTION_GL=egl (force a backend) or REMOTION_GL=off (disable
+// if a GPU render ever comes out black / fails).
+const RENDER_GL = (() => {
+  const env = (process.env.REMOTION_GL || "").trim().toLowerCase();
+  if (env) return env === "off" || env === "none" ? "" : env; // explicit override wins
+  try {
+    execSync("nvidia-smi -L", { stdio: "ignore", timeout: 2000 });
+    return "angle"; // NVIDIA GPU present → use it
+  } catch {
+    return ""; // no GPU detected → CPU default
+  }
+})();
+
 async function runRemotionExport(jobId: string, design: any, options: any) {
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
@@ -73,6 +100,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
 
   console.log(`[render-remotion] composition: ${composition.width}x${composition.height} @ ${composition.fps}fps, ${composition.durationInFrames} frames (${(composition.durationInFrames / composition.fps).toFixed(1)}s)`);
   jobs.set(jobId, { status: "PROCESSING", progress: 15 });
+  console.log(`[render-remotion] concurrency=${RENDER_CONCURRENCY} hwAccel=if-possible gl=${RENDER_GL || "(default)"}`);
 
   await renderMedia({
     composition,
@@ -80,7 +108,11 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     codec: "h264",
     outputLocation: outputPath,
     inputProps,
-    concurrency: 7,
+    concurrency: RENDER_CONCURRENCY,
+    // Use hardware encoding when available (e.g. macOS VideoToolbox). Falls back
+    // to CPU (libx264) automatically if not supported.
+    hardwareAcceleration: "if-possible",
+    ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
     timeoutInMilliseconds: RENDER_TIMEOUT_MS,
     imageFormat: "jpeg",
     jpegQuality: 90,

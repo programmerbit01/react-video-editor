@@ -81,7 +81,15 @@ export default function Image({
                 objectFit: "cover",
                 display: "block",
                 ...(kbTransform
-                  ? { transform: kbTransform, transformOrigin: "center center" }
+                  ? {
+                      transform: kbTransform,
+                      transformOrigin: "center center",
+                      // Promote to a GPU compositor layer so the per-frame Ken
+                      // Burns transform is a cheap composite, not a full
+                      // re-rasterize of the (large) image every frame.
+                      willChange: "transform",
+                      backfaceVisibility: "hidden" as const,
+                    }
                   : {})
               }}
             />
