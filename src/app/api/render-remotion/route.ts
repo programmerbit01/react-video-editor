@@ -57,11 +57,14 @@ const RENDER_CONCURRENCY = (() => {
 const RENDER_GL = (() => {
   const env = (process.env.REMOTION_GL || "").trim().toLowerCase();
   if (env) return env === "off" || env === "none" ? "" : env; // explicit override wins
+  // macOS always has a usable GPU (Apple Silicon / Metal via ANGLE).
+  if (os.platform() === "darwin") return "angle";
+  // Linux/Windows: only enable if an NVIDIA GPU is actually present.
   try {
     execSync("nvidia-smi -L", { stdio: "ignore", timeout: 2000 });
-    return "angle"; // NVIDIA GPU present → use it
+    return "angle";
   } catch {
-    return ""; // no GPU detected → CPU default
+    return ""; // no GPU detected → CPU default (safe on headless servers)
   }
 })();
 
