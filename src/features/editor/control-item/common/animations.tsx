@@ -118,26 +118,77 @@ const KenBurnsSelect = () => {
   const { activeIds, trackItemsMap } = useStore();
   const currentItem = trackItemsMap[activeIds[0]] as any;
   const value = currentItem?.details?.kenBurns || "off";
-  const onChange = (v: string) => {
+  const intensity = Number(currentItem?.details?.kenBurnsIntensity ?? 8);
+  const motionLen = Number(currentItem?.details?.kenBurnsDuration ?? 100);
+  const smooth = !!currentItem?.details?.kenBurnsSmooth;
+
+  const edit = (patch: Record<string, any>) => {
     if (!activeIds[0]) return;
-    dispatch(EDIT_OBJECT, {
-      payload: { [activeIds[0]]: { details: { kenBurns: v } } },
-    });
+    dispatch(EDIT_OBJECT, { payload: { [activeIds[0]]: { details: patch } } });
   };
+
   return (
-    <div className="flex items-center gap-2 pb-2 border-b border-border/50">
-      <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
-        Ken Burns
-      </span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="text-xs bg-secondary text-foreground border border-border rounded px-1.5 py-0.5 cursor-pointer outline-none"
-      >
-        {KEN_BURNS_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
+    <div className="flex flex-col gap-2 pb-2 border-b border-border/50">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
+          Ken Burns
+        </span>
+        <select
+          value={value}
+          onChange={(e) => edit({ kenBurns: e.target.value })}
+          className="text-xs bg-secondary text-foreground border border-border rounded px-1.5 py-0.5 cursor-pointer outline-none"
+        >
+          {KEN_BURNS_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {value !== "off" && (
+        <>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
+              Intensity
+            </span>
+            <input
+              type="range"
+              min={1}
+              max={40}
+              value={intensity}
+              onChange={(e) => edit({ kenBurnsIntensity: Number(e.target.value) })}
+              className="w-28 accent-white cursor-pointer"
+            />
+            <span className="text-[10px] text-muted-foreground w-7 text-right">{intensity}%</span>
+          </div>
+          <div
+            className="flex items-center gap-2"
+            title="How much of the clip the move plays over. Lower = quick 'punch' zoom that then holds (great for engagement); 100% = slow move across the whole clip."
+          >
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
+              Motion Length
+            </span>
+            <input
+              type="range"
+              min={5}
+              max={100}
+              step={5}
+              value={motionLen}
+              onChange={(e) => edit({ kenBurnsDuration: Number(e.target.value) })}
+              className="w-28 accent-white cursor-pointer"
+            />
+            <span className="text-[10px] text-muted-foreground w-7 text-right">{motionLen}%</span>
+          </div>
+          <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground uppercase tracking-wide cursor-pointer">
+            <input
+              type="checkbox"
+              checked={smooth}
+              onChange={(e) => edit({ kenBurnsSmooth: e.target.checked })}
+              className="accent-white h-3 w-3"
+            />
+            Smooth (ease in/out)
+          </label>
+        </>
+      )}
     </div>
   );
 };

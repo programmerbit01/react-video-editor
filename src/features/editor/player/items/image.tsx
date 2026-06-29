@@ -35,7 +35,12 @@ export default function Image({
   const kbTransform = kenBurnsTransform(
     (details as any)?.kenBurns,
     currentFrame,
-    durationInFrames
+    durationInFrames,
+    {
+      intensity: (details as any)?.kenBurnsIntensity,
+      smooth: (details as any)?.kenBurnsSmooth,
+      duration: (details as any)?.kenBurnsDuration,
+    }
   );
 
   const children = (

@@ -30,6 +30,11 @@ export default function Caption({
     return <></>;
   }
 
+  // A caption with no words crashes below (firstWord.start). Skip it safely.
+  if (!(item as ICaption)?.details?.words?.length) {
+    return <></>;
+  }
+
   const { fps, frame } = options;
   const absoluteFrame = frame || 0; // global Remotion frame — correct in both player and renderMedia
   const { details, display, animations } = item as ICaption;
