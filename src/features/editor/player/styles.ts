@@ -53,6 +53,7 @@ export const calculateTextStyles = (
   textAlign: details.textAlign || "left",
   color: details.color || "#000000",
   backgroundColor: details.backgroundColor || "transparent",
+  padding: (details as any).padding || 0,
   borderRadius: `${Math.min(details.width, details.height) * ((details.borderRadius || 0) / 100)}px`
 });
 

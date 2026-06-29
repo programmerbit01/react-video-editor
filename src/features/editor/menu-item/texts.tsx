@@ -3,7 +3,7 @@ import { ADD_AUDIO, ADD_IMAGE, ADD_TEXT } from "@designcombo/state";
 import { dispatch } from "@designcombo/events";
 import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import Draggable from "@/components/shared/draggable";
-import { TEXT_ADD_PAYLOAD } from "../constants/payload";
+import { TEXT_ADD_PAYLOAD, LOWER_THIRD_ADD_PAYLOAD } from "../constants/payload";
 import { cn } from "@/lib/utils";
 import { nanoid } from "nanoid";
 
@@ -13,6 +13,13 @@ export const Texts = () => {
   const handleAddText = () => {
     dispatch(ADD_TEXT, {
       payload: { ...TEXT_ADD_PAYLOAD, id: nanoid() },
+      options: {}
+    });
+  };
+
+  const handleAddLowerThird = () => {
+    dispatch(ADD_TEXT, {
+      payload: { ...LOWER_THIRD_ADD_PAYLOAD, id: nanoid() },
       options: {}
     });
   };
@@ -62,6 +69,26 @@ export const Texts = () => {
             )}
           >
             Add text
+          </div>
+        </Draggable>
+
+        <Draggable
+          data={LOWER_THIRD_ADD_PAYLOAD}
+          renderCustomPreview={
+            <Button variant="secondary" className="w-60">
+              Add lower third
+            </Button>
+          }
+          shouldDisplayPreview={!isDraggingOverTimeline}
+        >
+          <div
+            onClick={handleAddLowerThird}
+            className={cn(
+              buttonVariants({ variant: "secondary" }),
+              "cursor-pointer"
+            )}
+          >
+            Add lower third
           </div>
         </Draggable>
       </div>
