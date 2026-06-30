@@ -9,7 +9,7 @@ import {
   TooltipTrigger
 } from "@/components/ui/tooltip";
 import useStore from "./store/use-store";
-import { BarChart2 } from "lucide-react";
+import { BarChart2, Sparkles } from "lucide-react";
 
 // Define menu items configuration for better maintainability
 const MENU_ITEMS = [
@@ -47,6 +47,13 @@ const MENU_ITEMS = [
     label: "Graphics",
     ariaLabel: "Add animated charts and graphics",
     color: "text-purple-300"
+  },
+  {
+    id: "motionGraphics",
+    icon: Sparkles,
+    label: "Motion",
+    ariaLabel: "Add animated Lottie motion graphics",
+    color: "text-amber-300"
   },
   {
     id: "captions",

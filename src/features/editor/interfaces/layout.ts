@@ -16,7 +16,8 @@ export type IMenuItem =
   | "sfx"
   | "vapp"
   | "stock"
-  | "graphics";
+  | "graphics"
+  | "motionGraphics";
 export interface ILayoutState {
   cropTarget: ITrackItem | null;
   trackItem: ITrackItem | null;

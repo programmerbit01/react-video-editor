@@ -15,3 +15,4 @@ export { default as BarChart } from "./bar-chart";
 export { default as LineChart } from "./line-chart";
 export { default as StatCard } from "./stat-card";
 export { default as BulletList } from "./bullet-list";
+export { default as LottieItem } from "./lottie";

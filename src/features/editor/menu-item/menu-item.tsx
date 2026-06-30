@@ -14,6 +14,7 @@ import { SFX } from "./sfx";
 import { VappMedia } from "./vapp-media";
 import { Stock } from "./stock";
 import { Graphics } from "./graphics";
+import { MotionGraphics } from "./motion-graphics";
 
 const ActiveMenuItem = () => {
   const { activeMenuItem } = useLayoutStore();
@@ -69,6 +70,10 @@ const ActiveMenuItem = () => {
 
   if (activeMenuItem === "graphics") {
     return <Graphics />;
+  }
+
+  if (activeMenuItem === "motionGraphics") {
+    return <MotionGraphics />;
   }
 
   return null;
