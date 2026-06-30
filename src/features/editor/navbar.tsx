@@ -44,7 +44,7 @@ import { ModeToggle } from "@/components/ui/mode-toggle";
 import { SaveProjectModal } from "./save-project-modal";
 import useScriptGuideStore, { ScriptSegment } from "./store/use-script-guide-store";
 import { LOOKS } from "./player/film-look";
-import { Clapperboard } from "lucide-react";
+import { Clapperboard, Sparkles } from "lucide-react";
 import { parseTimeToMs } from "./store/use-script-guide-store";
 import {
   getSavedProjects,
@@ -75,6 +75,31 @@ const withEditorBase = (path: string) => {
   if (typeof window === "undefined") return path;
   if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
   return path;
+};
+
+type StylePackEntry = {
+  label?: string;
+  look?: string;
+  transition?: string;
+  transition_ms?: number;
+  music_url?: string;
+  music_volume?: number;
+  sfx_on_cuts?: boolean;
+  cut_sfx_url?: string;
+  cut_sfx_volume?: number;
+  caption_font?: string;
+  caption_color?: string;
+  lower_third_style?: string;
+  default_shot_ms?: number;
+};
+
+type StylePackFieldDoc = {
+  allowed?: string[];
+  description?: string;
+  format?: string;
+  range?: number[];
+  recommended_range?: number[];
+  type?: string;
 };
 
 export default function Navbar({
@@ -158,7 +183,11 @@ export default function Navbar({
     const data = {
       ...sm,
       // persist the scene-wide Film Look so reopening restores it
-      metadata: { ...(sm.metadata as object), look: useStore.getState().look },
+      metadata: {
+        ...(sm.metadata as object),
+        look: useStore.getState().look,
+        stylePack: useStore.getState().stylePack,
+      },
       ...(rawJson ? { _guidedScript: rawJson } : {}),
     };
     if (currentProjectId) {
@@ -199,7 +228,9 @@ export default function Navbar({
     dispatch(DESIGN_LOAD, { payload: patchDesignMetadata(project.data as Record<string, unknown>) });
     // restore the saved Film Look into the live store (preview + next render)
     const savedLook = (project.data as any)?.metadata?.look;
+    const savedStylePack = (project.data as any)?.metadata?.stylePack;
     useStore.getState().setLook(typeof savedLook === "string" ? savedLook : "off");
+    useStore.getState().setStylePack(typeof savedStylePack === "string" ? savedStylePack : "");
     setTitle(project.name);
     setProjectName(project.name);
     setCurrentProjectId(project.id);
@@ -337,6 +368,7 @@ export default function Navbar({
       {/* Right: theme + shortcuts + download */}
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
+          <StylePackPicker />
           <LookPicker />
           <MusicBedPicker stateManager={stateManager} />
           <ScriptGuideButton />
@@ -766,6 +798,145 @@ const ResizeOption = ({
         <div className="text-xs text-muted-foreground">{description}</div>
       </div>
     </div>
+  );
+};
+
+const StylePackPicker = () => {
+  const { stylePack, setStylePack, setLook } = useStore();
+  const [open, setOpen] = useState(false);
+  const [packs, setPacks] = useState<Record<string, StylePackEntry>>({});
+  const [fieldDocs, setFieldDocs] = useState<Record<string, StylePackFieldDoc>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPacks = async () => {
+      try {
+        const res = await fetch(withEditorBase("/api/style-packs"), { cache: "no-store" });
+        const data = await res.json();
+        if (!cancelled) {
+          setPacks(data?.packs && typeof data.packs === "object" ? data.packs : {});
+          setFieldDocs(
+            data?.allowed_fields && typeof data.allowed_fields === "object"
+              ? data.allowed_fields
+              : {}
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setPacks({});
+          setFieldDocs({});
+        }
+      }
+    };
+    void loadPacks();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const entries = Object.entries(packs);
+  const active = stylePack ? packs[stylePack] : undefined;
+  const isOn = !!stylePack;
+  const activeSummary = active
+    ? [
+        active.look ? `Look: ${active.look}` : "",
+        active.transition ? `Transition: ${active.transition}${active.transition_ms ? ` (${active.transition_ms}ms)` : ""}` : "",
+        active.music_url ? `Music: ${active.music_volume ?? 18}%` : "Music: off",
+        active.sfx_on_cuts ? `Cut SFX: on (${active.cut_sfx_volume ?? 55}%)` : "Cut SFX: off",
+        active.caption_font ? `Captions: ${active.caption_font}${active.caption_color ? ` ${active.caption_color}` : ""}` : "",
+        active.lower_third_style ? `Lower thirds: ${active.lower_third_style}` : "",
+        active.default_shot_ms ? `Default shot: ${active.default_shot_ms}ms` : "",
+      ].filter(Boolean)
+    : [];
+  const supportedKeys = Object.keys(fieldDocs);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`pointer-events-auto h-8 gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+            isOn
+              ? "border-sky-500/60 bg-sky-500/10 text-sky-600 dark:text-sky-300"
+              : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+          title="Style Pack — one-click house style preset"
+        >
+          <Sparkles className="size-3.5" />
+          <span className="hidden sm:inline">{active?.label || "Style Pack"}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="bg-background z-[251] w-60 px-2 py-2" sideOffset={6}>
+        <p className="px-2 pb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          Style Pack
+        </p>
+        <div
+          onClick={() => {
+            setStylePack("");
+            setOpen(false);
+          }}
+          className={`flex h-8 cursor-pointer items-center justify-between rounded-sm px-3 text-sm transition-colors hover:bg-accent ${
+            !stylePack ? "bg-accent font-medium" : ""
+          }`}
+        >
+          <span>Off (manual)</span>
+          {!stylePack && <span className="text-[10px] text-muted-foreground">●</span>}
+        </div>
+        {entries.map(([id, pack]) => (
+          <div
+            key={id}
+            onClick={() => {
+              setStylePack(id);
+              if (typeof pack.look === "string" && pack.look) {
+                setLook(pack.look);
+              }
+              setOpen(false);
+            }}
+            className={`flex cursor-pointer items-center justify-between rounded-sm px-3 py-2 text-sm transition-colors hover:bg-accent ${
+              id === stylePack ? "bg-accent font-medium" : ""
+            }`}
+          >
+            <div className="pr-3">
+              <div>{pack.label || id}</div>
+              <div className="text-[10px] text-muted-foreground">{id}</div>
+            </div>
+            {id === stylePack && <span className="text-[10px] text-muted-foreground">●</span>}
+          </div>
+        ))}
+        <p className="px-2 pt-2 text-[10px] leading-tight text-muted-foreground">
+          Editor preview mirrors the pack look. MCP/server render applies the full pack.
+        </p>
+        {activeSummary.length > 0 && (
+          <div className="mt-2 rounded-md border border-border/60 bg-background/60 px-2 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Selected pack summary</p>
+            <div className="mt-1 space-y-1">
+              {activeSummary.map((line) => (
+                <div key={line} className="text-[11px] text-muted-foreground">
+                  {line}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {supportedKeys.length > 0 && (
+          <div className="mt-2 rounded-md border border-border/60 bg-background/60 px-2 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Allowed keys</p>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {supportedKeys.map((key) => (
+                <span
+                  key={key}
+                  title={fieldDocs[key]?.description || key}
+                  className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                >
+                  {key}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 };
 

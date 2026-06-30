@@ -53,6 +53,8 @@ interface ITimelineStore {
   // the editor preview and server render read the same value.
   look: string;
   setLook: (look: string) => void;
+  stylePack: string;
+  setStylePack: (stylePack: string) => void;
 }
 
 const useStore = create<ITimelineStore>((set) => ({
@@ -75,6 +77,8 @@ const useStore = create<ITimelineStore>((set) => ({
 
   look: "off",
   setLook: (look) => set({ look }),
+  stylePack: "",
+  setStylePack: (stylePack) => set({ stylePack }),
 
   timeline: null,
   duration: 1000,

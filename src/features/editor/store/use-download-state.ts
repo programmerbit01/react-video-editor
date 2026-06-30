@@ -99,10 +99,10 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         // Phase 1 — Film Look: carry the scene-wide grade preset into the render
         // payload so the manual GUI export matches the editor preview. The MCP
         // path sets design.metadata.look itself.
-        const { look } = useStore.getState();
+        const { look, stylePack } = useStore.getState();
         const designWithLook = {
           ...payload,
-          metadata: { ...(payload as any).metadata, look },
+          metadata: { ...(payload as any).metadata, look, stylePack },
         } as IDesign;
 
         const isRemotion = exportEngine === "remotion";
