@@ -31,10 +31,16 @@ export const LottieItem = ({
   const loop = details.loop !== false; // default: loop the animation
   const speed = Number(details.speed) || 1;
 
-  const [handle] = useState(() => delayRender(`Lottie ${item.id}`));
+  // lottie-web is browser-only. During Next.js SSR (no window) we must NOT render
+  // it or call delayRender — both crash on the server. The Remotion render runs in
+  // headless Chrome (window exists), so it still animates there.
+  const isBrowser = typeof window !== "undefined";
+
+  const [handle] = useState(() => (isBrowser ? delayRender(`Lottie ${item.id}`) : 0));
   const [data, setData] = useState<LottieAnimationData | null>(inline ?? null);
 
   useEffect(() => {
+    if (!isBrowser) return;
     // Inline data needs no fetch — release the render lock immediately.
     if (inline) {
       continueRender(handle);
@@ -56,16 +62,17 @@ export const LottieItem = ({
     return () => {
       cancelled = true;
     };
-  }, [handle, src, inline]);
+  }, [handle, src, inline, isBrowser]);
 
-  const children = data ? (
-    <Lottie
-      animationData={data}
-      loop={loop}
-      playbackRate={speed}
-      style={{ width: "100%", height: "100%" }}
-    />
-  ) : null;
+  const children =
+    isBrowser && data ? (
+      <Lottie
+        animationData={data}
+        loop={loop}
+        playbackRate={speed}
+        style={{ width: "100%", height: "100%" }}
+      />
+    ) : null;
 
   return BaseSequence({ item, options, children });
 };
