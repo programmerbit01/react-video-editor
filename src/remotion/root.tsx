@@ -3,11 +3,37 @@ import Composition from "../features/editor/player/composition";
 import useStore from "../features/editor/store/use-store";
 import useTrackVisibilityStore from "../features/editor/store/use-track-visibility-store";
 
-// Rewrite relative /api/ paths to absolute so headless Chrome can load them.
+function absolutizeAssetUrl(value: string, serverOrigin: string): string {
+  if (!value || typeof value !== "string") return value;
+  if (/^(https?:|data:|blob:)/i.test(value)) return value;
+  if (!value.startsWith("/")) return value;
+
+  const editorOrigin = serverOrigin.replace(/\/$/, "");
+  const appOrigin = editorOrigin.replace(/\/editor$/, "");
+
+  if (value.startsWith("/editor/")) {
+    return `${appOrigin}${value}`;
+  }
+
+  return `${editorOrigin}${value}`;
+}
+
+// Rewrite root-relative URLs to absolute so headless Chrome loads assets from the
+// real editor server instead of the temporary Remotion bundle host.
 function rewriteUrls(design: any, serverOrigin: string): any {
-  const json = JSON.stringify(design);
-  const rewritten = json.replace(/"\/api\//g, `"${serverOrigin}/api/`);
-  return JSON.parse(rewritten);
+  const visit = (node: any): any => {
+    if (typeof node === "string") return absolutizeAssetUrl(node, serverOrigin);
+    if (Array.isArray(node)) return node.map(visit);
+    if (!node || typeof node !== "object") return node;
+
+    const out: Record<string, any> = {};
+    for (const [key, value] of Object.entries(node)) {
+      out[key] = visit(value);
+    }
+    return out;
+  };
+
+  return visit(design);
 }
 
 interface RenderRootProps {
