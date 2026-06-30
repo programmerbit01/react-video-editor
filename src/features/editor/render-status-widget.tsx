@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 type RenderJob = {
   job_id: string;
@@ -50,6 +51,7 @@ function elapsed(startedAt?: number) {
 export default function RenderStatusWidget() {
   const [jobs, setJobs] = useState<RenderJob[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [collapsed, setCollapsed] = useState(false);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
   const fetchJobs = useCallback(async () => {
@@ -87,9 +89,41 @@ export default function RenderStatusWidget() {
       fontFamily: "system-ui,sans-serif",
       fontSize: 13,
     }}>
-      <div style={{ padding: "8px 12px", borderBottom: "1px solid #222", background: "#1a1a1a", fontWeight: 600 }}>
-        Exports
+      <div style={{
+        padding: "8px 12px",
+        borderBottom: collapsed ? "none" : "1px solid #222",
+        background: "#1a1a1a",
+        fontWeight: 600,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+      }}>
+        <span>Exports</span>
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          title={collapsed ? "Expand exports" : "Minimize exports"}
+          aria-label={collapsed ? "Expand exports" : "Minimize exports"}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: "#9ca3af",
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 2,
+          }}
+        >
+          {collapsed ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
       </div>
+      {collapsed ? (
+        <div style={{ padding: "10px 12px", fontSize: 11, opacity: 0.75 }}>
+          {jobs.length} export{jobs.length === 1 ? "" : "s"}
+        </div>
+      ) : (
+        <>
       {jobs.map((job) => {
         const st = String(job.status || "").toUpperCase();
         return (
@@ -147,6 +181,8 @@ export default function RenderStatusWidget() {
           </div>
         );
       })}
+        </>
+      )}
     </div>
   );
 }
