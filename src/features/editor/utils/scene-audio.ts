@@ -8,6 +8,7 @@ export const MANAGED_AUDIO_SOURCE = "scene-audio-controls";
 export const MUSIC_BED_ROLE = "music-bed";
 export const CUT_SFX_ROLE = "cut-sfx";
 export const MANUAL_SFX_ROLE = "manual-sfx";
+export const SFX_TRACK_ROLE = "sound-effects";
 
 type TimelineState = {
   duration?: number;
@@ -88,6 +89,56 @@ const ensureAudioTrack = (tracks: any[], name: string, role: string, managed = t
         }
   };
   return { tracks: [...tracks, track], track };
+};
+
+const LEGACY_SFX_TRACK_ROLES = new Set([
+  CUT_SFX_ROLE,
+  MANUAL_SFX_ROLE,
+  SFX_TRACK_ROLE
+]);
+
+const isSfxTrack = (track: any) =>
+  track?.type === "audio" && LEGACY_SFX_TRACK_ROLES.has(track?.metadata?.trackRole);
+
+const ensureSharedSfxTrack = (tracks: any[]) => {
+  const sourceTracks = [...tracks];
+  const sfxTracks = sourceTracks.filter(isSfxTrack);
+  const nonSfxTracks = sourceTracks.filter((track) => !isSfxTrack(track));
+
+  if (sfxTracks.length === 0) {
+    const created = {
+      id: generateId(),
+      ...AUDIO_TRACK_BASE,
+      items: [],
+      name: "Sound effects",
+      metadata: {
+        trackRole: SFX_TRACK_ROLE
+      }
+    };
+    return { tracks: [...nonSfxTracks, created], track: created };
+  }
+
+  const primary = sfxTracks[0];
+  const mergedItems = Array.from(
+    new Set(
+      sfxTracks.flatMap((track) => (Array.isArray(track.items) ? track.items : []))
+    )
+  );
+
+  const mergedTrack = {
+    ...primary,
+    name: "Sound effects",
+    items: mergedItems,
+    metadata: {
+      ...(primary.metadata || {}),
+      trackRole: SFX_TRACK_ROLE
+    }
+  };
+
+  return {
+    tracks: [...nonSfxTracks, mergedTrack],
+    track: mergedTrack
+  };
 };
 
 const stripManagedRole = (state: TimelineState, role: string) => {
@@ -183,10 +234,12 @@ export const upsertCutSfx = (
   options: { enabled: boolean; src?: string; volume?: number }
 ) => {
   const base = stripManagedRole(state, CUT_SFX_ROLE);
+  const normalized = ensureSharedSfxTrack(base.tracks);
   const duration = getTimelineDuration({ ...state, ...base });
   if (!options.enabled || !options.src) {
     return {
       ...base,
+      tracks: normalized.tracks,
       duration
     };
   }
@@ -195,11 +248,11 @@ export const upsertCutSfx = (
   if (boundaries.length === 0) {
     return {
       ...base,
+      tracks: normalized.tracks,
       duration
     };
   }
 
-  const ensured = ensureManagedAudioTrack(base.tracks, "Cut SFX", CUT_SFX_ROLE);
   const nextTrackItemsMap = { ...base.trackItemsMap };
   const nextTrackItemIds = [...base.trackItemIds];
   const nextIds: string[] = [];
@@ -227,8 +280,8 @@ export const upsertCutSfx = (
     nextIds.push(itemId);
   });
 
-  const tracks = ensured.tracks.map((track) =>
-    track.id === ensured.track.id
+  const tracks = normalized.tracks.map((track) =>
+    track.id === normalized.track.id
       ? { ...track, items: [...(track.items || []), ...nextIds] }
       : track
   );
@@ -249,12 +302,7 @@ export const addManualSfx = (
   const from = Math.max(0, Math.round(options.from));
   const durationMs = Math.max(100, Math.round(options.durationMs));
   const to = from + durationMs;
-  const ensured = ensureAudioTrack(
-    [...(state.tracks || [])],
-    "Sound effects",
-    MANUAL_SFX_ROLE,
-    false
-  );
+  const ensured = ensureSharedSfxTrack([...(state.tracks || [])]);
 
   const tracks = ensured.tracks.map((track) =>
     track.id === ensured.track.id
