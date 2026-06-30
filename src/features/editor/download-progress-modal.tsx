@@ -125,7 +125,7 @@ const DownloadProgressModal = () => {
   return (
     <>
       {showDock && (
-        <div className="fixed bottom-4 left-4 z-[10000] w-[320px] rounded-xl border border-zinc-800 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur">
+        <div className="fixed bottom-4 left-4 z-[30000] pointer-events-auto w-[320px] rounded-xl border border-zinc-800 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-semibold">
@@ -167,14 +167,14 @@ const DownloadProgressModal = () => {
           handleDismiss();
         }}
       >
-      <DialogContent className="flex h-[627px] flex-col gap-0 bg-background p-0 sm:max-w-[844px]">
+      <DialogContent className="z-[30000] pointer-events-auto flex h-[627px] flex-col gap-0 bg-background p-0 sm:max-w-[844px]">
         <DialogTitle className="hidden" />
         <DialogDescription className="hidden" />
-        <div className="absolute right-4 top-4 flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMinimize}>
+        <div className="absolute right-4 top-4 z-[30001] flex items-center gap-1 pointer-events-auto">
+          <Button variant="ghost" size="icon" className="h-8 w-8 pointer-events-auto" onClick={handleMinimize}>
             <Minimize2Icon className="h-4 w-4 text-zinc-400" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleDismiss}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 pointer-events-auto" onClick={handleDismiss}>
             <XIcon className="h-5 w-5 text-zinc-400" />
           </Button>
         </div>
