@@ -94,7 +94,7 @@ const Scene = forwardRef<
           }}
         />
         <Board size={size}>
-          <Player />
+          {isMounted ? <Player /> : null}
           <SceneInteractions
             stateManager={stateManager}
             containerRef={containerRef as React.RefObject<HTMLDivElement>}

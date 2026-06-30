@@ -64,7 +64,7 @@ export const SequenceItem: Record<
   linechart: (item, options) => LineChart({ item, options }),
   statcard: (item, options) => StatCard({ item, options }),
   bulletlist: (item, options) => BulletList({ item, options }),
-  lottie: (item, options) => LottieItem({ item, options }),
+  lottie: (item, options) => <LottieItem item={item} options={options} />,
   // Graphic items stored as "image" type so the timeline Fabric renderer works.
   // Route to the correct component based on metadata.graphicType.
   image: (item, options) => {
@@ -73,7 +73,9 @@ export const SequenceItem: Record<
     if (graphicType === "linechart") return LineChart({ item, options });
     if (graphicType === "statcard") return StatCard({ item, options });
     if (graphicType === "bulletlist") return BulletList({ item, options });
-    if (graphicType === "lottie") return LottieItem({ item, options });
+    if (graphicType === "lottie") {
+      return <LottieItem item={item} options={options} />;
+    }
     return Image({ item: item as IImage, options });
   }
 };

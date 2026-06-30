@@ -10,6 +10,10 @@ import { AnimationOverlayStore } from "../../utils/animation-overlay-store";
 
 interface ImageProps extends ResizableProps {
   src: string;
+  metadata?: {
+    previewUrl?: string;
+    graphicType?: string;
+  };
 }
 
 class Image extends Resizable {
@@ -24,7 +28,7 @@ class Image extends Resizable {
   constructor(props: ImageProps) {
     super(props);
     this.id = props.id;
-    this.src = props.src;
+    this.src = props.metadata?.previewUrl || props.src;
     this.display = props.display;
     this.tScale = props.tScale;
     this.loadImage();

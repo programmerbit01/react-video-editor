@@ -43,6 +43,7 @@ const Player = () => {
     <RemotionPlayer
       ref={playerRef}
       component={Composition}
+      acknowledgeRemotionLicense
       durationInFrames={Math.round((duration / 1000) * fps) || 1}
       compositionWidth={size.width}
       compositionHeight={size.height}

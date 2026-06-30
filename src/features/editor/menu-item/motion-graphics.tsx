@@ -29,12 +29,56 @@ const LABEL: React.CSSProperties = {
   display: "block",
 };
 
+const createLottiePreviewUrl = (label: string) => {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="320" height="80" viewBox="0 0 320 80">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#2b2114" />
+          <stop offset="100%" stop-color="#6d4f1f" />
+        </linearGradient>
+      </defs>
+      <rect width="320" height="80" rx="10" fill="url(#bg)" />
+      <rect x="12" y="12" width="56" height="56" rx="12" fill="#ffb84d" opacity="0.95" />
+      <path d="M40 24 L45 35 L58 36 L48 44 L51 56 L40 49 L29 56 L32 44 L22 36 L35 35 Z" fill="#fffaf0" />
+      <text x="84" y="34" fill="#fff7e6" font-family="Arial, sans-serif" font-size="12" font-weight="700">LOTTIE</text>
+      <text x="84" y="54" fill="#f6d7a7" font-family="Arial, sans-serif" font-size="11">${label}</text>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+};
+
+const getDefaultLottieBox = (
+  scene: { width: number; height: number },
+  asset?: { w?: number; h?: number },
+) => {
+  const sourceW = Math.max(1, Number(asset?.w) || 500);
+  const sourceH = Math.max(1, Number(asset?.h) || 500);
+  const maxW = scene.width * 0.32;
+  const maxH = scene.height * 0.32;
+  const scale = Math.min(maxW / sourceW, maxH / sourceH, 1);
+  const width = Math.max(180, Math.round(sourceW * scale));
+  const height = Math.max(180, Math.round(sourceH * scale));
+
+  return {
+    width,
+    height,
+    left: `${Math.round((scene.width - width) / 2)}px`,
+    top: `${Math.round((scene.height - height) / 2)}px`,
+  };
+};
+
 // Insert a Lottie item onto the timeline. Stored as an "image" item with
 // metadata.graphicType === "lottie" (same trick as charts) so designcombo's
 // track machinery works unchanged; the player routes it to the Lottie renderer.
 function addLottieItem(
   details: Record<string, unknown>,
   durationMs: number,
+  previewUrl: string,
+  label: string,
+  assetSize?: { w?: number; h?: number },
+  sourceUrl?: string,
+  animationDataBackup?: unknown,
 ) {
   const sm = getStateManagerRef();
   if (!sm) return;
@@ -44,6 +88,7 @@ function addLottieItem(
   const to = from + durationMs;
   const id = generateId();
   const size = useStore.getState().size;
+  const box = getDefaultLottieBox(size, assetSize);
 
   const newItem = {
     id,
@@ -51,24 +96,49 @@ function addLottieItem(
     type: "image",
     display: { from, to },
     details: {
-      width: size.width,
-      height: size.height,
-      top: "0px",
-      left: "0px",
+      width: box.width,
+      height: box.height,
+      top: box.top,
+      left: box.left,
       loop: true,
       speed: 1,
       ...details,
     },
-    metadata: { graphicType: "lottie" },
+    metadata: {
+      graphicType: "lottie",
+      previewUrl,
+      label,
+      ...(sourceUrl ? { lottieUrl: sourceUrl } : {}),
+      ...(animationDataBackup ? { lottieData: animationDataBackup } : {}),
+    },
   };
 
   let tracks: any[] = [...(state.tracks || [])];
   let targetTrack = tracks.find(
-    (t: any) => t.type === "helper" || t.type === "image",
+    (t: any) => t.type === "customTrack" && t.metadata?.overlayType === "lottie",
   );
   if (!targetTrack) {
     const tid = generateId();
-    tracks = [...tracks, { id: tid, type: "helper", items: [id], muted: false, accepts: [] }];
+    const overlayTrack = {
+      id: tid,
+      type: "customTrack",
+      items: [id],
+      muted: false,
+      accepts: [],
+      metadata: { overlayType: "lottie" },
+    };
+    const insertAt = Math.max(
+      tracks.findIndex((t: any) => t.type === "customTrack"),
+      0,
+    );
+    tracks =
+      insertAt >= 0
+        ? [
+            ...tracks.slice(0, insertAt),
+            overlayTrack,
+            ...tracks.slice(insertAt),
+          ]
+        : [...tracks, overlayTrack];
   } else {
     tracks = tracks.map((t: any) =>
       t.id === targetTrack.id ? { ...t, items: [...t.items, id] } : t,
@@ -95,7 +165,15 @@ export const MotionGraphics = () => {
     try {
       const res = await fetch(withEditorBase(p.file));
       const animationData = await res.json();
-      addLottieItem({ animationData }, duration * 1000);
+      addLottieItem(
+        { animationData },
+        duration * 1000,
+        createLottiePreviewUrl(p.label),
+        p.label,
+        { w: animationData?.w, h: animationData?.h },
+        withEditorBase(p.file),
+        animationData,
+      );
     } catch {
       // ignore — nothing added if the preset can't load
     } finally {
@@ -106,7 +184,15 @@ export const MotionGraphics = () => {
   const addUrl = () => {
     const src = url.trim();
     if (!src) return;
-    addLottieItem({ src }, duration * 1000);
+    addLottieItem(
+      { src },
+      duration * 1000,
+      createLottiePreviewUrl("Custom URL"),
+      "Custom URL",
+      undefined,
+      src,
+      undefined,
+    );
     setUrl("");
   };
 
@@ -156,8 +242,21 @@ export const MotionGraphics = () => {
                   textAlign: "left",
                 }}
               >
-                {busy === p.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} className="text-amber-300" />}
-                {p.label}
+                {busy === p.id ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <img
+                    src={createLottiePreviewUrl(p.label)}
+                    alt={p.label}
+                    style={{ width: 28, height: 28, borderRadius: 6, flexShrink: 0 }}
+                  />
+                )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span>{p.label}</span>
+                  <span style={{ fontSize: 10, color: "rgba(255,255,255,0.5)" }}>
+                    Lottie preset
+                  </span>
+                </div>
               </button>
             ))}
           </div>
