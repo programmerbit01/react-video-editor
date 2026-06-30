@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AUDIOS } from "@/features/editor/data/audio";
+import { SFX_LIBRARY } from "@/features/editor/data/sfx";
 
 const toSoundEffect = (a: any) => ({
   id: `sfx_${a.id}`,
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
   const limit = Number(body?.limit || 30);
   const query = Array.isArray(body?.query?.keys) ? String(body.query.keys[0] || "") : "";
 
-  const mapped = AUDIOS.map(toSoundEffect).filter((m) => !!m.src);
+  const mapped = SFX_LIBRARY.map(toSoundEffect).filter((m) => !!m.src);
   const filtered = filterByQuery(mapped, query);
   return NextResponse.json(paginate(filtered, page, limit), { status: 200 });
 }
@@ -51,8 +51,7 @@ export async function GET(request: NextRequest) {
   const limit = Number(searchParams.get("limit") || "30");
   const query = searchParams.get("query") || "";
 
-  const mapped = AUDIOS.map(toSoundEffect).filter((m) => !!m.src);
+  const mapped = SFX_LIBRARY.map(toSoundEffect).filter((m) => !!m.src);
   const filtered = filterByQuery(mapped, query);
   return NextResponse.json(paginate(filtered, page, limit), { status: 200 });
 }
-

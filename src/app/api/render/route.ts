@@ -89,7 +89,11 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
   }
 
   const localPath = sourceUrl.startsWith("/")
-    ? path.join(process.cwd(), "public", sourceUrl)
+    ? path.join(
+        process.cwd(),
+        "public",
+        sourceUrl.startsWith("/editor/") ? sourceUrl.replace(/^\/editor/, "") : sourceUrl
+      )
     : sourceUrl;
   const buf = await readFile(localPath);
   await writeFile(dest, buf);

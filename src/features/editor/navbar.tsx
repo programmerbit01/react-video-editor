@@ -12,12 +12,14 @@ import {
   ChevronDown,
   Download,
   Keyboard,
+  Music2,
   ProportionsIcon,
   Save,
   ShareIcon,
   Trash2
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 
 import type StateManager from "@designcombo/state";
 import useStore from "./store/use-store";
@@ -49,6 +51,13 @@ import {
   deleteProject,
   type SavedProject,
 } from "./utils/project-storage";
+import { AUDIOS } from "./data/audio";
+import {
+  MUSIC_BED_ROLE,
+  MUSIC_BED_VOLUME_DEFAULT,
+  getManagedAudioItems,
+  upsertMusicBed,
+} from "./utils/scene-audio";
 
 const toProxyMediaSrc = (src: unknown) => {
   const raw = String(src || "");
@@ -321,6 +330,7 @@ export default function Navbar({
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
           <LookPicker />
+          <MusicBedPicker stateManager={stateManager} />
           <ScriptGuideButton />
           <div className="rounded-full border border-border/70 bg-background/80 p-0.5 shadow-sm">
             <ModeToggle />
@@ -795,6 +805,118 @@ const LookPicker = () => {
         <p className="px-2 pt-2 text-[10px] leading-tight text-muted-foreground">
           Applies to preview &amp; final render. Content-agnostic.
         </p>
+      </PopoverContent>
+    </Popover>
+  );
+};
+
+const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
+  const { trackItemsMap, tracks, trackItemIds, duration } = useStore();
+  const [open, setOpen] = useState(false);
+  const activeItem = getManagedAudioItems(trackItemsMap, MUSIC_BED_ROLE)[0] as any | undefined;
+  const activeTrack = AUDIOS.find((audio) => audio.details?.src === activeItem?.details?.src);
+  const [pendingVolume, setPendingVolume] = useState<number>(
+    Number(activeItem?.details?.volume ?? MUSIC_BED_VOLUME_DEFAULT)
+  );
+
+  useEffect(() => {
+    setPendingVolume(Number(activeItem?.details?.volume ?? MUSIC_BED_VOLUME_DEFAULT));
+  }, [activeItem?.details?.volume]);
+
+  const applyMusicBed = (src?: string, volume?: number) => {
+    const patch = upsertMusicBed(
+      {
+        duration,
+        tracks,
+        trackItemIds,
+        trackItemsMap,
+      },
+      { src, volume }
+    );
+    stateManager.updateState(patch, { updateHistory: true, kind: "add" });
+  };
+
+  const isOn = !!activeItem;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`pointer-events-auto h-8 gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+            isOn
+              ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+              : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+          title="Music bed"
+        >
+          <Music2 className="size-3.5" />
+          <span className="hidden sm:inline">{activeTrack?.name || "Music bed"}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="bg-background z-[251] w-72 px-3 py-3" sideOffset={6}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Music bed</p>
+            <p className="text-xs text-muted-foreground">
+              Adds one low-volume music layer under the full timeline.
+            </p>
+          </div>
+          {isOn && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs text-muted-foreground"
+              onClick={() => applyMusicBed(undefined, pendingVolume)}
+            >
+              Remove
+            </Button>
+          )}
+        </div>
+
+        <div className="mt-3">
+          <div className="mb-1.5 flex items-center justify-between text-xs">
+            <Label>Volume</Label>
+            <span className="text-muted-foreground">{pendingVolume}%</span>
+          </div>
+          <Slider
+            min={0}
+            max={100}
+            step={1}
+            value={[pendingVolume]}
+            onValueChange={(value) => {
+              const next = value[0] ?? MUSIC_BED_VOLUME_DEFAULT;
+              setPendingVolume(next);
+              if (activeItem?.details?.src) applyMusicBed(activeItem.details.src, next);
+            }}
+          />
+        </div>
+
+        <div className="mt-3 space-y-1">
+          {AUDIOS.map((audio) => {
+            const isActive = activeItem?.details?.src === audio.details?.src;
+            return (
+              <button
+                key={audio.id}
+                type="button"
+                onClick={() => {
+                  applyMusicBed(audio.details?.src, pendingVolume);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${
+                  isActive ? "bg-accent font-medium" : ""
+                }`}
+              >
+                <div>
+                  <div>{audio.name}</div>
+                  <div className="text-[11px] text-muted-foreground">{audio.metadata?.author}</div>
+                </div>
+                {isActive && <span className="text-[10px] text-muted-foreground">●</span>}
+              </button>
+            );
+          })}
+        </div>
       </PopoverContent>
     </Popover>
   );
