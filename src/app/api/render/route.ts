@@ -7,10 +7,82 @@ import { randomBytes } from "crypto";
 import { createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
+import os from "os";
 
 import { jobs } from "./jobs";
 
 const execFileAsync = promisify(execFile);
+
+const EDITOR_BASE = (
+  process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor"
+).replace(/\/$/, "");
+const CALLBACK_BASE = (
+  process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091"
+).replace(/\/+$/, "");
+const DEFAULT_FPS = 30;
+
+function mergeJob(jobId: string, patch: Record<string, unknown>) {
+  const current = jobs.get(jobId) ?? { status: "PENDING", progress: 0 };
+  jobs.set(jobId, { ...current, ...patch });
+}
+
+function appendJobLog(jobId: string, line: string) {
+  const current = jobs.get(jobId) ?? { status: "PENDING", progress: 0 };
+  const prev = Array.isArray((current as any).log) ? (current as any).log : [];
+  const next = [...prev, line].slice(-50);
+  jobs.set(jobId, { ...current, log: next });
+}
+
+function pickVideoEncoder(
+  useNvenc: boolean,
+  quality: string,
+  preset: string,
+  crf: string,
+) {
+  if (useNvenc) {
+    return {
+      args: [
+        "-c:v", "h264_nvenc",
+        "-rc", "constqp",
+        "-qp", crf,
+        "-preset", "p2",
+        "-pix_fmt", "yuv420p",
+        "-profile:v", "high",
+      ],
+      label: "nvenc",
+    };
+  }
+
+  return {
+    args: [
+      "-c:v", "libx264",
+      "-preset", preset,
+      "-crf", crf,
+      "-pix_fmt", "yuv420p",
+    ],
+    label: quality === "high" ? "libx264-fast" : "libx264",
+  };
+}
+
+function notifyRenderCallback(payload: Record<string, unknown>) {
+  fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+async function registerRenderJob(payload: Record<string, unknown>) {
+  const res = await fetch(`${CALLBACK_BASE}/vapp/register_render_job`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!res.ok) {
+    throw new Error(`register_render_job ${res.status}`);
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -19,7 +91,26 @@ export async function POST(request: Request) {
     if (!design) return NextResponse.json({ message: "design required" }, { status: 400 });
 
     const jobId = randomBytes(8).toString("hex");
-    jobs.set(jobId, { status: "PENDING", progress: 0 });
+    mergeJob(jobId, {
+      status: "PENDING",
+      progress: 0,
+      engine: "ffmpeg",
+      source: "editor-manual",
+      project_name: "User Export",
+      started_at: Math.floor(Date.now() / 1000),
+    });
+    appendJobLog(jobId, "FF render queued");
+    try {
+      await registerRenderJob({
+        job_id: jobId,
+        engine: "ffmpeg",
+        source: "editor-manual",
+        project_name: "User Export",
+      });
+      appendJobLog(jobId, "registered in shared render widget");
+    } catch (err) {
+      appendJobLog(jobId, `register failed: ${String(err)}`);
+    }
 
     runExport(
       jobId,
@@ -31,11 +122,12 @@ export async function POST(request: Request) {
     ).catch((err) => {
       console.error(`[render] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
-      jobs.set(jobId, {
+      mergeJob(jobId, {
         status: "FAILED",
         progress: current?.progress ?? 0,
         error: err.message,
       });
+      notifyRenderCallback({ job_id: jobId, status: "FAILED", error: err.message });
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });
@@ -306,6 +398,65 @@ async function hasNvencGpu(): Promise<boolean> {
   return _gpuAvailable;
 }
 
+function buildKenBurnsFilter(
+  details: any,
+  clipDurS: number,
+  outW: number,
+  outH: number,
+): string | null {
+  const kind = String(details?.kenBurns || "off");
+  if (!kind || kind === "off") return null;
+
+  const intensityPct = Math.max(1, Math.min(40, Number(details?.kenBurnsIntensity ?? 8)));
+  const durationPct = Math.max(5, Math.min(100, Number(details?.kenBurnsDuration ?? 100)));
+  const totalFrames = Math.max(1, Math.round(clipDurS * DEFAULT_FPS));
+  const zt = intensityPct / 100;
+  const motionFrames = Math.max(1, Math.round(totalFrames * (durationPct / 100)));
+  const maxZoom = (1 + zt).toFixed(4);
+  const progress = `min(on\\,${motionFrames})/${motionFrames}`;
+  const centerX = "iw/2-(iw/zoom/2)";
+  const centerY = "ih/2-(ih/zoom/2)";
+  const scaledW = Math.max(outW, Math.round(outW * 1.25));
+
+  let z = `min(1+${zt.toFixed(4)}*${progress},${maxZoom})`;
+  let x = centerX;
+  let y = centerY;
+
+  switch (kind) {
+    case "zoomIn":
+      break;
+    case "zoomOut":
+      z = `max(${maxZoom}-${zt.toFixed(4)}*${progress},1)`;
+      break;
+    case "panRight":
+      z = maxZoom;
+      x = `(iw-iw/zoom)*${progress}`;
+      break;
+    case "panLeft":
+      z = maxZoom;
+      x = `(iw-iw/zoom)*(1-${progress})`;
+      break;
+    case "panDown":
+      z = maxZoom;
+      y = `(ih-ih/zoom)*${progress}`;
+      break;
+    case "panUp":
+      z = maxZoom;
+      y = `(ih-ih/zoom)*(1-${progress})`;
+      break;
+    case "zoomInPanLeft":
+      x = `(iw-iw/zoom)*(1-${progress})`;
+      break;
+    case "zoomInPanRight":
+      x = `(iw-iw/zoom)*${progress}`;
+      break;
+    default:
+      return null;
+  }
+
+  return `scale=${scaledW}:-1,zoompan=z='${z}':x='${x}':y='${y}':d=${totalFrames}:s=${outW}x${outH}:fps=${DEFAULT_FPS},setsar=1`;
+}
+
 const PLATFORM_PRESETS: Record<string, {
   w: number; h: number;
   videoArgs: string[];
@@ -367,6 +518,7 @@ async function runExport(
   maxDim?: number,
   mutedTrackIds: string[] = [],
 ) {
+  const startedAt = Date.now();
   const exportsDir = path.join(process.cwd(), "public", "exports");
   const tmpDir = path.join(exportsDir, `tmp_${jobId}`);
   await mkdir(exportsDir, { recursive: true });
@@ -376,7 +528,7 @@ async function runExport(
   if (format === "json") {
     const outputPath = path.join(exportsDir, `${jobId}.json`);
     await writeFile(outputPath, JSON.stringify(design, null, 2));
-    jobs.set(jobId, { status: "COMPLETED", progress: 100, url: `/exports/${jobId}.json` });
+    mergeJob(jobId, { status: "COMPLETED", progress: 100, url: `/exports/${jobId}.json` });
     return;
   }
 
@@ -421,6 +573,7 @@ async function runExport(
     ...allItems.map((it: any) => Number(it?.display?.to) || 0),
   );
   const totalSec = totalMs / 1000;
+  const totalCores = os.cpus()?.length || 0;
 
   const videoItems = allItems
     .filter((it: any) => it.type === "video" || it.type === "image")
@@ -430,12 +583,14 @@ async function runExport(
     .filter((it: any) => it.type === "audio")
     .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
 
+  appendJobLog(jobId, `timeline ${videoItems.length} visual items, ${audioItems.length} audio items, total ${totalSec.toFixed(2)}s`);
+
   if (videoItems.length === 0 && audioItems.length === 0) {
-    jobs.set(jobId, { status: "FAILED", progress: 0, error: "No media items in timeline" });
+    mergeJob(jobId, { status: "FAILED", progress: 0, error: "No media items in timeline" });
     return;
   }
 
-  jobs.set(jobId, { status: "PROCESSING", progress: 5 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 5 });
 
   // ─── Download all media ───────────────────────────────────────────────────
 
@@ -449,7 +604,7 @@ async function runExport(
   const allMedia = [...videoItems, ...audioItems];
 
   // Download all media files in parallel — biggest speedup for multi-clip timelines
-  jobs.set(jobId, { status: "PROCESSING", progress: 5 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 5 });
   const entryResults = await Promise.all(
     allMedia.map(async (item: any, i: number) => {
       const src: string = item.details?.src || item.details?.url || "";
@@ -475,7 +630,7 @@ async function runExport(
 
   if (entries.length === 0) {
     const cur = jobs.get(jobId);
-    jobs.set(jobId, { status: "FAILED", progress: cur?.progress ?? 0, error: "Could not download any media files" });
+    mergeJob(jobId, { status: "FAILED", progress: cur?.progress ?? 0, error: "Could not download any media files" });
     return;
   }
 
@@ -500,7 +655,7 @@ async function runExport(
   );
   for (const overlays of allWordOverlays) captionOverlays.push(...overlays);
 
-  jobs.set(jobId, { status: "PROCESSING", progress: 50 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 50 });
 
   // ─── Build FFmpeg filter_complex ─────────────────────────────────────────
 
@@ -509,7 +664,7 @@ async function runExport(
   // Input 0: base black canvas
   ffmpegArgs.push(
     "-f", "lavfi",
-    "-i", `color=black:size=${outW}x${outH}:r=30:d=${totalSec}`,
+    "-i", `color=black:size=${outW}x${outH}:r=${DEFAULT_FPS}:d=${totalSec}`,
   );
 
   // Add all media inputs (inputs 1..N)
@@ -519,7 +674,7 @@ async function runExport(
         0.1,
         ((entry.item.display?.to ?? 0) - (entry.item.display?.from ?? 0)) / 1000,
       );
-      ffmpegArgs.push("-loop", "1", "-framerate", "30", "-t", String(clipDurS), "-i", entry.path);
+      ffmpegArgs.push("-loop", "1", "-t", String(clipDurS), "-i", entry.path);
     } else {
       ffmpegArgs.push("-i", entry.path);
     }
@@ -555,8 +710,17 @@ async function runExport(
     if (entry.kind === "video") {
       const fadeFilters = getFadeFilters(item, displayFromS, clipDurS);
       if (entry.isImage) {
+        const kbFilter = buildKenBurnsFilter(item.details, clipDurS, outW, outH);
+        if (kbFilter) {
+          appendJobLog(
+            jobId,
+            `kenBurns ${item.id || inputIdx}: ${String(item.details?.kenBurns)} intensity=${Number(item.details?.kenBurnsIntensity ?? 8)} duration=${Number(item.details?.kenBurnsDuration ?? 100)}`,
+          );
+        } else {
+          appendJobLog(jobId, `static image ${item.id || inputIdx}: no kenBurns`);
+        }
         filterParts.push(
-          `[${inputIdx}:v]setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}${fadeFilters}[v${inputIdx}]`,
+          `[${inputIdx}:v]${kbFilter ?? `scale=${outW}:${outH}`},setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB${fadeFilters}[v${inputIdx}]`,
         );
       } else {
         filterParts.push(
@@ -648,29 +812,29 @@ async function runExport(
 
   // Codec args — prefer NVENC if GPU is available, fallback to libx264
   const useNvenc = !platformPreset && await hasNvencGpu();
+  const encoder = pickVideoEncoder(useNvenc, quality, preset, crf);
+  const gpuLabel = platformPreset ? "preset" : useNvenc ? "nvenc" : "cpu";
+  const hwAccel = platformPreset ? "preset" : useNvenc ? "gpu" : "cpu";
+  mergeJob(jobId, {
+    ...(jobs.get(jobId) ?? { status: "PROCESSING", progress: 60 }),
+    status: "PROCESSING",
+    progress: 60,
+    engine: "ffmpeg",
+    source: "editor-manual",
+    project_name: "User Export",
+    started_at: Math.floor(startedAt / 1000),
+    video_seconds: Math.round(totalSec),
+    gpu: gpuLabel,
+    hwAccel,
+    cores: totalCores,
+    encoder: platformPreset ? "platform-preset" : encoder.label,
+  });
+  appendJobLog(jobId, `encoder=${platformPreset ? "platform-preset" : encoder.label} gpu=${gpuLabel} cores=${totalCores}`);
   if (platformPreset) {
     ffmpegArgs.push(...platformPreset.videoArgs);
     if (hasAudio) ffmpegArgs.push(...platformPreset.audioArgs);
-  } else if (useNvenc) {
-    // h264_nvenc: qp maps roughly to crf; rc=constqp for quality mode
-    ffmpegArgs.push(
-      "-c:v", "h264_nvenc",
-      "-rc", "constqp",
-      "-qp", crf,
-      "-preset", "p2",         // p1=fastest … p7=slowest; p2 is very fast
-      "-pix_fmt", "yuv420p",
-      "-profile:v", "high",
-    );
-    if (hasAudio) {
-      ffmpegArgs.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2");
-    }
   } else {
-    ffmpegArgs.push(
-      "-c:v", "libx264",
-      "-preset", preset,
-      "-crf", crf,
-      "-pix_fmt", "yuv420p",
-    );
+    ffmpegArgs.push(...encoder.args);
     if (hasAudio) {
       ffmpegArgs.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2");
     }
@@ -681,7 +845,7 @@ async function runExport(
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
   ffmpegArgs.push(outputPath);
 
-  jobs.set(jobId, { status: "PROCESSING", progress: 60 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 60 });
 
   try {
     await execFileAsync("ffmpeg", ffmpegArgs, {
@@ -692,11 +856,36 @@ async function runExport(
     const cur = jobs.get(jobId);
     const stderr = ffErr?.stderr ? String(ffErr.stderr).slice(-2000) : "";
     const msg = stderr || ffErr?.message || "FFmpeg failed";
-    jobs.set(jobId, { status: "FAILED", progress: cur?.progress ?? 60, error: msg });
+    mergeJob(jobId, { status: "FAILED", progress: cur?.progress ?? 60, error: msg });
+    appendJobLog(jobId, `FAILED: ${msg}`);
+    notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
     return;
   }
 
-  jobs.set(jobId, { status: "COMPLETED", progress: 100, url: `/exports/${jobId}.mp4` });
+  const renderSecs = Math.max(0.001, (Date.now() - startedAt) / 1000);
+  const speedX = totalSec / renderSecs;
+  mergeJob(jobId, {
+    status: "COMPLETED",
+    progress: 100,
+    url: `/exports/${jobId}.mp4`,
+    engine: "ffmpeg",
+    source: "editor-manual",
+    project_name: "User Export",
+    started_at: Math.floor(startedAt / 1000),
+    video_seconds: Math.round(totalSec),
+    render_seconds: Math.round(renderSecs),
+    speed_x: Math.round(speedX * 100) / 100,
+    encoder: platformPreset ? "platform-preset" : encoder.label,
+    gpu: gpuLabel,
+    hwAccel,
+    cores: totalCores,
+  });
+  appendJobLog(jobId, `completed render=${Math.round(renderSecs)}s speed=${(Math.round(speedX * 100) / 100).toFixed(2)}x`);
+  notifyRenderCallback({
+    job_id: jobId,
+    status: "COMPLETED",
+    video_url: `${EDITOR_BASE}/api/render/${jobId}/download`,
+  });
 
   for (const entry of entries) unlink(entry.path).catch(() => {});
   for (const cap of captionOverlays) unlink(cap.path).catch(() => {});

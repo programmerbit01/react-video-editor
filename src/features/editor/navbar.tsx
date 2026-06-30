@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { dispatch } from "@designcombo/events";
 import { HISTORY_UNDO, HISTORY_REDO, DESIGN_RESIZE, DESIGN_LOAD } from "@designcombo/state";
@@ -13,6 +13,8 @@ import {
   Download,
   Keyboard,
   Music2,
+  Pause,
+  Play,
   ProportionsIcon,
   Save,
   ShareIcon,
@@ -67,6 +69,12 @@ const toProxyMediaSrc = (src: unknown) => {
     return `/api/proxy?url=${encodeURIComponent(raw)}`;
   }
   return raw;
+};
+
+const withEditorBase = (path: string) => {
+  if (typeof window === "undefined") return path;
+  if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
+  return path;
 };
 
 export default function Navbar({
@@ -813,8 +821,13 @@ const LookPicker = () => {
 const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
   const { trackItemsMap, tracks, trackItemIds, duration } = useStore();
   const [open, setOpen] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const activeItem = getManagedAudioItems(trackItemsMap, MUSIC_BED_ROLE)[0] as any | undefined;
-  const activeTrack = AUDIOS.find((audio) => audio.details?.src === activeItem?.details?.src);
+  const normalizeLocalSrc = (src?: string) => String(src || "").replace(/^\/editor/, "");
+  const activeTrack = AUDIOS.find(
+    (audio) => normalizeLocalSrc(audio.details?.src) === normalizeLocalSrc(activeItem?.details?.src)
+  );
   const [pendingVolume, setPendingVolume] = useState<number>(
     Number(activeItem?.details?.volume ?? MUSIC_BED_VOLUME_DEFAULT)
   );
@@ -834,6 +847,26 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
       { src, volume }
     );
     stateManager.updateState(patch, { updateHistory: true, kind: "add" });
+  };
+
+  const togglePreview = (src?: string) => {
+    const normalizedSrc = normalizeLocalSrc(src);
+    if (!normalizedSrc) return;
+    const resolvedSrc = withEditorBase(normalizedSrc);
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+
+    if (previewSrc === resolvedSrc && !audio.paused) {
+      audio.pause();
+      audio.currentTime = 0;
+      setPreviewSrc(null);
+      return;
+    }
+
+    audio.src = resolvedSrc;
+    audio.currentTime = 0;
+    void audio.play();
+    setPreviewSrc(resolvedSrc);
   };
 
   const isOn = !!activeItem;
@@ -856,6 +889,11 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="bg-background z-[251] w-72 px-3 py-3" sideOffset={6}>
+        <audio
+          ref={previewAudioRef}
+          onEnded={() => setPreviewSrc(null)}
+          className="hidden"
+        />
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -897,25 +935,49 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
 
         <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
           {AUDIOS.map((audio) => {
-            const isActive = activeItem?.details?.src === audio.details?.src;
+            const isActive =
+              normalizeLocalSrc(activeItem?.details?.src) === normalizeLocalSrc(audio.details?.src);
+            const previewPath = withEditorBase(normalizeLocalSrc(audio.details?.src));
+            const isPreviewing = previewSrc === previewPath;
             return (
-              <button
+              <div
                 key={audio.id}
-                type="button"
-                onClick={() => {
-                  applyMusicBed(audio.details?.src, pendingVolume);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${
+                className={`flex items-center gap-2 rounded-sm px-2 py-2 text-sm transition-colors hover:bg-accent ${
                   isActive ? "bg-accent font-medium" : ""
                 }`}
               >
-                <div>
-                  <div>{audio.name}</div>
-                  <div className="text-[11px] text-muted-foreground">{audio.metadata?.author}</div>
-                </div>
-                {isActive && <span className="text-[10px] text-muted-foreground">●</span>}
-              </button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 shrink-0 rounded-full"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    togglePreview(audio.details?.src);
+                  }}
+                  title={`Preview ${audio.name}`}
+                >
+                  {isPreviewing ? (
+                    <Pause className="size-3.5" />
+                  ) : (
+                    <Play className="size-3.5 ml-0.5" />
+                  )}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const normalizedSrc = normalizeLocalSrc(audio.details?.src);
+                    applyMusicBed(withEditorBase(normalizedSrc), pendingVolume);
+                    setOpen(false);
+                  }}
+                  className="flex min-w-0 flex-1 items-center justify-between text-left"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate">{audio.name}</div>
+                    <div className="text-[11px] text-muted-foreground">{audio.metadata?.author}</div>
+                  </div>
+                  {isActive && <span className="ml-2 text-[10px] text-muted-foreground">●</span>}
+                </button>
+              </div>
             );
           })}
         </div>

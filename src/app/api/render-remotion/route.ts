@@ -8,6 +8,24 @@ import { jobs } from "./jobs";
 
 // Bundle is created once and reused for the lifetime of the server process.
 let cachedBundleUrl: string | null = null;
+const CALLBACK_BASE = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
+
+function mergeJob(jobId: string, patch: Record<string, unknown>) {
+  const current = jobs.get(jobId) ?? { status: "PENDING", progress: 0 };
+  jobs.set(jobId, { ...current, ...patch } as any);
+}
+
+async function registerRenderJob(payload: Record<string, unknown>) {
+  const res = await fetch(`${CALLBACK_BASE}/vapp/register_render_job`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!res.ok) {
+    throw new Error(`register_render_job ${res.status}`);
+  }
+}
 
 async function getBundleUrl(): Promise<string> {
   if (cachedBundleUrl) return cachedBundleUrl;
@@ -81,11 +99,11 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor"
   ).replace(/\/$/, "");
 
-  jobs.set(jobId, { status: "PROCESSING", progress: 5 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 5 });
 
   const serveUrl = await getBundleUrl();
 
-  jobs.set(jobId, { status: "PROCESSING", progress: 10 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 10 });
 
   // Build muted/hidden maps for useTrackVisibilityStore in RenderRoot
   const mutedMap: Record<string, boolean> = {};
@@ -114,8 +132,17 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     `${composition.durationInFrames}f (${videoSecs.toFixed(1)}s video) | concurrency=${renderCfg.concurrency}/${totalCores}cores ` +
     `gpu=${renderCfg.gpu} hwAccel=${renderCfg.hwAccel}`
   );
-  jobs.set(jobId, { status: "PROCESSING", progress: 15, ...renderCfg });
   const _t0 = Date.now();
+  mergeJob(jobId, {
+    status: "PROCESSING",
+    progress: 15,
+    engine: "remotion",
+    source: "editor-manual",
+    project_name: "User Export",
+    started_at: Math.floor(_t0 / 1000),
+    video_seconds: Math.round(videoSecs),
+    ...renderCfg,
+  });
 
   await renderMedia({
     composition,
@@ -135,7 +162,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     offthreadVideoCacheSizeInBytes: 200 * 1024 * 1024,
     onProgress: ({ progress }) => {
       const pct = Math.round(15 + progress * 83);
-      jobs.set(jobId, { status: "PROCESSING", progress: pct });
+      mergeJob(jobId, { status: "PROCESSING", progress: pct });
       if (pct % 10 === 0) console.log(`[render-remotion] job ${jobId}: ${pct}%`);
     },
   });
@@ -154,7 +181,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     `(${speedX.toFixed(2)}x realtime, ${fps.toFixed(1)} render-fps) | ${sizeMB.toFixed(1)}MB | ` +
     `concurrency=${RENDER_CONCURRENCY} gpu=${RENDER_GL || "off"}`
   );
-  jobs.set(jobId, {
+  mergeJob(jobId, {
     status: "COMPLETED",
     progress: 100,
     render_seconds: Math.round(renderSecs),
@@ -166,10 +193,9 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   });
 
   // Notify vapp_server — it fetches the MP4 from local URL and uploads to R2
-  const callbackBase = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
   const editorBase = (process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor").replace(/\/$/, "");
   const videoUrl = `${editorBase}/api/render-remotion/${jobId}/download`;
-  fetch(`${callbackBase}/vapp/render_callback`, {
+  fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ job_id: jobId, status: "COMPLETED", video_url: videoUrl }),
@@ -185,15 +211,31 @@ export async function POST(request: Request) {
     }
 
     const jobId = randomBytes(8).toString("hex");
-    jobs.set(jobId, { status: "PENDING", progress: 0 });
+    mergeJob(jobId, {
+      status: "PENDING",
+      progress: 0,
+      engine: "remotion",
+      source: "editor-manual",
+      project_name: "User Export",
+      started_at: Math.floor(Date.now() / 1000),
+    });
+    try {
+      await registerRenderJob({
+        job_id: jobId,
+        engine: "remotion",
+        source: "editor-manual",
+        project_name: "User Export",
+      });
+    } catch (err) {
+      console.warn("[render-remotion] register_render_job failed:", err);
+    }
 
     runRemotionExport(jobId, design, options).catch((err) => {
       console.error(`[render-remotion] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
-      jobs.set(jobId, { status: "FAILED", progress: current?.progress ?? 0, error: err.message });
+      mergeJob(jobId, { status: "FAILED", progress: current?.progress ?? 0, error: err.message });
       // Notify vapp_server of failure
-      const callbackBase = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
-      fetch(`${callbackBase}/vapp/render_callback`, {
+      fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ job_id: jobId, status: "FAILED", error: err.message }),

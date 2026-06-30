@@ -78,7 +78,7 @@ function parseSegmentTimes(seg: ScriptSegment): ScriptSegment {
 const useScriptGuideStore = create<ScriptGuideState>((set) => ({
   segments: [],
   rawJson: "",
-  isOpen: true,
+  isOpen: false,
   isFullscreen: false,
   floatPos: { x: typeof window !== "undefined" ? Math.round(window.innerWidth * 0.78) : 900, y: 52 },
   panelSize: { width: typeof window !== "undefined" ? Math.round(window.innerWidth * 0.22) : 300, height: typeof window !== "undefined" ? window.innerHeight - 52 : 600 },

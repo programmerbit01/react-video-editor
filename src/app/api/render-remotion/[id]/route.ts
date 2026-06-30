@@ -39,6 +39,19 @@ export async function GET(
           ? `/api/render-remotion/${id}/download`
           : undefined,
       public_url: publicUrl,
+      engine: job.engine,
+      source: job.source,
+      project_name: job.project_name,
+      started_at: job.started_at,
+      video_seconds: job.video_seconds,
+      concurrency: job.concurrency,
+      cores: job.cores,
+      gpu: job.gpu,
+      hwAccel: job.hwAccel,
+      render_seconds: job.render_seconds,
+      render_fps: job.render_fps,
+      speed_x: job.speed_x,
+      size_mb: job.size_mb,
     },
   });
 }

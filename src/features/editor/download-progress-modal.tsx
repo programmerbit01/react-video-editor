@@ -1,7 +1,7 @@
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useDownloadState } from "./store/use-download-state";
 import { Button } from "@/components/ui/button";
-import { CircleCheckIcon, XCircleIcon, XIcon } from "lucide-react";
+import { ChevronUpIcon, CircleCheckIcon, Minimize2Icon, XCircleIcon, XIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
 import { processFileUpload } from "@/utils/upload-service";
@@ -10,10 +10,11 @@ import { useEffect, useRef, useState } from "react";
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, output, error, actions } =
+  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
+  const showDock = minimizedProgressModal && (exporting || isCompleted || isFailed);
 
   const [elapsed, setElapsed] = useState(0);
   const [autoDownloaded, setAutoDownloaded] = useState(false);
@@ -37,14 +38,14 @@ const DownloadProgressModal = () => {
   }, [displayProgressModal, isCompleted, isFailed]);
 
   useEffect(() => {
-    if (!displayProgressModal) {
+    if (!displayProgressModal && !minimizedProgressModal) {
       startRef.current = null;
       setElapsed(0);
       setAutoDownloaded(false);
       setCloudState("idle");
       setCloudUrl(null);
     }
-  }, [displayProgressModal]);
+  }, [displayProgressModal, minimizedProgressModal]);
 
   useEffect(() => {
     if (isCompleted && output?.url && !autoDownloaded) {
@@ -96,18 +97,79 @@ const DownloadProgressModal = () => {
     }
   };
 
+  const handleMinimize = () => {
+    actions.setMinimizedProgressModal(true);
+    actions.setDisplayProgressModal(false);
+  };
+
+  const handleRestore = () => {
+    actions.setMinimizedProgressModal(false);
+    actions.setDisplayProgressModal(true);
+  };
+
+  const handleDismiss = () => {
+    actions.setMinimizedProgressModal(false);
+    actions.setDisplayProgressModal(false);
+  };
+
   return (
-    <Dialog
-      open={displayProgressModal}
-      onOpenChange={actions.setDisplayProgressModal}
-    >
+    <>
+      {showDock && (
+        <div className="fixed bottom-4 left-4 z-[10000] w-[320px] rounded-xl border border-zinc-800 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold">
+                {isCompleted ? "Export Done" : isFailed ? "Export Failed" : "Export Running"}
+              </div>
+              <div className="text-xs text-zinc-400">
+                {isCompleted ? `Saved to Downloads${finalRef.current > 0 ? ` · ${fmt(finalRef.current)}` : ""}` : isFailed ? "Open for details" : `${Math.floor(progress)}% · ${fmt(elapsed)}`}
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleRestore}>
+                <ChevronUpIcon className="h-4 w-4" />
+              </Button>
+              {!exporting && (
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleDismiss}>
+                  <XIcon className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+          {!isCompleted && !isFailed && (
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${Math.floor(progress)}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <Dialog
+        open={displayProgressModal}
+        onOpenChange={(open) => {
+          if (open) {
+            actions.setDisplayProgressModal(true);
+            actions.setMinimizedProgressModal(false);
+            return;
+          }
+          if (exporting && !isCompleted && !isFailed) {
+            handleMinimize();
+            return;
+          }
+          handleDismiss();
+        }}
+      >
       <DialogContent className="flex h-[627px] flex-col gap-0 bg-background p-0 sm:max-w-[844px]">
         <DialogTitle className="hidden" />
         <DialogDescription className="hidden" />
-        <XIcon
-          onClick={() => actions.setDisplayProgressModal(false)}
-          className="absolute right-4 top-5 h-5 w-5 text-zinc-400 hover:cursor-pointer hover:text-zinc-500"
-        />
+        <div className="absolute right-4 top-4 flex items-center gap-1">
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMinimize}>
+            <Minimize2Icon className="h-4 w-4 text-zinc-400" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleDismiss}>
+            <XIcon className="h-5 w-5 text-zinc-400" />
+          </Button>
+        </div>
         <div className="flex h-16 items-center border-b px-4 font-medium">
           Download
         </div>
@@ -170,7 +232,7 @@ const DownloadProgressModal = () => {
             <div className="max-h-40 w-full overflow-auto rounded-md bg-zinc-900 px-4 py-3 text-xs text-zinc-300 font-mono whitespace-pre-wrap">
               {error}
             </div>
-            <Button variant="outline" onClick={() => actions.setDisplayProgressModal(false)}>
+            <Button variant="outline" onClick={handleDismiss}>
               Close
             </Button>
           </div>
@@ -181,15 +243,16 @@ const DownloadProgressModal = () => {
             <div className="text-sm tabular-nums text-muted-foreground">{fmt(elapsed)}</div>
             <div className="text-center text-zinc-500">
               <div>Closing the browser will not cancel the export.</div>
-              <div>The video will be saved in your space.</div>
+              <div>You can minimize this and keep working.</div>
             </div>
-            <Button variant="outline" onClick={() => actions.setDisplayProgressModal(false)}>
-              Cancel
+            <Button variant="outline" onClick={handleMinimize}>
+              Minimize
             </Button>
           </div>
         )}
       </DialogContent>
-    </Dialog>
+      </Dialog>
+    </>
   );
 };
 

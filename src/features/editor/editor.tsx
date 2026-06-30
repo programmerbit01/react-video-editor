@@ -2,6 +2,7 @@
 import Timeline from "./timeline";
 import useStore from "./store/use-store";
 import Navbar from "./navbar";
+import RenderStatusWidget from "./render-status-widget";
 import useTimelineEvents from "./hooks/use-timeline-events";
 import Scene from "./scene";
 import { SceneRef } from "./scene/scene.types";
@@ -198,6 +199,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
         stateManager={stateManager}
         setProjectName={setProjectName}
       />
+      <RenderStatusWidget />
       <ScriptGuidePanel />
 
       <div className="flex flex-1 min-h-0">

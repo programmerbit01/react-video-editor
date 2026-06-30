@@ -33,6 +33,7 @@ interface DownloadState {
   output?: Output;
   payload?: IDesign;
   displayProgressModal: boolean;
+  minimizedProgressModal: boolean;
   actions: {
     setProjectId: (projectId: string) => void;
     setExporting: (exporting: boolean) => void;
@@ -45,6 +46,7 @@ interface DownloadState {
     setOutput: (output: Output) => void;
     startExport: () => void;
     setDisplayProgressModal: (displayProgressModal: boolean) => void;
+    setMinimizedProgressModal: (minimized: boolean) => void;
   };
 }
 
@@ -58,6 +60,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
   progress: 0,
   error: null,
   displayProgressModal: false,
+  minimizedProgressModal: false,
   actions: {
     setProjectId: (projectId) => set({ projectId }),
     setExporting: (exporting) => set({ exporting }),
@@ -70,9 +73,18 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
     setOutput: (output) => set({ output }),
     setDisplayProgressModal: (displayProgressModal) =>
       set({ displayProgressModal }),
+    setMinimizedProgressModal: (minimizedProgressModal) =>
+      set({ minimizedProgressModal }),
     startExport: async () => {
       try {
-        set({ exporting: true, displayProgressModal: true, progress: 0, error: null });
+        set({
+          exporting: true,
+          displayProgressModal: true,
+          minimizedProgressModal: false,
+          progress: 0,
+          error: null,
+          output: undefined,
+        });
         const { payload, exportQuality, exportResolution, exportType, exportEngine } = get();
         const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
         if (!payload) throw new Error("Payload is not defined");
