@@ -406,14 +406,23 @@ let _gpuAvailable: boolean | null = null;
 async function hasNvencGpu(): Promise<boolean> {
   if (_gpuAvailable !== null) return _gpuAvailable;
   try {
-    // Ask FFmpeg to list encoders — if h264_nvenc is present, try a 1-frame test encode
+    // Probe NVENC with a real HD frame size. Tiny synthetic sizes like 64x64 can
+    // fail on some NVIDIA stacks with "Frame Dimension less than the minimum
+    // supported value", which falsely looks like "no GPU available".
     await execFileAsync("ffmpeg", [
-      "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+      "-hide_banner",
+      "-f", "lavfi", "-i", "testsrc2=s=1280x720:d=0.2:r=30",
       "-c:v", "h264_nvenc", "-f", "null", "-"
     ], { timeout: 8000 });
     _gpuAvailable = true;
-  } catch {
+  } catch (err: any) {
     _gpuAvailable = false;
+    const stderr = String(err?.stderr || err?.stdout || err?.message || "")
+      .trim()
+      .split("\n")
+      .slice(-8)
+      .join("\n");
+    console.warn("[render] NVENC probe failed:", stderr || "unknown error");
   }
   console.log(`[render] NVENC GPU: ${_gpuAvailable ? "available ✓" : "not found, using libx264"}`);
   return _gpuAvailable;
