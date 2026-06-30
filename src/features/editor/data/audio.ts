@@ -1,60 +1,224 @@
 import { IAudio } from "@designcombo/types";
 
 export const AUDIOS = [
-  // https://ik.imagekit.io/pablituuu/like_a_player.mp3?updatedAt=1722278521488
   {
-    id: "xxx0",
+    id: "music_01",
     details: {
-      src: "https://cdn.designcombo.dev/audio/OpenAI%20CEO%20on%20Artificial%20Intelligence%20Changing%20Society.mp3"
+      src: "/music/uplift-corporate.wav"
     },
-    name: "Open AI",
+    name: "Uplift Corporate",
     type: "audio",
     metadata: {
-      author: "Open AI"
+      author: "Editor Essentials"
     }
   },
   {
-    id: "xx1",
+    id: "music_02",
     details: {
-      src: "https://cdn.designcombo.dev/audio/Dawn%20of%20change.mp3"
+      src: "/music/warm-piano.wav"
     },
-    name: "Dawn of change",
+    name: "Warm Piano",
     type: "audio",
     metadata: {
-      author: "Roman Senyk"
+      author: "Editor Essentials"
     }
   },
   {
-    id: "xx2",
+    id: "music_03",
     details: {
-      src: "https://cdn.designcombo.dev/audio/Hope.mp3"
+      src: "/music/airy-ambient.wav"
     },
-    name: "Hope",
+    name: "Airy Ambient",
     type: "audio",
     metadata: {
-      author: "Hugo Dujardin"
+      author: "Editor Essentials"
     }
   },
   {
-    id: "xx3",
+    id: "music_04",
     details: {
-      src: "https://cdn.designcombo.dev/audio/Tenderness.mp3"
+      src: "/music/trailer-glow.wav"
     },
-    name: "Tenderness",
+    name: "Trailer Glow",
     type: "audio",
     metadata: {
-      author: "Benjamin Tissot"
+      author: "Editor Essentials"
     }
   },
   {
-    id: "xx4",
+    id: "music_05",
     details: {
-      src: "https://cdn.designcombo.dev/audio/Piano%20Moment.mp3"
+      src: "/music/night-lofi.wav"
     },
-    name: "Piano moment",
+    name: "Night Lofi",
     type: "audio",
     metadata: {
-      author: "Benjamin Tissot"
+      author: "Editor Essentials"
+    }
+  },
+  {
+    id: "music_06",
+    details: {
+      src: "/music/soft-inspire.wav"
+    },
+    name: "Soft Inspire",
+    type: "audio",
+    metadata: {
+      author: "Editor Essentials"
+    }
+  },
+  {
+    id: "music_07",
+    details: {
+      src: "/music/neon-motion.wav"
+    },
+    name: "Neon Motion",
+    type: "audio",
+    metadata: {
+      author: "Editor Essentials"
+    }
+  },
+  {
+    id: "music_08",
+    details: {
+      src: "/music/calm-explainer.wav"
+    },
+    name: "Calm Explainer",
+    type: "audio",
+    metadata: {
+      author: "Editor Essentials"
+    }
+  },
+  {
+    id: "music_09",
+    details: {
+      src: "/music/tension-lite.wav"
+    },
+    name: "Tension Lite",
+    type: "audio",
+    metadata: {
+      author: "Editor Essentials"
+    }
+  },
+  {
+    id: "music_10",
+    details: {
+      src: "/music/gentle-tech.wav"
+    },
+    name: "Gentle Tech",
+    type: "audio",
+    metadata: {
+      author: "Editor Essentials"
+    }
+  },
+  {
+    id: "music_11",
+    details: {
+      src: "/music/sitar-breeze.wav"
+    },
+    name: "Sitar Breeze",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_12",
+    details: {
+      src: "/music/tabla-flow.wav"
+    },
+    name: "Tabla Flow",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_13",
+    details: {
+      src: "/music/dhol-lite.wav"
+    },
+    name: "Dhol Lite",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_14",
+    details: {
+      src: "/music/desi-lounge.wav"
+    },
+    name: "Desi Lounge",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_15",
+    details: {
+      src: "/music/chai-beat.wav"
+    },
+    name: "Chai Beat",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_16",
+    details: {
+      src: "/music/monsoon-pad.wav"
+    },
+    name: "Monsoon Pad",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_17",
+    details: {
+      src: "/music/mehfil-soft.wav"
+    },
+    name: "Mehfil Soft",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_18",
+    details: {
+      src: "/music/qawwali-lite.wav"
+    },
+    name: "Qawwali Lite",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_19",
+    details: {
+      src: "/music/shehnai-dawn.wav"
+    },
+    name: "Shehnai Dawn",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
+    }
+  },
+  {
+    id: "music_20",
+    details: {
+      src: "/music/city-desi.wav"
+    },
+    name: "City Desi",
+    type: "audio",
+    metadata: {
+      author: "Desi Pack"
     }
   }
 ] as Partial<IAudio>[];

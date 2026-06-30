@@ -858,7 +858,9 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
       <PopoverContent align="end" className="bg-background z-[251] w-72 px-3 py-3" sideOffset={6}>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Music bed</p>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              Music bed (background music on full video)
+            </p>
             <p className="text-xs text-muted-foreground">
               Adds one low-volume music layer under the full timeline.
             </p>
@@ -893,7 +895,7 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
           />
         </div>
 
-        <div className="mt-3 space-y-1">
+        <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
           {AUDIOS.map((audio) => {
             const isActive = activeItem?.details?.src === audio.details?.src;
             return (
