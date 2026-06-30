@@ -191,6 +191,27 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
   await writeFile(dest, buf);
 }
 
+function unwrapProxyMediaUrl(url: string): string {
+  const raw = String(url || "");
+  if (!raw) return raw;
+  try {
+    const parsed = raw.startsWith("http://") || raw.startsWith("https://")
+      ? new URL(raw)
+      : new URL(raw, "http://local.test");
+    if (parsed.pathname.endsWith("/api/proxy")) {
+      const inner = parsed.searchParams.get("url");
+      if (inner) return inner;
+    }
+  } catch {}
+  return raw;
+}
+
+function detectMediaExtension(url: string): string {
+  const unwrapped = unwrapProxyMediaUrl(url);
+  const pathOnly = unwrapped.split("?")[0] || "";
+  return pathOnly.split(".").pop()?.toLowerCase() ?? "";
+}
+
 async function hasAudioStream(inputPath: string): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync("ffprobe", [
@@ -609,14 +630,13 @@ async function runExport(
     allMedia.map(async (item: any, i: number) => {
       const src: string = item.details?.src || item.details?.url || "";
       if (!src) return null;
-      const urlPath = src.split("?")[0];
-      const rawExt = urlPath.split(".").pop()?.toLowerCase() ?? "mp4";
+      const rawExt = detectMediaExtension(src) || "mp4";
       const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
         "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
       const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
       try {
         await fetchToFile(src, tmpFile);
-        const isImage = /\.(jpe?g|png|webp)$/i.test(tmpFile);
+        const isImage = item.type === "image" || /\.(jpe?g|png|webp)$/i.test(tmpFile);
         const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
         const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
         return { path: tmpFile, item, kind, isImage, hasAudio } as MediaEntry;
