@@ -24,6 +24,7 @@ interface Output {
 interface DownloadState {
   projectId: string;
   exporting: boolean;
+  exportRunId: number;
   exportType: "json" | "mp4" | "fb-whatsapp" | "fb-web-highres";
   exportQuality: ExportQuality;
   exportResolution: ExportResolution;
@@ -53,6 +54,7 @@ interface DownloadState {
 export const useDownloadState = create<DownloadState>((set, get) => ({
   projectId: "",
   exporting: false,
+  exportRunId: 0,
   exportType: "mp4",
   exportQuality: "high",
   exportResolution: "1080p",
@@ -79,6 +81,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
       try {
         set({
           exporting: true,
+          exportRunId: get().exportRunId + 1,
           displayProgressModal: true,
           minimizedProgressModal: false,
           progress: 0,

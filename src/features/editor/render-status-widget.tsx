@@ -51,7 +51,7 @@ function elapsed(startedAt?: number) {
 export default function RenderStatusWidget() {
   const [jobs, setJobs] = useState<RenderJob[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
   const fetchJobs = useCallback(async () => {

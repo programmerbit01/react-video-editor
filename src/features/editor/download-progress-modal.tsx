@@ -10,11 +10,12 @@ import { useEffect, useRef, useState } from "react";
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, actions } =
+  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, exportRunId, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
   const showDock = minimizedProgressModal && (exporting || isCompleted || isFailed);
+  const dialogOpen = displayProgressModal && !minimizedProgressModal;
 
   const [elapsed, setElapsed] = useState(0);
   const [autoDownloaded, setAutoDownloaded] = useState(false);
@@ -23,6 +24,15 @@ const DownloadProgressModal = () => {
 
   const [cloudState, setCloudState] = useState<"idle" | "uploading" | "done" | "error">("idle");
   const [cloudUrl, setCloudUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    startRef.current = Date.now();
+    finalRef.current = 0;
+    setElapsed(0);
+    setAutoDownloaded(false);
+    setCloudState("idle");
+    setCloudUrl(null);
+  }, [exportRunId]);
 
   useEffect(() => {
     if (displayProgressModal && !isCompleted && !isFailed) {
@@ -129,11 +139,9 @@ const DownloadProgressModal = () => {
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleRestore}>
                 <ChevronUpIcon className="h-4 w-4" />
               </Button>
-              {!exporting && (
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleDismiss}>
-                  <XIcon className="h-4 w-4" />
-                </Button>
-              )}
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleDismiss}>
+                <XIcon className="h-4 w-4" />
+              </Button>
             </div>
           </div>
           {!isCompleted && !isFailed && (
@@ -145,7 +153,7 @@ const DownloadProgressModal = () => {
       )}
 
       <Dialog
-        open={displayProgressModal}
+        open={dialogOpen}
         onOpenChange={(open) => {
           if (open) {
             actions.setDisplayProgressModal(true);
