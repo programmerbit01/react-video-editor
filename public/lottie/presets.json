@@ -1,0 +1,22 @@
+[
+  {
+    "id": "sample-1",
+    "label": "Animation 1",
+    "file": "/lottie/sample-1.json"
+  },
+  {
+    "id": "sample-2",
+    "label": "Animation 2",
+    "file": "/lottie/sample-2.json"
+  },
+  {
+    "id": "sample-3",
+    "label": "Animation 3",
+    "file": "/lottie/sample-3.json"
+  },
+  {
+    "id": "heart-dementia-doctor",
+    "label": "Heart Dementia Doctor",
+    "file": "/lottie/heart-dementia-doctor.json"
+  }
+]

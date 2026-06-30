@@ -1,16 +1,16 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getCurrentTime } from "../utils/time";
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import useStore from "../store/use-store";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Plus, Sparkles, Upload } from "lucide-react";
 
 // Curated, locally-bundled Lottie presets. They are fetched from /public and
 // embedded inline at add-time (no render-time network fetch — render-box-proof).
 // Add more by dropping a .json in public/lottie and listing it here.
-const PRESETS: { id: string; label: string; file: string }[] = [
+const DEFAULT_PRESETS: { id: string; label: string; file: string }[] = [
   { id: "sample-1", label: "Animation 1", file: "/lottie/sample-1.json" },
   { id: "sample-2", label: "Animation 2", file: "/lottie/sample-2.json" },
   { id: "sample-3", label: "Animation 3", file: "/lottie/sample-3.json" },
@@ -158,9 +158,32 @@ function addLottieItem(
 export const MotionGraphics = () => {
   const [duration, setDuration] = useState(5);
   const [url, setUrl] = useState("");
+  const [presets, setPresets] = useState(DEFAULT_PRESETS);
   const [busy, setBusy] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState("");
+  const [uploadedAnimationData, setUploadedAnimationData] = useState<any | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const addPreset = async (p: (typeof PRESETS)[number]) => {
+  const loadPresets = async () => {
+    try {
+      const presetsUrl = withEditorBase("/api/lottie-presets") as string;
+      const res = await fetch(presetsUrl, { cache: "no-store" });
+      const json = await res.json();
+      if (Array.isArray(json?.presets) && json.presets.length > 0) {
+        setPresets(json.presets);
+      } else {
+        setPresets(DEFAULT_PRESETS);
+      }
+    } catch {
+      setPresets(DEFAULT_PRESETS);
+    }
+  };
+
+  useEffect(() => {
+    loadPresets();
+  }, []);
+
+  const addPreset = async (p: (typeof DEFAULT_PRESETS)[number]) => {
     setBusy(p.id);
     try {
       const res = await fetch(withEditorBase(p.file));
@@ -196,6 +219,52 @@ export const MotionGraphics = () => {
     setUrl("");
   };
 
+  const addUploadedJson = async (file?: File | null) => {
+    if (!file) return;
+    setBusy("upload-json");
+    try {
+      const text = await file.text();
+      const animationData = JSON.parse(text);
+      const label = file.name.replace(/\.json$/i, "") || "Uploaded JSON";
+      setUploadedFileName(file.name);
+      setUploadedAnimationData(animationData);
+      addLottieItem(
+        { animationData },
+        duration * 1000,
+        createLottiePreviewUrl(label),
+        label,
+        { w: animationData?.w, h: animationData?.h },
+        undefined,
+        animationData,
+      );
+    } catch {
+      setUploadedFileName("");
+      setUploadedAnimationData(null);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setBusy(null);
+    }
+  };
+
+  const addUploadedToGlobalPresets = async () => {
+    if (!uploadedAnimationData || !uploadedFileName) return;
+    setBusy("save-global");
+    try {
+      const presetsUrl = withEditorBase("/api/lottie-presets") as string;
+      await fetch(presetsUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: uploadedFileName.replace(/\.json$/i, ""),
+          animationData: uploadedAnimationData,
+        }),
+      });
+      await loadPresets();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
       <div style={{ padding: "12px 12px 8px", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
@@ -223,7 +292,7 @@ export const MotionGraphics = () => {
         <div>
           <label style={LABEL}>Presets (click to add)</label>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {PRESETS.map((p) => (
+            {presets.map((p) => (
               <button
                 key={p.id}
                 onClick={() => addPreset(p)}
@@ -273,6 +342,45 @@ export const MotionGraphics = () => {
           <p style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 4, lineHeight: 1.4 }}>
             Tip: open any animation on lottiefiles.com, copy its Lottie JSON URL, and paste it here.
           </p>
+        </div>
+
+        <div>
+          <label style={LABEL}>Or upload a local Lottie JSON file</label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: "none" }}
+            onChange={(e) => addUploadedJson(e.target.files?.[0] || null)}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy !== null}
+            className="w-full h-8 text-xs cursor-pointer"
+          >
+            {busy === "upload-json" ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Upload size={14} />
+            )}
+            <span style={{ marginLeft: 6 }}>
+              {uploadedFileName ? `Uploaded: ${uploadedFileName}` : "Upload JSON"}
+            </span>
+          </Button>
+          {uploadedAnimationData ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={addUploadedToGlobalPresets}
+              disabled={busy !== null}
+              className="w-full h-8 text-xs cursor-pointer mt-2"
+            >
+              {busy === "save-global" ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              <span style={{ marginLeft: 6 }}>Add Uploaded JSON to Global Presets</span>
+            </Button>
+          ) : null}
         </div>
       </div>
 
