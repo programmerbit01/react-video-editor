@@ -91,6 +91,10 @@ type StylePackEntry = {
   caption_color?: string;
   lower_third_style?: string;
   default_shot_ms?: number;
+  ken_burns?: string;
+  ken_burns_intensity?: number;
+  ken_burns_smooth?: boolean;
+  ken_burns_duration?: number;
 };
 
 type StylePackFieldDoc = {
@@ -846,6 +850,9 @@ const StylePackPicker = () => {
         active.caption_font ? `Captions: ${active.caption_font}${active.caption_color ? ` ${active.caption_color}` : ""}` : "",
         active.lower_third_style ? `Lower thirds: ${active.lower_third_style}` : "",
         active.default_shot_ms ? `Default shot: ${active.default_shot_ms}ms` : "",
+        active.ken_burns
+          ? `Image motion: ${active.ken_burns}${active.ken_burns_duration ? ` (${active.ken_burns_duration}ms)` : ""}${active.ken_burns_intensity !== undefined ? ` intensity ${active.ken_burns_intensity}` : ""}${active.ken_burns_smooth !== undefined ? ` smooth ${active.ken_burns_smooth ? "on" : "off"}` : ""}`
+          : "",
       ].filter(Boolean)
     : [];
   const supportedKeys = Object.keys(fieldDocs);
