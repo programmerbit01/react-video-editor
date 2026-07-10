@@ -33,6 +33,7 @@ interface DownloadState {
   error: string | null;
   output?: Output;
   payload?: IDesign;
+  remoteUrl: string;
   displayProgressModal: boolean;
   minimizedProgressModal: boolean;
   actions: {
@@ -45,11 +46,18 @@ interface DownloadState {
     setProgress: (progress: number) => void;
     setState: (state: Partial<DownloadState>) => void;
     setOutput: (output: Output) => void;
-    startExport: () => void;
+    setRemoteUrl: (remoteUrl: string) => void;
+    // remoteBase: render on ANOTHER machine's editor (its /api/render-remotion). Omit = local.
+    startExport: (remoteBase?: string) => void;
     setDisplayProgressModal: (displayProgressModal: boolean) => void;
     setMinimizedProgressModal: (minimized: boolean) => void;
   };
 }
+
+const REMOTE_URL_KEY = "vapp_render_remote_url";
+const loadRemoteUrl = () => {
+  try { return localStorage.getItem(REMOTE_URL_KEY) || ""; } catch { return ""; }
+};
 
 export const useDownloadState = create<DownloadState>((set, get) => ({
   projectId: "",
@@ -61,10 +69,12 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
   exportEngine: "remotion",
   progress: 0,
   error: null,
+  remoteUrl: loadRemoteUrl(),
   displayProgressModal: false,
   minimizedProgressModal: false,
   actions: {
     setProjectId: (projectId) => set({ projectId }),
+    setRemoteUrl: (remoteUrl) => { try { localStorage.setItem(REMOTE_URL_KEY, remoteUrl); } catch {} set({ remoteUrl }); },
     setExporting: (exporting) => set({ exporting }),
     setExportType: (exportType) => set({ exportType }),
     setExportQuality: (exportQuality) => set({ exportQuality }),
@@ -77,7 +87,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
       set({ displayProgressModal }),
     setMinimizedProgressModal: (minimizedProgressModal) =>
       set({ minimizedProgressModal }),
-    startExport: async () => {
+    startExport: async (remoteBase?: string) => {
       try {
         set({
           exporting: true,
@@ -106,7 +116,12 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         } as IDesign;
 
         const isRemotion = exportEngine === "remotion";
-        const apiBase = isRemotion ? "/api/render-remotion" : "/api/render";
+        const routePath = isRemotion ? "/api/render-remotion" : "/api/render";
+        // remoteBase set → render on another machine's editor. A remote editor serves its
+        // API under the basePath (/editor); the local same-origin path resolves fine bare.
+        const base = remoteBase ? remoteBase.trim().replace(/\/+$/, "") : "";
+        const basePathPrefix = base ? (process.env.NEXT_PUBLIC_BASE_PATH || "") : "";
+        const apiBase = `${base}${basePathPrefix}${routePath}`;
 
         const response = await fetch(apiBase, {
           method: "POST",
@@ -145,7 +160,11 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             set({ progress });
 
             if (status === "COMPLETED") {
-              set({ exporting: false, output: { url, publicUrl, type: get().exportType } });
+              // Remote render → the download endpoint lives on the remote machine (under its basePath).
+              const finalUrl = base && typeof url === "string" && url.startsWith("/")
+                ? `${base}${basePathPrefix}${url}`
+                : url;
+              set({ exporting: false, output: { url: finalUrl, publicUrl, type: get().exportType } });
             } else if (status === "PROCESSING" || status === "PENDING") {
               setTimeout(checkStatus, 2500);
             } else if (status === "FAILED") {

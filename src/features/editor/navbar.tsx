@@ -429,7 +429,7 @@ const ENGINE_INFO: Record<string, { label: string; hint: string }> = {
 
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const isMediumScreen = useIsMediumScreen();
-  const { actions, exportType, exportQuality, exportResolution, exportEngine } = useDownloadState();
+  const { actions, exportType, exportQuality, exportResolution, exportEngine, remoteUrl } = useDownloadState();
   const { size } = useStore();
   const [isExportTypeOpen, setIsExportTypeOpen] = useState(false);
   const [isQualityOpen, setIsQualityOpen] = useState(false);
@@ -444,6 +444,19 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
 
     actions.setState({ payload: data });
     actions.startExport();
+  };
+
+  const handleRemoteExport = () => {
+    const target = (remoteUrl || "").trim();
+    if (!target) return;
+    // Prepend a scheme if the user typed a bare host/IP (e.g. 192.168.50.161:3000).
+    const base = /^https?:\/\//i.test(target) ? target : `http://${target}`;
+    const data: IDesign = {
+      id: generateId(),
+      ...stateManager.toJSON()
+    };
+    actions.setState({ payload: data });
+    actions.startExport(base);
   };
 
   return (
@@ -557,6 +570,33 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
             Export Video
           </Button>
           <TimelineExportMenu stateManager={stateManager} />
+        </div>
+
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
+            Render on Remote
+          </p>
+          <input
+            type="text"
+            value={remoteUrl}
+            onChange={(e) => actions.setRemoteUrl(e.target.value)}
+            placeholder="192.168.50.161:3000"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          <Button
+            onClick={handleRemoteExport}
+            disabled={!remoteUrl.trim()}
+            variant="outline"
+            className="w-full"
+          >
+            Render Remote
+          </Button>
+          <p className="text-[10px] text-muted-foreground leading-tight">
+            Renders on the machine at this URL using its own engine settings.
+          </p>
         </div>
       </PopoverContent>
     </Popover>

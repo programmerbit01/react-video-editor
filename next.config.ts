@@ -23,6 +23,22 @@ const nextConfig: NextConfig = {
 	env: {
 		NEXT_PUBLIC_BASE_PATH: '/editor',
 	},
+	// Cross-origin remote rendering: another editor instance POSTs a project here and
+	// polls status / downloads the result from a different origin. Allow those requests.
+	async headers() {
+		const cors = [
+			{ key: 'Access-Control-Allow-Origin', value: '*' },
+			{ key: 'Access-Control-Allow-Methods', value: 'GET, POST, OPTIONS' },
+			{ key: 'Access-Control-Allow-Headers', value: 'Content-Type' },
+			{ key: 'Access-Control-Max-Age', value: '86400' },
+		];
+		return [
+			{ source: '/api/render-remotion/:path*', headers: cors },
+			{ source: '/api/render-remotion', headers: cors },
+			{ source: '/api/render/:path*', headers: cors },
+			{ source: '/api/render', headers: cors },
+		];
+	},
 	serverExternalPackages: [
 		'@napi-rs/canvas',
 		'remotion',
