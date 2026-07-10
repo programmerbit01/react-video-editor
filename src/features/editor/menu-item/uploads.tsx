@@ -45,6 +45,7 @@ const normalizeServerMedia = (it: any) => {
     updated: it?.updated || it?.updated_at || "",
     record_id: it?.record_id || "",
     prompt: it?.prompt || "",
+    poster: it?.poster || "", // server-generated video poster (instant, no client capture)
     source: it?.type || "", // vApp `type` = input | output (source dimension)
   };
   if (it?.stt && typeof it.stt === "object") entry.stt = it.stt;
@@ -139,9 +140,13 @@ const dragData = (item: any): Record<string, any> => {
   const meta = mediaMetaCache.get(src) || mediaMetaCache.get(dsrc) || {};
   const width = meta.width || 1920, height = meta.height || 1080;
   if (isVideo(item)) {
-    // No data-URL previewUrl here — it bloats the drag dataTransfer. The timeline
-    // captures the frame itself (CORS-clean video elements).
-    return { type: "video", duration: meta.duration || 10000, details: { src, width, height } };
+    // Include the server poster URL (small, safe for dataTransfer) so the dropped clip
+    // shows instantly. No data-URL here (that bloats dataTransfer); if no server poster,
+    // the timeline captures the frame itself.
+    const poster = String(item.poster || "");
+    return poster
+      ? { type: "video", duration: meta.duration || 10000, details: { src, width, height }, metadata: { previewUrl: poster } }
+      : { type: "video", duration: meta.duration || 10000, details: { src, width, height } };
   }
   return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: { previewUrl: dsrc } };
 };
@@ -228,6 +233,7 @@ const toUploadItem = (item: any) => {
     created: item.created || "",
     record_id: item.record_id || "",
     prompt: item.prompt || "",
+    poster: item.poster || "",
     source: item.source || "", // input | output
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
@@ -346,20 +352,22 @@ function useInView<T extends HTMLElement>(rootMargin = "400px") {
 
 // ── Thumbnail ────────────────────────────────────────────────────────────────
 
-const VideoThumb = ({ src }: { src: string }) => {
-  const [poster, setPoster] = useState<string>(() => posterCache.get(src) || "");
+const VideoThumb = ({ src, serverPoster }: { src: string; serverPoster?: string }) => {
+  // serverPoster (meta.poster) → instant <img>, ZERO client capture. Only fall back to
+  // canvas capture when the server hasn't produced a poster yet.
+  const [poster, setPoster] = useState<string>(() => serverPoster || posterCache.get(src) || "");
   const [failed, setFailed] = useState(false);
   const { ref, inView } = useInView<HTMLDivElement>();
 
   useEffect(() => {
-    if (poster || failed || !inView || !src) return;
+    if (serverPoster || poster || failed || !inView || !src) return;
     let alive = true;
     capturePoster(src).then((p) => {
       if (!alive) return;
       if (p) setPoster(p); else setFailed(true);
     });
     return () => { alive = false; };
-  }, [inView, src, poster, failed]);
+  }, [inView, src, poster, failed, serverPoster]);
 
   return (
     <div ref={ref} className="w-full h-full bg-white/5 flex items-center justify-center">
@@ -390,7 +398,7 @@ const Thumb = ({ item }: { item: any }) => {
     );
   }
   if (isVideo(item)) {
-    return <VideoThumb src={src} />;
+    return <VideoThumb src={src} serverPoster={item.poster || ""} />;
   }
   return (
     <img
@@ -877,10 +885,10 @@ export const Uploads = () => {
           width = width || fast.width || 1920;
           height = height || fast.height || 1080;
         }
-        // GUARANTEE a preview frame — the timeline draws this as the clip thumbnail.
-        // Without it, if the filmstrip decode fails (many clips loading at once), the
-        // clip renders solid black. Capture the poster now if it isn't cached yet.
-        let previewUrl = posterCache.get(getDisplaySrc(item)) || posterCache.get(src) || cached?.previewUrl || "";
+        // Prefer the server poster (meta.poster) — a plain URL the timeline shows with
+        // zero client capture. Else reuse a cached frame; else capture one now so the
+        // clip never renders solid black.
+        let previewUrl = item.poster || posterCache.get(getDisplaySrc(item)) || posterCache.get(src) || cached?.previewUrl || "";
         if (!previewUrl) previewUrl = await capturePoster(getDisplaySrc(item));
         const videoMeta: Record<string, any> = { previewUrl };
         if (item.stt && typeof item.stt === "object") {
