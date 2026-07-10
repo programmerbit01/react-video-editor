@@ -41,7 +41,9 @@ class CanvasVideoClip {
     return new Promise((resolve) => {
       const v = document.createElement("video");
       v.crossOrigin = "anonymous";
-      v.preload = "auto";
+      // metadata (not auto): don't download the WHOLE file per clip — with many clips
+      // that saturates the network and some time out → black. Seeking still range-fetches.
+      v.preload = "metadata";
       v.muted = true;
       v.playsInline = true;
       let resolved = false;
@@ -344,9 +346,11 @@ class Video extends Trimmable {
       v.preload = "metadata";
       v.muted = true;
       v.playsInline = true;
-      const finish = () => resolve();
-      const timer = setTimeout(finish, 6000);
-      v.onloadeddata = () => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
+      const timer = setTimeout(finish, 8000);
+      const capture = () => {
+        if (done) return;
         try {
           const w = v.videoWidth || 0;
           const h = v.videoHeight || 0;
@@ -365,7 +369,6 @@ class Video extends Trimmable {
             this.aspectRatio = aspectRatio;
             this.thumbnailWidth = targetWidth;
             this.thumbnailCache.setThumbnail("fallback", img);
-            clearTimeout(timer);
             finish();
           };
           img.onerror = finish;
@@ -374,6 +377,14 @@ class Video extends Trimmable {
           finish();
         }
       };
+      // With preload=metadata, onloadeddata may not fire on its own — seek to force a
+      // frame decode, then capture on `seeked` (falls back to loadeddata if it fires).
+      v.onloadedmetadata = () => {
+        const t = Number.isFinite(v.duration) && v.duration > 0.2 ? 0.1 : 0;
+        try { v.currentTime = t; } catch { capture(); }
+      };
+      v.onseeked = capture;
+      v.onloadeddata = () => { if (v.readyState >= 2) capture(); };
       v.onerror = finish;
       v.src = this.src;
       v.load();

@@ -847,10 +847,12 @@ export const Uploads = () => {
           width = width || fast.width || 1920;
           height = height || fast.height || 1080;
         }
-        // Reuse the grid's cached poster as the timeline clip's preview frame.
-        const videoMeta: Record<string, any> = {
-          previewUrl: posterCache.get(getDisplaySrc(item)) || posterCache.get(src) || cached?.previewUrl || "",
-        };
+        // GUARANTEE a preview frame — the timeline draws this as the clip thumbnail.
+        // Without it, if the filmstrip decode fails (many clips loading at once), the
+        // clip renders solid black. Capture the poster now if it isn't cached yet.
+        let previewUrl = posterCache.get(getDisplaySrc(item)) || posterCache.get(src) || cached?.previewUrl || "";
+        if (!previewUrl) previewUrl = await capturePoster(getDisplaySrc(item));
+        const videoMeta: Record<string, any> = { previewUrl };
         if (item.stt && typeof item.stt === "object") {
           videoMeta.transcriptData = item.stt;
           setTranscriptResult(src, item.stt);
