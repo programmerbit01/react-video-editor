@@ -138,11 +138,12 @@ const dragData = (item: any): Record<string, any> => {
   if (isAudio(item)) return { type: "audio", details: { src }, metadata: {} };
   const meta = mediaMetaCache.get(src) || mediaMetaCache.get(dsrc) || {};
   const width = meta.width || 1920, height = meta.height || 1080;
-  const previewUrl = posterCache.get(dsrc) || meta.previewUrl || (isVideo(item) ? "" : dsrc);
   if (isVideo(item)) {
-    return { type: "video", duration: meta.duration || 10000, details: { src, width, height }, metadata: { previewUrl } };
+    // No data-URL previewUrl here — it bloats the drag dataTransfer. The timeline
+    // captures the frame itself (CORS-clean video elements).
+    return { type: "video", duration: meta.duration || 10000, details: { src, width, height } };
   }
-  return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: { previewUrl } };
+  return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: { previewUrl: dsrc } };
 };
 
 const getLabel = (item: any) => {
@@ -340,8 +341,10 @@ const VideoThumb = ({ src }: { src: string }) => {
         // eslint-disable-next-line @next/next/no-img-element
         <img src={poster} alt="" draggable={false} className="w-full h-full object-cover absolute inset-0" />
       ) : failed ? (
-        // Canvas capture unavailable → lazy <video> showing the frame at 1s (media fragment)
-        <video src={`${src}#t=1`} muted playsInline preload="metadata"
+        // Canvas capture unavailable → lazy <video> showing the frame at 1s (media fragment).
+        // crossOrigin MUST match capturePoster's — else the browser caches a non-CORS
+        // copy that later taints the canvas (→ black clips in the timeline).
+        <video src={`${src}#t=1`} muted playsInline preload="metadata" crossOrigin="anonymous"
           className="w-full h-full object-cover absolute inset-0" />
       ) : inView ? (
         <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
@@ -472,6 +475,7 @@ const UploadGridItem = memo(({
           <video
             ref={videoRef}
             src={src}
+            crossOrigin="anonymous"
             className={`absolute inset-0 h-full w-full object-cover transition-opacity ${isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}
             playsInline
             preload="none"
