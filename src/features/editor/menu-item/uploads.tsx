@@ -711,17 +711,11 @@ export const Uploads = () => {
 
   // Map a filter chip → (type, media) query dims. `uploads` = the user's own inputs
   // (source=input); the media-type chips span all sources; `all` = everything.
-  const queryDims = (f: string) => ({
-    type: f === "uploads" ? "input" : "all",
-    media: ["image", "video", "audio"].includes(f) ? f : "all",
-  });
-
-  const fetchPage = async (pageNum: number, filter: string = mediaFilter) => {
+  const fetchPage = async (pageNum: number) => {
     const { token, baseUrl } = getVappParams();
-    // DIRECT to the vApp server — no higgs proxy. type=all + media type filter +
-    // pagination. Auth via Bearer token; the vApp server serves CORS `*`.
-    const { type, media } = queryDims(filter);
-    const apiUrl = `${baseUrl}/vapp/user/media?type=${type}&media=${media}&page=${pageNum}&per_page=${PER_PAGE}`;
+    // Always pull type=all — the tab chips filter CLIENT-SIDE (instant, no re-fetch).
+    // DIRECT to the vApp server (no higgs proxy); Bearer auth; vApp serves CORS.
+    const apiUrl = `${baseUrl}/vapp/user/media?type=all&media=all&page=${pageNum}&per_page=${PER_PAGE}`;
 
     const res = await fetch(apiUrl, { headers: vappAuth(token) });
     if (!res.ok) throw new Error(`Server returned ${res.status}`);
@@ -762,8 +756,7 @@ export const Uploads = () => {
   const backgroundSync = async () => {
     try {
       const { token, baseUrl } = getVappParams();
-      const bd = queryDims(mediaFilter);
-      const res = await fetch(`${baseUrl}/vapp/user/media?type=${bd.type}&media=${bd.media}&page=1&per_page=${PER_PAGE}`, { headers: vappAuth(token) });
+      const res = await fetch(`${baseUrl}/vapp/user/media?type=all&media=all&page=1&per_page=${PER_PAGE}`, { headers: vappAuth(token) });
       if (!res.ok) return;
       const data = await res.json();
       const items = ((data.items || data.files || []) as any[])
@@ -828,19 +821,22 @@ export const Uploads = () => {
   };
 
   // Switch media-type filter → wipe cached vApp items + fresh fetch page 1 for that type.
+  // Tabs filter the ALREADY-loaded list CLIENT-SIDE — instant, no re-fetch (no loading
+  // spinner on every switch, esp. on slower remote networks). The fetch always pulls
+  // type=all; the chips just narrow what's shown.
   const changeFilter = (f: "all" | "image" | "video" | "audio" | "uploads") => {
-    if (f === mediaFilter || loading) return;
     setMediaFilter(f);
-    setFetchError(null);
-    setUploadsLoaded(false);
-    setPage(1);
-    setHasMore(false);
-    setUploads((prev: any[]) => prev.filter((u: any) => !isVappItem(u)));
-    setLoading(true);
-    fetchPage(1, f)
-      .then(() => setUploadsLoaded(true))
-      .catch((err) => setFetchError(String(err?.message || "Failed to load media")))
-      .finally(() => setLoading(false));
+  };
+
+  const matchesFilter = (u: any): boolean => {
+    switch (mediaFilter) {
+      case "all": return true;
+      case "video": return isVideo(u);
+      case "audio": return isAudio(u);
+      case "image": return !isVideo(u) && !isAudio(u);
+      case "uploads": return !isVappItem(u) || String(u.source || u.metadata?.source || "").includes("input");
+      default: return true;
+    }
   };
 
   // Warm caches on hover so a subsequent click adds to the timeline instantly.
@@ -927,7 +923,7 @@ export const Uploads = () => {
     }
   };
 
-  const allItems = uploads;
+  const allItems = uploads.filter(matchesFilter);
   const hasItems = allItems.length > 0 || pendingUploads.length > 0 || activeUploads.length > 0;
 
   return (
