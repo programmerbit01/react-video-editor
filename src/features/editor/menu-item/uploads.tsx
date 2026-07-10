@@ -257,28 +257,36 @@ const savePosterCache = () => {
   }, 600);
 };
 const posterInflight = new Map<string, Promise<string>>();
-const capturePoster = (src: string): Promise<string> => {
-  if (!src) return Promise.resolve("");
-  const cached = posterCache.get(src);
-  if (cached) return Promise.resolve(cached);
-  const existing = posterInflight.get(src);
-  if (existing) return existing;
-  const task = new Promise<string>((resolve) => {
+
+// Concurrency limiter — too many simultaneous video-frame captures contend for
+// network/decode and time out (→ some tiles get no poster). Cap to a few at a time.
+const POSTER_CONCURRENCY = 3;
+let _posterActive = 0;
+const _posterQueue: (() => void)[] = [];
+const _posterNext = () => {
+  if (_posterActive >= POSTER_CONCURRENCY) return;
+  const job = _posterQueue.shift();
+  if (job) { _posterActive++; job(); }
+};
+
+// ONE capture attempt: video → seek → canvas frame. Resolves "" on any failure.
+const _captureOnce = (src: string): Promise<string> =>
+  new Promise((resolve) => {
     const v = document.createElement("video");
     v.preload = "metadata";
     v.muted = true;
     v.playsInline = true;
-    v.crossOrigin = "anonymous"; // R2 serves CORS `*` → canvas capture allowed
+    v.crossOrigin = "anonymous"; // must match every other <video> load or the canvas taints
     let done = false;
-    const cleanup = () => { try { v.src = ""; v.load(); } catch {} posterInflight.delete(src); };
-    const fail = () => { if (done) return; done = true; cleanup(); resolve(""); };
-    const timer = window.setTimeout(fail, 7000);
+    const cleanup = () => { try { v.src = ""; v.load(); } catch {} };
+    const finish = (r: string) => { if (done) return; done = true; window.clearTimeout(timer); cleanup(); resolve(r); };
+    const timer = window.setTimeout(() => finish(""), 12000);
     v.onloadedmetadata = () => {
       const t = Number.isFinite(v.duration) && v.duration > 1 ? 1 : 0;
-      try { v.currentTime = t; } catch { window.clearTimeout(timer); fail(); }
+      try { v.currentTime = t; } catch { finish(""); }
     };
     v.onseeked = () => {
-      if (done) return; done = true; window.clearTimeout(timer);
+      if (done) return;
       try {
         const w = v.videoWidth || 320, h = v.videoHeight || 180;
         const aspect = w && h ? w / h : 16 / 9;
@@ -286,15 +294,33 @@ const capturePoster = (src: string): Promise<string> => {
         const c = document.createElement("canvas");
         c.width = tw; c.height = th;
         const ctx = c.getContext("2d");
-        if (!ctx) { cleanup(); return resolve(""); }
+        if (!ctx) return finish("");
         ctx.drawImage(v, 0, 0, tw, th);
-        const url = c.toDataURL("image/jpeg", 0.62);
-        posterCache.set(src, url); savePosterCache();
-        cleanup(); resolve(url);
-      } catch { cleanup(); resolve(""); } // CORS-taint / decode error → caller falls back
+        finish(c.toDataURL("image/jpeg", 0.62));
+      } catch { finish(""); } // taint / decode error
     };
-    v.onerror = () => { window.clearTimeout(timer); fail(); };
+    v.onerror = () => finish("");
     v.src = src; v.load();
+  });
+
+const capturePoster = (src: string): Promise<string> => {
+  if (!src) return Promise.resolve("");
+  const cached = posterCache.get(src);
+  if (cached) return Promise.resolve(cached);
+  const existing = posterInflight.get(src);
+  if (existing) return existing;
+  const task = new Promise<string>((resolve) => {
+    const run = async () => {
+      let url = await _captureOnce(src);
+      if (!url) { await new Promise((r) => setTimeout(r, 400)); url = await _captureOnce(src); } // retry once
+      if (url) { posterCache.set(src, url); savePosterCache(); }
+      _posterActive--;
+      posterInflight.delete(src);
+      _posterNext();
+      resolve(url);
+    };
+    _posterQueue.push(run);
+    _posterNext();
   });
   posterInflight.set(src, task);
   return task;
