@@ -7,7 +7,7 @@ import useUploadStore from "../store/use-upload-store";
 import { vappAuth, sttForUrl } from "@/utils/vapp-api";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import ModalUpload from "@/components/modal-upload";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, memo } from "react";
 import type { Dispatch, MouseEvent, SetStateAction } from "react";
 
 type CachedMediaMeta = {
@@ -43,6 +43,8 @@ const normalizeServerMedia = (it: any) => {
     mtime: it?.mtime || "",
     updated: it?.updated || it?.updated_at || "",
     record_id: it?.record_id || "",
+    prompt: it?.prompt || "",
+    source: it?.type || "", // vApp `type` = input | output (source dimension)
   };
   if (it?.stt && typeof it.stt === "object") entry.stt = it.stt;
   return entry;
@@ -126,8 +128,12 @@ const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
     v.load();
   });
 
-const getLabel = (item: any) =>
-  item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
+const getLabel = (item: any) => {
+  // Prefer the generation prompt (nice, human label) over the ugly vapp_*/TS filename.
+  const p = String(item.prompt || item.metadata?.prompt || "").trim();
+  if (p) return p;
+  return item.fileName || item.file?.name || item.url?.split("/").pop()?.split("?")[0] || "";
+};
 
 const isVideo = (u: any) => u.type?.startsWith("video/") || u.type === "video";
 const isAudio = (u: any) => u.type?.startsWith("audio/") || u.type === "audio";
@@ -157,8 +163,17 @@ const proxied = (src?: string) => {
   return `${base}/api/proxy?url=${encodeURIComponent(src)}`;
 };
 
-const getPlayerSrc = (item: any) =>
-  proxied(normalizeMediaSrc(item.metadata?.uploadedUrl || item.url));
+// R2 (rpublic.tomtap.ai) serves proper CORS (preflight 204 + range) → fetch DIRECT.
+// Only the legacy Garage host 403s the CORS preflight → route those through the proxy.
+const PROXY_ONLY_HOSTS = ["vapp-media-gar.tomtap.ai"];
+const getPlayerSrc = (item: any) => {
+  const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
+  if (!src || src.startsWith("/")) return src;
+  try {
+    if (PROXY_ONLY_HOSTS.includes(new URL(src).hostname)) return proxied(src);
+  } catch {}
+  return src; // direct — R2 supports CORS-strict fetch()+Range
+};
 
 const getDisplaySrc = (item: any) => {
   // DIRECT R2 for grid display — <img>/<video>/canvas capture don't need CORS-fetch.
@@ -194,6 +209,8 @@ const toUploadItem = (item: any) => {
     updated: item.updated || item.updated_at || "",
     created: item.created || "",
     record_id: item.record_id || "",
+    prompt: item.prompt || "",
+    source: item.source || "", // input | output
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
   return entry;
@@ -342,17 +359,17 @@ const Thumb = ({ item }: { item: any }) => {
 
 // ── Grid item ─────────────────────────────────────────────────────────────────
 
-const UploadGridItem = ({
+const UploadGridItem = memo(({
   item,
   onAdd,
-  activePreviewId,
+  isActive,
   setActivePreviewId,
   adding,
   onPrewarm,
 }: {
   item: any;
   onAdd: (item: any) => void;
-  activePreviewId: string | null;
+  isActive: boolean;
   setActivePreviewId: Dispatch<SetStateAction<string | null>>;
   adding: boolean;
   onPrewarm: (item: any) => void;
@@ -374,14 +391,14 @@ const UploadGridItem = ({
   };
 
   useEffect(() => {
-    if (activePreviewId !== mediaId && isPlaying) {
+    if (!isActive && isPlaying) {
       videoRef.current?.pause();
       audioRef.current?.pause();
       if (videoRef.current) videoRef.current.currentTime = 0;
       if (audioRef.current) audioRef.current.currentTime = 0;
       setIsPlaying(false);
     }
-  }, [activePreviewId, isPlaying, mediaId]);
+  }, [isActive, isPlaying]);
 
   const handleTogglePreview = async (e: MouseEvent) => {
     e.preventDefault();
@@ -446,7 +463,14 @@ const UploadGridItem = ({
       </span>
     </div>
   );
-};
+}, (prev, next) =>
+  // Re-render a tile ONLY when its OWN state changes — clicking one video no longer
+  // re-renders (flickers) every other tile. Handler identity is ignored on purpose.
+  prev.item === next.item &&
+  prev.isActive === next.isActive &&
+  prev.adding === next.adding
+);
+UploadGridItem.displayName = "UploadGridItem";
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -464,7 +488,7 @@ export const Uploads = () => {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
   const [addingId, setAddingId] = useState<string | null>(null); // item being added → timeline (spinner + re-click guard)
-  const [mediaFilter, setMediaFilter] = useState<"all" | "image" | "video" | "audio">("all");
+  const [mediaFilter, setMediaFilter] = useState<"all" | "image" | "video" | "audio" | "uploads">("all");
 
   const ensureImageMeta = async (item: any): Promise<CachedMediaMeta> => {
     const src = getDisplaySrc(item);
@@ -613,11 +637,19 @@ export const Uploads = () => {
     return task;
   };
 
-  const fetchPage = async (pageNum: number, media: string = mediaFilter) => {
+  // Map a filter chip → (type, media) query dims. `uploads` = the user's own inputs
+  // (source=input); the media-type chips span all sources; `all` = everything.
+  const queryDims = (f: string) => ({
+    type: f === "uploads" ? "input" : "all",
+    media: ["image", "video", "audio"].includes(f) ? f : "all",
+  });
+
+  const fetchPage = async (pageNum: number, filter: string = mediaFilter) => {
     const { token, baseUrl } = getVappParams();
     // DIRECT to the vApp server — no higgs proxy. type=all + media type filter +
     // pagination. Auth via Bearer token; the vApp server serves CORS `*`.
-    const apiUrl = `${baseUrl}/vapp/user/media?type=all&media=${media}&page=${pageNum}&per_page=${PER_PAGE}`;
+    const { type, media } = queryDims(filter);
+    const apiUrl = `${baseUrl}/vapp/user/media?type=${type}&media=${media}&page=${pageNum}&per_page=${PER_PAGE}`;
 
     const res = await fetch(apiUrl, { headers: vappAuth(token) });
     if (!res.ok) throw new Error(`Server returned ${res.status}`);
@@ -658,7 +690,8 @@ export const Uploads = () => {
   const backgroundSync = async () => {
     try {
       const { token, baseUrl } = getVappParams();
-      const res = await fetch(`${baseUrl}/vapp/user/media?type=all&media=${mediaFilter}&page=1&per_page=${PER_PAGE}`, { headers: vappAuth(token) });
+      const bd = queryDims(mediaFilter);
+      const res = await fetch(`${baseUrl}/vapp/user/media?type=${bd.type}&media=${bd.media}&page=1&per_page=${PER_PAGE}`, { headers: vappAuth(token) });
       if (!res.ok) return;
       const data = await res.json();
       const items = ((data.items || data.files || []) as any[])
@@ -723,7 +756,7 @@ export const Uploads = () => {
   };
 
   // Switch media-type filter → wipe cached vApp items + fresh fetch page 1 for that type.
-  const changeFilter = (f: "all" | "image" | "video" | "audio") => {
+  const changeFilter = (f: "all" | "image" | "video" | "audio" | "uploads") => {
     if (f === mediaFilter || loading) return;
     setMediaFilter(f);
     setFetchError(null);
@@ -845,9 +878,9 @@ export const Uploads = () => {
           </Button>
         </div>
 
-        {/* Media-type filter (like Image Studio) — All / Image / Video / Audio */}
-        <div className="px-4 pb-2 flex gap-1.5">
-          {(["all", "image", "video", "audio"] as const).map((f) => (
+        {/* Filter — All / Image / Video / Audio + Uploads (the user's own inputs) */}
+        <div className="px-4 pb-2 flex flex-wrap gap-1.5">
+          {(["all", "image", "video", "audio", "uploads"] as const).map((f) => (
             <button
               key={f}
               type="button"
@@ -921,7 +954,7 @@ export const Uploads = () => {
                 key={item.id || `item-${idx}`}
                 item={item}
                 onAdd={handleAdd}
-                activePreviewId={activePreviewId}
+                isActive={activePreviewId === String(item.id || item.url)}
                 setActivePreviewId={setActivePreviewId}
                 adding={addingId === String(item.id || item.url)}
                 onPrewarm={prewarm}
