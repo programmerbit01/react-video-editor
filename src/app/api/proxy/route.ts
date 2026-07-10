@@ -69,22 +69,9 @@ export async function GET(request: NextRequest) {
   if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
 
   const rangeHeader = request.headers.get("range");
-
-  // Skip disk cache for range requests (partial content)
-  if (!rangeHeader) {
-    const cached = await getCached(url);
-    if (cached) {
-      return new NextResponse(cached.data, {
-        status: 200,
-        headers: {
-          ...CORS,
-          "Content-Type": cached.contentType,
-          "Cache-Control": "public, max-age=604800",
-          "X-Cache": "HIT",
-        },
-      });
-    }
-  }
+  // Disk caching disabled — stream-only proxy (CORS + Range passthrough). This route
+  // exists ONLY so Remotion/timeline CORS-strict fetch() works (the R2/garage host
+  // 403s the CORS preflight). No disk bloat (.proxy-cache).
 
   try {
     const upstream = await fetch(url, {
@@ -97,12 +84,7 @@ export async function GET(request: NextRequest) {
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
     const contentLength = upstream.headers.get("content-length");
-    const shouldBufferForCache =
-      !rangeHeader &&
-      upstream.status === 200 &&
-      contentLength !== null &&
-      Number(contentLength) > 0 &&
-      Number(contentLength) <= 25 * 1024 * 1024;
+    const shouldBufferForCache = false; // stream-only, no disk cache
 
     const headers: Record<string, string> = {
       ...CORS,

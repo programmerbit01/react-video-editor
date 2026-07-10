@@ -1,4 +1,5 @@
 import axios from "axios";
+import { uploadVappMediaFile } from "./vapp-upload-client";
 
 function withEditorBase(path: string): string {
   if (typeof window === "undefined") return path;
@@ -97,23 +98,16 @@ async function processVappFileUpload(
   vapp: { vappHost: string; token: string; baseUrl: string }
 ): Promise<any> {
   try {
-    callbacks.onProgress(uploadId, 10);
+    callbacks.onProgress(uploadId, 5);
 
-    const formData = new FormData();
-    formData.append("file", file);
+    // Presigned DIRECT-to-R2 upload (browser → R2, user bandwidth, no server hop)
+    // then register as a library asset so it persists + lists. No /api/proxy.
+    const { url: rawUrl, type: mediaType, name } = await uploadVappMediaFile(
+      file,
+      vapp,
+      (pct) => callbacks.onProgress(uploadId, Math.max(5, Math.min(99, pct)))
+    );
 
-    const uploadUrl = `${vapp.vappHost}/api/vapp/upload?token=${encodeURIComponent(vapp.token)}&baseUrl=${encodeURIComponent(vapp.baseUrl)}`;
-
-    const res = await axios.post(uploadUrl, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-      onUploadProgress: (e) => {
-        const pct = Math.round((e.loaded * 80) / (e.total || 1));
-        callbacks.onProgress(uploadId, 10 + pct);
-      },
-    });
-
-    const { url: rawUrl, type: mediaType, name } = res.data;
-    const proxyUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
     const mimeType = mediaType === "video" ? "video/mp4"
       : mediaType === "audio" ? "audio/mp3"
       : "image/jpeg";
@@ -122,13 +116,14 @@ async function processVappFileUpload(
 
     const uploadData = {
       id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
-      url: proxyUrl,
-      filePath: proxyUrl,
+      // Direct R2 URL — no /api/proxy hop (R2 serves CORS `*`).
+      url: rawUrl,
+      filePath: rawUrl,
       fileName: name || file.name,
       fileSize: file.size,
       type: mimeType,
       contentType: mimeType,
-      metadata: { uploadedUrl: proxyUrl, directUrl: rawUrl, vappItem: true },
+      metadata: { uploadedUrl: rawUrl, directUrl: rawUrl, vappItem: true },
       status: "uploaded",
       createdAt: new Date().toISOString(),
     };

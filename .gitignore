@@ -43,3 +43,6 @@ next-env.d.ts
 # generated render output
 /public/exports/
 /public/uploads/
+
+# stream proxy disk cache (regenerated, never commit)
+.proxy-cache/

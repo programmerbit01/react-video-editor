@@ -195,7 +195,28 @@ const useUploadStore = create<IUploadStore>()(
     }),
     {
       name: "upload-store",
-      partialize: () => ({})
+      // Bump when the cached item SHAPE or ordering logic changes so stale caches
+      // (old proxy urls / broken sort / missing time fields) are dropped instead of
+      // shown. v3: items carry mtime/created/record_id + created-first sort.
+      version: 3,
+      migrate: (_persisted: any, version: number) => {
+        // Any pre-v3 cache lacks the new time fields (mtime/created) → mixes sort
+        // keys and jumbles order. Discard it, force a fresh full fetch on next open.
+        if (version < 3) {
+          return { uploads: [], uploadsLoaded: false, uploadsHasMore: false, uploadsPage: 1 };
+        }
+        return _persisted;
+      },
+      // Persist the media library across editor opens so we DON'T refetch the
+      // whole vApp media on every load. Only serializable, already-uploaded
+      // items (skip anything still holding a File / in-flight). The mount guard
+      // in uploads.tsx then serves from this cache and silently syncs new items.
+      partialize: (state) => ({
+        uploads: (state.uploads || []).filter((u: any) => u?.url && !u.file),
+        uploadsLoaded: state.uploadsLoaded,
+        uploadsHasMore: state.uploadsHasMore,
+        uploadsPage: state.uploadsPage
+      })
     }
   )
 );
