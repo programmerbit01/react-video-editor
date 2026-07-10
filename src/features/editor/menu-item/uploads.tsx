@@ -7,6 +7,7 @@ import useUploadStore from "../store/use-upload-store";
 import { vappAuth, sttForUrl } from "@/utils/vapp-api";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import ModalUpload from "@/components/modal-upload";
+import Draggable from "@/components/shared/draggable";
 import { useEffect, useRef, useState, memo } from "react";
 import type { Dispatch, MouseEvent, SetStateAction } from "react";
 
@@ -127,6 +128,22 @@ const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
     v.src = src;
     v.load();
   });
+
+// Drag payload for dropping a tile onto the scene/timeline. Matches what the scene
+// DroppableArea expects ({type, details.src, …}); it adds the id + places the clip.
+// Built synchronously from caches (poster/dims) — same defaults as click-add.
+const dragData = (item: any): Record<string, any> => {
+  const src = getPlayerSrc(item);
+  const dsrc = getDisplaySrc(item);
+  if (isAudio(item)) return { type: "audio", details: { src }, metadata: {} };
+  const meta = mediaMetaCache.get(src) || mediaMetaCache.get(dsrc) || {};
+  const width = meta.width || 1920, height = meta.height || 1080;
+  const previewUrl = posterCache.get(dsrc) || meta.previewUrl || (isVideo(item) ? "" : dsrc);
+  if (isVideo(item)) {
+    return { type: "video", duration: meta.duration || 10000, details: { src, width, height }, metadata: { previewUrl } };
+  }
+  return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: { previewUrl } };
+};
 
 const getLabel = (item: any) => {
   // Prefer the generation prompt (nice, human label) over the ugly vapp_*/TS filename.
@@ -321,7 +338,7 @@ const VideoThumb = ({ src }: { src: string }) => {
     <div ref={ref} className="w-full h-full bg-white/5 flex items-center justify-center">
       {poster ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={poster} alt="" className="w-full h-full object-cover absolute inset-0" />
+        <img src={poster} alt="" draggable={false} className="w-full h-full object-cover absolute inset-0" />
       ) : failed ? (
         // Canvas capture unavailable → lazy <video> showing the frame at 1s (media fragment)
         <video src={`${src}#t=1`} muted playsInline preload="metadata"
@@ -349,6 +366,7 @@ const Thumb = ({ item }: { item: any }) => {
   return (
     <img
       src={src}
+      draggable={false}
       className="w-full h-full object-cover"
       alt=""
       loading="lazy"
@@ -376,6 +394,7 @@ const UploadGridItem = memo(({
 }) => {
   const mediaId = String(item.id || item.url);
   const src = getDisplaySrc(item);
+  const dragPreview = posterCache.get(src) || (isVideo(item) || isAudio(item) ? "" : src); // drag ghost thumbnail
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -422,12 +441,26 @@ const UploadGridItem = memo(({
 
   return (
     <div className="flex flex-col gap-1 items-center">
+      <Draggable
+        data={dragData(item)}
+        shouldDisplayPreview={!isPlaying}
+        renderCustomPreview={
+          <div
+            className="draggable rounded-md"
+            style={{
+              width: 72, height: 72, backgroundColor: "#1f1f22",
+              backgroundImage: dragPreview ? `url(${dragPreview})` : undefined,
+              backgroundSize: "cover", backgroundPosition: "center",
+            }}
+          />
+        }
+      >
       <div
         className={`relative w-full aspect-video rounded-md overflow-hidden bg-white/5 hover:ring-1 hover:ring-white/20 transition-all ${adding ? "cursor-wait ring-1 ring-primary/60" : "cursor-pointer"}`}
         onClick={() => onAdd(item)}
         onMouseEnter={() => onPrewarm(item)}
         onMouseLeave={stopPreview}
-        title={adding ? "Adding to timeline…" : "Click to add to timeline"}
+        title={adding ? "Adding to timeline…" : "Drag to place, or click to add"}
       >
         <Thumb item={item} />
         {adding && (
@@ -458,6 +491,7 @@ const UploadGridItem = memo(({
           </button>
         )}
       </div>
+      </Draggable>
       <span className="text-xs text-muted-foreground truncate w-full text-center">
         {getLabel(item)}
       </span>
