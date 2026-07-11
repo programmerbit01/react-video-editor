@@ -192,14 +192,18 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     gpu: RENDER_GL ? `on (${RENDER_GL})` : "off",
   });
 
-  // Notify vapp_server — it fetches the MP4 from local URL and uploads to R2
-  const editorBase = (process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor").replace(/\/$/, "");
-  const videoUrl = `${editorBase}/api/render-remotion/${jobId}/download`;
-  fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job_id: jobId, status: "COMPLETED", video_url: videoUrl }),
-  }).catch(() => {});
+  // Notify vapp_server — it fetches the MP4 from local URL and uploads to R2.
+  // In pull mode (skipCallback) the render AGENT owns upload+report, so the editor
+  // must NOT also callback (would double-upload to the wrong vApp).
+  if (!options?.skipCallback) {
+    const editorBase = (process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor").replace(/\/$/, "");
+    const videoUrl = `${editorBase}/api/render-remotion/${jobId}/download`;
+    fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: jobId, status: "COMPLETED", video_url: videoUrl }),
+    }).catch(() => {});
+  }
 }
 
 export async function POST(request: Request) {
@@ -219,27 +223,33 @@ export async function POST(request: Request) {
       project_name: "User Export",
       started_at: Math.floor(Date.now() / 1000),
     });
-    try {
-      await registerRenderJob({
-        job_id: jobId,
-        engine: "remotion",
-        source: "editor-manual",
-        project_name: "User Export",
-      });
-    } catch (err) {
-      console.warn("[render-remotion] register_render_job failed:", err);
+    // Pull mode (skipCallback): the agent registers/reports the job on its source
+    // vApp, so the editor skips its own push-tracking registration here.
+    if (!options?.skipCallback) {
+      try {
+        await registerRenderJob({
+          job_id: jobId,
+          engine: "remotion",
+          source: "editor-manual",
+          project_name: "User Export",
+        });
+      } catch (err) {
+        console.warn("[render-remotion] register_render_job failed:", err);
+      }
     }
 
     runRemotionExport(jobId, design, options).catch((err) => {
       console.error(`[render-remotion] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
       mergeJob(jobId, { status: "FAILED", progress: current?.progress ?? 0, error: err.message });
-      // Notify vapp_server of failure
-      fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_id: jobId, status: "FAILED", error: err.message }),
-      }).catch(() => {});
+      // Notify vapp_server of failure — skipped in pull mode (agent reports failure).
+      if (!options?.skipCallback) {
+        fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: jobId, status: "FAILED", error: err.message }),
+        }).catch(() => {});
+      }
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });

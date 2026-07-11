@@ -2,6 +2,7 @@ import { IDesign } from "@designcombo/types";
 import { create } from "zustand";
 import useTrackVisibilityStore from "./use-track-visibility-store";
 import useStore from "./use-store";
+import { vappCtx, vappAuth } from "@/utils/vapp-api";
 
 export type ExportQuality = "high" | "medium" | "low";
 export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
@@ -49,6 +50,8 @@ interface DownloadState {
     setRemoteUrl: (remoteUrl: string) => void;
     // remoteBase: render on ANOTHER machine's editor (its /api/render-remotion). Omit = local.
     startExport: (remoteBase?: string) => void;
+    // Queue the render as a pull job on the vApp server; a free render agent claims it.
+    startQueueExport: () => void;
     setDisplayProgressModal: (displayProgressModal: boolean) => void;
     setMinimizedProgressModal: (minimized: boolean) => void;
   };
@@ -176,6 +179,98 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         };
 
         checkStatus();
+      } catch (error) {
+        console.error(error);
+        set({ exporting: false, error: String(error) });
+      }
+    },
+    // Queue path — browser hits the vApp server DIRECTLY (no proxy): enqueue a
+    // "render" pull job, then poll its status. A render agent claims it, renders on
+    // its own editor, uploads the MP4 to R2 and reports the result back to the job.
+    startQueueExport: async () => {
+      try {
+        set({
+          exporting: true,
+          exportRunId: get().exportRunId + 1,
+          displayProgressModal: true,
+          minimizedProgressModal: false,
+          progress: 0,
+          error: null,
+          output: undefined,
+        });
+        const { payload, exportQuality, exportResolution, exportType } = get();
+        const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
+        if (!payload) throw new Error("Payload is not defined");
+
+        const { baseUrl, token } = vappCtx();
+        if (!baseUrl) throw new Error("No vApp server — open the editor from the vApp (missing ?baseUrl).");
+
+        const { muted, hidden } = useTrackVisibilityStore.getState();
+        const mutedTrackIds = Object.keys(muted).filter((id) => muted[id]);
+        const hiddenTrackIds = Object.keys(hidden).filter((id) => hidden[id]);
+
+        const { look, stylePack } = useStore.getState();
+        const designWithLook = {
+          ...payload,
+          metadata: { ...(payload as any).metadata, look, stylePack },
+        } as IDesign;
+
+        const enqueueRes = await fetch(`${baseUrl}/vapp/render/enqueue`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...vappAuth(token) },
+          body: JSON.stringify({
+            design: designWithLook,
+            options: {
+              fps: 30,
+              maxDim,
+              mutedTrackIds,
+              hiddenTrackIds,
+              format: exportType,
+              quality: exportQuality,
+            },
+          }),
+        });
+        if (!enqueueRes.ok) {
+          let msg = `Queue request failed (${enqueueRes.status})`;
+          try { const j = await enqueueRes.json(); if (j?.detail || j?.message) msg = j.detail || j.message; } catch {}
+          throw new Error(msg);
+        }
+        const enq = await enqueueRes.json();
+        const jobId = enq.job_id || enq.pb_job_id;
+        if (!jobId) throw new Error("Queue: no job_id returned");
+
+        const checkStatus = async () => {
+          try {
+            const sr = await fetch(
+              `${baseUrl}/vapp/job/status?job_id=${encodeURIComponent(jobId)}`,
+              { headers: vappAuth(token), cache: "no-store" },
+            );
+            if (!sr.ok) throw new Error("Failed to fetch queue job status.");
+            const j = await sr.json();
+            const status = String(j?.status || "").toLowerCase();
+            const prog = Number(j?.progress);
+            if (Number.isFinite(prog)) set({ progress: Math.max(0, Math.min(100, prog)) });
+
+            const files = Array.isArray(j?.result?.files) ? j.result.files : [];
+            const url =
+              (files[0] && (files[0].url || files[0])) ||
+              j?.output_url ||
+              (Array.isArray(j?.output_urls) ? j.output_urls[0] : "") ||
+              "";
+
+            if (status === "completed" || status === "done" || status === "succeeded") {
+              set({ exporting: false, progress: 100, output: { url, publicUrl: url, type: get().exportType } });
+            } else if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") {
+              set({ exporting: false, error: String(j?.error || "Render queue job failed.") });
+            } else {
+              setTimeout(checkStatus, 2500);
+            }
+          } catch (pollErr) {
+            set({ exporting: false, error: String(pollErr) });
+          }
+        };
+
+        setTimeout(checkStatus, 2000);
       } catch (error) {
         console.error(error);
         set({ exporting: false, error: String(error) });

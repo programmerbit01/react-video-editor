@@ -435,6 +435,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const [isQualityOpen, setIsQualityOpen] = useState(false);
   const [isResolutionOpen, setIsResolutionOpen] = useState(false);
   const [open, setOpen] = useState(false);
+  const [renderTab, setRenderTab] = useState<"local" | "remote" | "queue">("local");
 
   const handleExport = () => {
     const data: IDesign = {
@@ -457,6 +458,15 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
     };
     actions.setState({ payload: data });
     actions.startExport(base);
+  };
+
+  const handleQueueExport = () => {
+    const data: IDesign = {
+      id: generateId(),
+      ...stateManager.toJSON()
+    };
+    actions.setState({ payload: data });
+    actions.startQueueExport();
   };
 
   return (
@@ -565,38 +575,80 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
           </p>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Button onClick={handleExport} className="w-full">
-            Export Video
-          </Button>
-          <TimelineExportMenu stateManager={stateManager} />
-        </div>
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          {/* Render target — pick one of three ways (settings above still apply). */}
+          <div className="flex gap-1 rounded-md border border-border p-0.5">
+            {([
+              ["local", "Local"],
+              ["remote", "Remote"],
+              ["queue", "Queue"],
+            ] as const).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setRenderTab(val)}
+                className={`flex-1 rounded px-2 py-1 text-xs transition-colors ${
+                  renderTab === val
+                    ? "bg-secondary text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
-        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
-            Render on Remote
-          </p>
-          <input
-            type="text"
-            value={remoteUrl}
-            onChange={(e) => actions.setRemoteUrl(e.target.value)}
-            placeholder="192.168.50.161:3000"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          />
-          <Button
-            onClick={handleRemoteExport}
-            disabled={!remoteUrl.trim()}
-            variant="outline"
-            className="w-full"
-          >
-            Render Remote
-          </Button>
-          <p className="text-[10px] text-muted-foreground leading-tight">
-            Renders on the machine at this URL using its own engine settings.
-          </p>
+          {renderTab === "local" && (
+            <div className="flex flex-col gap-1.5">
+              <Button onClick={handleExport} className="w-full">
+                Export Video
+              </Button>
+              <TimelineExportMenu stateManager={stateManager} />
+              <p className="text-[10px] text-muted-foreground leading-tight">
+                Renders in this browser using the settings above.
+              </p>
+            </div>
+          )}
+
+          {renderTab === "remote" && (
+            <div className="flex flex-col gap-1.5">
+              <input
+                type="text"
+                value={remoteUrl}
+                onChange={(e) => actions.setRemoteUrl(e.target.value)}
+                placeholder="192.168.50.161:3000"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <Button
+                onClick={handleRemoteExport}
+                disabled={!remoteUrl.trim()}
+                variant="outline"
+                className="w-full"
+              >
+                Render Remote
+              </Button>
+              <p className="text-[10px] text-muted-foreground leading-tight">
+                Renders directly on the machine at this URL.
+              </p>
+            </div>
+          )}
+
+          {renderTab === "queue" && (
+            <div className="flex flex-col gap-1.5">
+              <Button
+                onClick={handleQueueExport}
+                variant="outline"
+                className="w-full"
+              >
+                Send to Render Queue
+              </Button>
+              <p className="text-[10px] text-muted-foreground leading-tight">
+                Queues the job on the vApp server — a free render agent picks it up.
+              </p>
+            </div>
+          )}
         </div>
       </PopoverContent>
     </Popover>
