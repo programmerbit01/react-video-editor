@@ -11,6 +11,8 @@ import {
 import {
   ChevronDown,
   Download,
+  FileDown,
+  FileUp,
   Keyboard,
   Music2,
   Pause,
@@ -29,6 +31,7 @@ import { generateId } from "@designcombo/timeline";
 import type { IDesign } from "@designcombo/types";
 import { useDownloadState } from "./store/use-download-state";
 import DownloadProgressModal from "./download-progress-modal";
+import RenderStatusWidget from "./render-status-widget";
 import AutosizeInput from "@/components/ui/autosize-input";
 import { debounce } from "lodash";
 import {
@@ -257,6 +260,59 @@ export default function Navbar({
     setSavedProjects(getSavedProjects());
   };
 
+  // --- Import / Export project as a single .json file ---
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const buildProjectData = (): Record<string, unknown> => {
+    const sm = stateManager.toJSON() as Record<string, unknown>;
+    return {
+      ...sm,
+      metadata: {
+        ...(sm.metadata as object),
+        look: useStore.getState().look,
+        stylePack: useStore.getState().stylePack,
+      },
+      ...(rawJson ? { _guidedScript: rawJson } : {}),
+    };
+  };
+
+  const downloadProjectJson = (name: string, data: Record<string, unknown>) => {
+    const payload = { name, savedAt: Date.now(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(name || "project").replace(/[^\w.-]+/g, "_") || "project"}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportCurrent = () => downloadProjectJson(title || "project", buildProjectData());
+
+  const handleExportProject = (e: React.MouseEvent, project: SavedProject) => {
+    e.stopPropagation();
+    downloadProjectJson(project.name, project.data as Record<string, unknown>);
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const data = (parsed?.data ?? parsed) as Record<string, unknown>;
+      if (!data || typeof data !== "object") throw new Error("invalid");
+      const name = String(parsed?.name || file.name.replace(/\.json$/i, "")) || "Imported project";
+      const saved = saveProject(name, data);
+      setSavedProjects(getSavedProjects());
+      handleLoadProject(saved);
+    } catch {
+      alert("Import failed — that file isn't a valid project JSON.");
+    }
+  };
+
   return (
     <div
       style={{
@@ -304,6 +360,31 @@ export default function Navbar({
                   <ChevronDown className="size-3.5" />
                 </Button>
               </PopoverTrigger>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground shrink-0"
+                onClick={handleExportCurrent}
+                title="Export project (.json)"
+              >
+                <FileDown className="size-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground shrink-0"
+                onClick={() => importInputRef.current?.click()}
+                title="Import project (.json)"
+              >
+                <FileUp className="size-3.5" />
+              </Button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={handleImportFile}
+              />
             </div>
 
             <PopoverContent align="center" className="z-[250] w-72 p-2" sideOffset={6}>
@@ -329,9 +410,14 @@ export default function Navbar({
                           {new Date(project.savedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </p>
                       </div>
-                      <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive" onClick={(e) => handleDeleteProject(e, project.id)} title="Delete">
-                        <Trash2 className="size-3" />
-                      </Button>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground" onClick={(e) => handleExportProject(e, project)} title="Export (.json)">
+                          <FileDown className="size-3" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive" onClick={(e) => handleDeleteProject(e, project.id)} title="Delete">
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </div>
                     </div>
                   );
                 };
@@ -372,6 +458,7 @@ export default function Navbar({
       {/* Right: theme + shortcuts + download */}
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
+          <RenderStatusWidget />
           <StylePackPicker />
           <LookPicker />
           <MusicBedPicker stateManager={stateManager} />
