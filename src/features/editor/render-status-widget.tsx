@@ -102,14 +102,14 @@ export default function RenderStatusWidget() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        title="Render exports"
-        className="pointer-events-auto flex h-8 items-center gap-1.5 rounded-full border border-border bg-background/80 px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-accent"
+        title={`${jobs.length} export${jobs.length === 1 ? "" : "s"}${active.length ? ` · ${active.length} active` : ""}`}
+        className="pointer-events-auto flex h-7 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-background/80 px-2 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:bg-accent"
       >
         <span aria-hidden>🎬</span>
-        <span>{jobs.length} export{jobs.length === 1 ? "" : "s"}</span>
+        <span>{jobs.length} exp</span>
         {active.length > 0 && (
-          <span className="rounded-full bg-blue-500 px-1.5 py-px text-[10px] font-semibold text-white">
-            {active.length} active
+          <span className="rounded-full bg-blue-500 px-1 py-px text-[9px] font-semibold leading-none text-white">
+            {active.length}
           </span>
         )}
       </button>

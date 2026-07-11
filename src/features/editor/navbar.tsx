@@ -17,6 +17,7 @@ import {
   Music2,
   Pause,
   Play,
+  Plus,
   ProportionsIcon,
   Save,
   ShareIcon,
@@ -313,6 +314,28 @@ export default function Navbar({
     }
   };
 
+  const handleNewProject = () => {
+    const sm = stateManager.toJSON() as Record<string, unknown>;
+    dispatch(DESIGN_LOAD, {
+      payload: {
+        ...sm,
+        id: generateId(),
+        tracks: [],
+        trackItemIds: [],
+        trackItemsMap: {},
+        transitionIds: [],
+        transitionsMap: {},
+        metadata: {},
+      },
+    });
+    useStore.getState().setLook("off");
+    useStore.getState().setStylePack("");
+    setTitle("Untitled video");
+    setProjectName("Untitled video");
+    setCurrentProjectId(null);
+    setIsProjectsOpen(false);
+  };
+
   return (
     <div
       style={{
@@ -321,9 +344,7 @@ export default function Navbar({
       }}
       className="bg-card pointer-events-none flex h-13 items-center border-b border-border/80 px-2"
     >
-      <DownloadProgressModal />
-
-      {/* Left: logo + undo/redo */}
+      {/* Left: logo + undo/redo + minimized export chip */}
       <div className="flex items-center gap-2">
         <div className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-md invert dark:invert-0">
           <LogoIcons.scenify />
@@ -336,6 +357,7 @@ export default function Navbar({
             <Icons.redo width={20} />
           </Button>
         </div>
+        <DownloadProgressModal />
       </div>
 
       {/* Center: editable title + saved-projects dropdown arrow + save button */}
@@ -388,6 +410,12 @@ export default function Navbar({
             </div>
 
             <PopoverContent align="center" className="z-[250] w-72 p-2" sideOffset={6}>
+              <div
+                onClick={handleNewProject}
+                className="mb-1 flex cursor-pointer items-center gap-2 rounded-md border-b border-border/60 px-2 py-2 text-sm font-medium hover:bg-accent"
+              >
+                <Plus className="size-4" /> New Project
+              </div>
               {savedProjects.length === 0 ? (
                 <p className="px-2 py-4 text-center text-sm text-muted-foreground">No saved projects yet</p>
               ) : (() => {
@@ -444,13 +472,12 @@ export default function Navbar({
         {!isSmallScreen && (
           <Button
             variant={saveSuccess ? "default" : "outline"}
-            size="sm"
-            className="pointer-events-auto h-8 gap-1.5 border border-border rounded-full transition-colors"
+            size="icon"
+            className="pointer-events-auto h-8 w-8 border border-border rounded-full transition-colors"
             onClick={() => setIsSaveModalOpen(true)}
-            title="Save project"
+            title={saveSuccess ? "Saved!" : "Save project"}
           >
-            <Save className="size-3.5" />
-            {saveSuccess ? "Saved!" : "Save Project"}
+            <Save className="size-4" />
           </Button>
         )}
       </div>

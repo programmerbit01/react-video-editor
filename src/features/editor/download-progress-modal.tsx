@@ -144,30 +144,22 @@ const DownloadProgressModal = () => {
   return (
     <>
       {showDock && (
-        <div className="fixed bottom-4 left-4 z-[30000] pointer-events-auto w-[320px] rounded-xl border border-zinc-800 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold">
-                {isCompleted ? "Export Done" : isFailed ? "Export Failed" : "Export Running"}
-              </div>
-              <div className="text-xs text-zinc-400">
-                {isCompleted ? `Saved to Downloads${finalRef.current > 0 ? ` · ${fmt(finalRef.current)}` : ""}` : isFailed ? "Open for details" : `${Math.floor(progress)}% · ${fmt(elapsed)}`}
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleRestore}>
-                <ChevronUpIcon className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleDismiss}>
-                <XIcon className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-          {!isCompleted && !isFailed && (
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800">
-              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${Math.floor(progress)}%` }} />
-            </div>
-          )}
+        <div
+          onClick={handleRestore}
+          title="Open export"
+          className="pointer-events-auto flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-background/90 px-2 text-[11px] font-medium shadow-sm transition-colors hover:bg-accent"
+        >
+          <span className={isCompleted ? "text-green-600 dark:text-green-500" : isFailed ? "text-red-500" : "text-blue-500"}>
+            {isCompleted ? "✓ Export done" : isFailed ? "✕ Export failed" : `⬇ Exporting ${Math.floor(progress)}%`}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleDismiss(); }}
+            className="text-muted-foreground hover:text-foreground"
+            title="Dismiss"
+          >
+            <XIcon className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
