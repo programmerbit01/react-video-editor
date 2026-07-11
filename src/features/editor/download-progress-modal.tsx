@@ -14,6 +14,7 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "
 const metricsLine = (m: RenderMetrics | undefined, phase: "live" | "done"): string => {
   if (!m) return "";
   const parts: string[] = [];
+  if (m.engine) parts.push(String(m.engine).toLowerCase() === "remotion" ? "RE" : "FF");
   if (phase === "done") {
     if (m.render_seconds != null) parts.push(`${m.render_seconds}s render`);
     if (m.speed_x) parts.push(`${m.speed_x}x`);
