@@ -198,11 +198,15 @@ const useUploadStore = create<IUploadStore>()(
       // Bump when the cached item SHAPE or ordering logic changes so stale caches
       // (old proxy urls / broken sort / missing time fields) are dropped instead of
       // shown. v3: items carry mtime/created/record_id + created-first sort.
-      version: 3,
+      // v4: item `id` is now derived from the FULL url path / record_id (the R2
+      // filename alone — always `0.jpg`/`0.mp4` — collided, so cached items shared a
+      // React key and the tab filter couldn't reconcile the grid). Drop v3 caches so
+      // items get re-keyed uniquely on next fetch.
+      version: 4,
       migrate: (_persisted: any, version: number) => {
-        // Any pre-v3 cache lacks the new time fields (mtime/created) → mixes sort
-        // keys and jumbles order. Discard it, force a fresh full fetch on next open.
-        if (version < 3) {
+        // Pre-v4 caches hold items with non-unique ids (filename-based) → duplicate
+        // React keys → filter tabs show a mix. Discard, force a fresh full fetch.
+        if (version < 4) {
           return { uploads: [], uploadsLoaded: false, uploadsHasMore: false, uploadsPage: 1 };
         }
         return _persisted;

@@ -115,7 +115,10 @@ async function processVappFileUpload(
     callbacks.onProgress(uploadId, 100);
 
     const uploadData = {
-      id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
+      // Unique per item: the R2 filename alone is NOT unique (every job outputs
+      // `0.jpg`/`0.mp4`), so keying tiles by it collides → React can't reconcile.
+      // Use the stable full URL path (query/signature stripped).
+      id: `vapp-${rawUrl.split("?")[0] || Math.random().toString(36).slice(2)}`,
       // Direct R2 URL — no /api/proxy hop (R2 serves CORS `*`).
       url: rawUrl,
       filePath: rawUrl,

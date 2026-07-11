@@ -229,7 +229,11 @@ const toUploadItem = (item: any) => {
   // Direct R2 URL for player AND display — no /api/proxy hop. R2 exposes CORS `*`
   // so Remotion's fetch(), canvas frame-capture and the grid all load direct.
   const entry: any = {
-    id: `vapp-${rawUrl.split("/").pop()?.split("?")[0] || Math.random().toString(36).slice(2)}`,
+    // Unique per item: the R2 filename alone is NOT unique (every job outputs
+    // `0.jpg`/`0.mp4`), so keying tiles by it collides → React can't reconcile the
+    // grid on filter change (stale tiles pile up, tabs show a mix). Use the stable
+    // full URL path (query/signature stripped) or the PB record_id.
+    id: `vapp-${item.record_id || rawUrl.split("?")[0] || Math.random().toString(36).slice(2)}`,
     url: rawUrl,
     filePath: rawUrl,
     fileName: item.name || rawUrl.split("/").pop()?.split("?")[0] || "media",
