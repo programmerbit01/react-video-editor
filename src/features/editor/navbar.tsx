@@ -435,7 +435,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const [isQualityOpen, setIsQualityOpen] = useState(false);
   const [isResolutionOpen, setIsResolutionOpen] = useState(false);
   const [open, setOpen] = useState(false);
-  const [renderTab, setRenderTab] = useState<"local" | "remote" | "queue">("local");
+  const [renderTab, setRenderTab] = useState<"local" | "remote" | "queue">("queue");
 
   const handleExport = () => {
     const data: IDesign = {
