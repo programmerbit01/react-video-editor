@@ -1,5 +1,5 @@
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { useDownloadState } from "./store/use-download-state";
+import { useDownloadState, type RenderMetrics } from "./store/use-download-state";
 import { Button } from "@/components/ui/button";
 import { ChevronUpIcon, CircleCheckIcon, Minimize2Icon, XCircleIcon, XIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
@@ -9,8 +9,26 @@ import { useEffect, useRef, useState } from "react";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
+// Dev-facing render telemetry line. Shows only the fields present; extend freely as
+// more metrics land (kept flat + defensive so a missing/new field never breaks it).
+const metricsLine = (m: RenderMetrics | undefined, phase: "live" | "done"): string => {
+  if (!m) return "";
+  const parts: string[] = [];
+  if (phase === "done") {
+    if (m.render_seconds != null) parts.push(`${m.render_seconds}s render`);
+    if (m.speed_x) parts.push(`${m.speed_x}x`);
+    if (m.render_fps) parts.push(`${m.render_fps} fps`);
+    if (m.size_mb) parts.push(`${m.size_mb}MB`);
+  }
+  if (m.gpu) parts.push(`GPU ${m.gpu}`);
+  if (m.cores) parts.push(`${m.cores} cores`);
+  if (m.concurrency) parts.push(`cc ${m.concurrency}`);
+  if (m.hwAccel) parts.push(m.hwAccel);
+  return parts.join(" · ");
+};
+
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, exportRunId, actions } =
+  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, exportRunId, metrics, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
@@ -195,6 +213,11 @@ const DownloadProgressModal = () => {
                   Exported in {fmt(finalRef.current)}
                 </div>
               )}
+              {metricsLine(metrics, "done") && (
+                <div className="text-xs tabular-nums text-muted-foreground/60 font-mono">
+                  {metricsLine(metrics, "done")}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2">
@@ -249,6 +272,11 @@ const DownloadProgressModal = () => {
             <div className="text-5xl font-semibold">{Math.floor(progress)}%</div>
             <div className="font-bold">Exporting...</div>
             <div className="text-sm tabular-nums text-muted-foreground">{fmt(elapsed)}</div>
+            {metricsLine(metrics, "live") && (
+              <div className="text-xs tabular-nums text-muted-foreground/70 font-mono">
+                {metricsLine(metrics, "live")}
+              </div>
+            )}
             <div className="text-center text-zinc-500">
               <div>Closing the browser will not cancel the export.</div>
               <div>You can minimize this and keep working.</div>

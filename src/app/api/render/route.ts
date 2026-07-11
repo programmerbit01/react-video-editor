@@ -100,16 +100,21 @@ export async function POST(request: Request) {
       started_at: Math.floor(Date.now() / 1000),
     });
     appendJobLog(jobId, "FF render queued");
-    try {
-      await registerRenderJob({
-        job_id: jobId,
-        engine: "ffmpeg",
-        source: "editor-manual",
-        project_name: "User Export",
-      });
-      appendJobLog(jobId, "registered in shared render widget");
-    } catch (err) {
-      appendJobLog(jobId, `register failed: ${String(err)}`);
+    // Pull mode (skipCallback): the render agent registers + reports on its source vApp,
+    // so the editor skips its own push-tracking registration + callbacks here.
+    const skipCallback = !!options?.skipCallback;
+    if (!skipCallback) {
+      try {
+        await registerRenderJob({
+          job_id: jobId,
+          engine: "ffmpeg",
+          source: "editor-manual",
+          project_name: "User Export",
+        });
+        appendJobLog(jobId, "registered in shared render widget");
+      } catch (err) {
+        appendJobLog(jobId, `register failed: ${String(err)}`);
+      }
     }
 
     runExport(
@@ -119,6 +124,7 @@ export async function POST(request: Request) {
       options?.format ?? "mp4",
       options?.maxDim,
       options?.mutedTrackIds ?? [],
+      skipCallback,
     ).catch((err) => {
       console.error(`[render] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
@@ -127,7 +133,7 @@ export async function POST(request: Request) {
         progress: current?.progress ?? 0,
         error: err.message,
       });
-      notifyRenderCallback({ job_id: jobId, status: "FAILED", error: err.message });
+      if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: err.message });
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });
@@ -547,6 +553,7 @@ async function runExport(
   format = "mp4",
   maxDim?: number,
   mutedTrackIds: string[] = [],
+  skipCallback = false,
 ) {
   const startedAt = Date.now();
   const exportsDir = path.join(process.cwd(), "public", "exports");
@@ -887,7 +894,7 @@ async function runExport(
     const msg = stderr || ffErr?.message || "FFmpeg failed";
     mergeJob(jobId, { status: "FAILED", progress: cur?.progress ?? 60, error: msg });
     appendJobLog(jobId, `FAILED: ${msg}`);
-    notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
+    if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
     return;
   }
 
@@ -910,7 +917,8 @@ async function runExport(
     cores: totalCores,
   });
   appendJobLog(jobId, `completed render=${Math.round(renderSecs)}s speed=${(Math.round(speedX * 100) / 100).toFixed(2)}x`);
-  notifyRenderCallback({
+  // Pull mode (skipCallback): the agent owns upload+report — editor must not double-callback.
+  if (!skipCallback) notifyRenderCallback({
     job_id: jobId,
     status: "COMPLETED",
     video_url: `${EDITOR_BASE}/api/render/${jobId}/download`,
