@@ -8,8 +8,18 @@ import { vappAuth, sttForUrl } from "@/utils/vapp-api";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import ModalUpload from "@/components/modal-upload";
 import Draggable from "@/components/shared/draggable";
-import { useEffect, useRef, useState, memo } from "react";
-import type { Dispatch, MouseEvent, SetStateAction } from "react";
+import { Component, useEffect, useRef, useState, memo } from "react";
+import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from "react";
+
+// A single malformed media item (e.g. a bad/new record shape) must NEVER crash the
+// whole media panel — without this, one throwing tile takes the tabs + grid down until
+// a full refresh. Catches render errors per-tile and drops just that tile.
+class TileErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch() { /* swallow: isolate the bad tile, keep the panel alive */ }
+  render() { return this.state.failed ? null : this.props.children; }
+}
 
 type CachedMediaMeta = {
   width?: number;
@@ -955,8 +965,7 @@ export const Uploads = () => {
               key={f}
               type="button"
               onClick={() => changeFilter(f)}
-              disabled={loading}
-              className={`px-2.5 py-1 rounded-md text-xs capitalize transition disabled:opacity-50 ${
+              className={`px-2.5 py-1 rounded-md text-xs capitalize transition ${
                 mediaFilter === f
                   ? "bg-primary/20 text-primary ring-1 ring-primary/40"
                   : "bg-white/5 text-muted-foreground hover:text-foreground"
@@ -1020,15 +1029,16 @@ export const Uploads = () => {
         {!loading && allItems.length > 0 && (
           <div className="grid grid-cols-3 gap-2 pb-2">
             {allItems.map((item, idx) => (
-              <UploadGridItem
-                key={item.id || `item-${idx}`}
-                item={item}
-                onAdd={handleAdd}
-                isActive={activePreviewId === String(item.id || item.url)}
-                setActivePreviewId={setActivePreviewId}
-                adding={addingId === String(item.id || item.url)}
-                onPrewarm={prewarm}
-              />
+              <TileErrorBoundary key={item.id || `item-${idx}`}>
+                <UploadGridItem
+                  item={item}
+                  onAdd={handleAdd}
+                  isActive={activePreviewId === String(item.id || item.url)}
+                  setActivePreviewId={setActivePreviewId}
+                  adding={addingId === String(item.id || item.url)}
+                  onPrewarm={prewarm}
+                />
+              </TileErrorBoundary>
             ))}
           </div>
         )}
