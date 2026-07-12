@@ -52,8 +52,10 @@ export async function POST(request: Request) {
 
     // Optimize text-to-image/video prompts through /vapp/llm (skip audio = verbatim, and
     // img2img/regenerate = an edit instruction, not a fresh prompt). Fail-open to `prompt`.
+    // The client toggle (AI Edit "Optimise prompt") wins when provided; else the env default.
+    const wantOptimize = body.optimize !== undefined ? !!body.optimize : OPTIMIZE_GEN;
     const genPrompt =
-      OPTIMIZE_GEN && (kind === "image" || kind === "video") && !body.image_url
+      wantOptimize && (kind === "image" || kind === "video") && !body.image_url
         ? await optimizePrompt(base, token, kind, prompt)
         : prompt;
 

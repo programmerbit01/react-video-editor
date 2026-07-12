@@ -205,8 +205,12 @@ export default function AiEditPanel() {
         const list = Array.isArray(d?.models) ? d.models : [];
         const mapped = list.map((m: any) => ({ id: m.id, label: m.label || m.id }));
         s.setModels(mapped);
-        const prefer = mapped.find((m: any) => m.id === "litellm/GO20") || mapped[0];
-        s.setModel(s.model || prefer?.id || "");
+        // Default to the model with "ls" (Qwen q36ls35b — cleaner reasoning-off behaviour); fall
+        // back to GO20 then the first. Treat empty OR the OLD default (GO20) as "not explicitly
+        // chosen" so existing users move to the new default too.
+        const lsModel = mapped.filter((m: any) => /ls/i.test(m.label || m.id || "")).pop();
+        const prefer = lsModel || mapped.find((m: any) => m.id === "litellm/GO20") || mapped[0];
+        s.setModel(!s.model || s.model === "litellm/GO20" ? prefer?.id || "" : s.model);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -416,6 +420,7 @@ export default function AiEditPanel() {
         image_url,
         aspect_ratio: g.aspect_ratio,
         duration: g.duration,
+        optimize: useAiEditStore.getState().optimizePrompt,
         token: getToken(),
       });
       if (!id) throw new Error("no job id");
@@ -604,7 +609,7 @@ export default function AiEditPanel() {
             url = data?.photos?.[0]?.src || "";
           }
           if (!url) {
-            const g = await startGen({ kind: "image", prompt: `${kw}, ${topic}`, token });
+            const g = await startGen({ kind: "image", prompt: `${kw}, ${topic}`, optimize: useAiEditStore.getState().optimizePrompt, token });
             url = await waitGen(g.id, () => {});
           }
         } catch {
@@ -799,7 +804,11 @@ export default function AiEditPanel() {
                 <span>Show thinking</span>
                 <input type="checkbox" checked={s.showThinking} onChange={(e) => s.setShowThinking(e.target.checked)} />
               </label>
-              <p className="mt-1 text-[9px] text-muted-foreground">Auto = applies without asking. Thinking off = faster.</p>
+              <label className="flex cursor-pointer items-center justify-between py-1 text-[12px] text-foreground">
+                <span>Optimise prompt</span>
+                <input type="checkbox" checked={s.optimizePrompt} onChange={(e) => s.setOptimizePrompt(e.target.checked)} />
+              </label>
+              <p className="mt-1 text-[9px] text-muted-foreground">Auto = applies without asking. Optimise = AI enriches image/video prompts before generating (editor-only — independent of vApp Studio).</p>
             </div>
           )}
 

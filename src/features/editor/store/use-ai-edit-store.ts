@@ -45,6 +45,7 @@ interface AiEditState {
   showSettings: boolean;
   streaming: boolean;
   showThinking: boolean;
+  optimizePrompt: boolean; // enrich image/video prompts via /vapp/llm before generating (independent of vApp Studio)
   autoApply: boolean; // Auto = apply without asking; false = Ask (preview first)
 
   // chat + ops
@@ -68,6 +69,7 @@ interface AiEditState {
   setStreaming: (v: boolean) => void;
   setShowThinking: (v: boolean) => void;
   setAutoApply: (v: boolean) => void;
+  setOptimizePrompt: (v: boolean) => void;
 
   setInput: (v: string) => void;
   setBusy: (v: boolean) => void;
@@ -98,7 +100,8 @@ const useAiEditStore = create<AiEditState>()(
   showFeatures: false,
   showSettings: false,
   streaming: true,
-  showThinking: true,
+  showThinking: false,
+  optimizePrompt: false,
   autoApply: false,
 
   messages: [],
@@ -121,6 +124,7 @@ const useAiEditStore = create<AiEditState>()(
   setStreaming: (v) => set({ streaming: v }),
   setShowThinking: (v) => set({ showThinking: v }),
   setAutoApply: (v) => set({ autoApply: v }),
+  setOptimizePrompt: (v) => set({ optimizePrompt: v }),
 
   setInput: (v) => set({ input: v }),
   setBusy: (v) => set({ busy: v }),
@@ -154,6 +158,7 @@ const useAiEditStore = create<AiEditState>()(
         panelSize: st.panelSize,
         streaming: st.streaming,
         showThinking: st.showThinking,
+        optimizePrompt: st.optimizePrompt,
         autoApply: st.autoApply,
         model: st.model,
       }),
