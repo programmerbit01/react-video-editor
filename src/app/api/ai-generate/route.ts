@@ -14,6 +14,31 @@ const MODEL_FOR: Record<string, string> = {
   video: "vapp-video",
 };
 
+// Before generating an IMAGE/VIDEO, rewrite the user's raw idea into a model-friendly prompt
+// via the unified LLM service (POST /vapp/llm task=optimize_image|optimize_video) — one config
+// row owns the optimizer, not the editor. Fail-open: on any error /vapp/llm returns the original
+// input, so the raw prompt is always used as-is. Set AI_GENERATE_OPTIMIZE=0 to disable.
+// (Audio is spoken verbatim, and img2img/regenerate edit-instructions are NOT optimized.)
+const OPTIMIZE_GEN = (process.env.AI_GENERATE_OPTIMIZE ?? "1") !== "0";
+
+async function optimizePrompt(base: string, token: string, kind: string, prompt: string): Promise<string> {
+  try {
+    const task = kind === "video" ? "optimize_video" : "optimize_image";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["X-API-Key"] = token;
+    const r = await fetch(`${base}/vapp/llm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ task, input: prompt, ...(token ? { api_key: token } : {}) }),
+    });
+    const d = await r.json().catch(() => ({}));
+    const out = String(d?.text || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    return out.length >= 3 ? out : prompt; // fail-open → original prompt
+  } catch {
+    return prompt;
+  }
+}
+
 // POST /api/ai-generate  body: { kind, text|prompt, aspect_ratio?, duration?, token? }
 export async function POST(request: Request) {
   try {
@@ -25,16 +50,23 @@ export async function POST(request: Request) {
     const prompt = String(body.prompt || body.text || "").trim();
     if (!prompt) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
 
+    // Optimize text-to-image/video prompts through /vapp/llm (skip audio = verbatim, and
+    // img2img/regenerate = an edit instruction, not a fresh prompt). Fail-open to `prompt`.
+    const genPrompt =
+      OPTIMIZE_GEN && (kind === "image" || kind === "video") && !body.image_url
+        ? await optimizePrompt(base, token, kind, prompt)
+        : prompt;
+
     let reqBody: Record<string, any>;
     if (kind === "image") {
       reqBody = {
-        prompt,
+        prompt: genPrompt,
         aspect_ratio: body.aspect_ratio || "16:9",
         resolution: "1k",
         ...(body.image_url ? { image_url: body.image_url } : {}), // img2img (regenerate)
       };
     } else if (kind === "video") {
-      reqBody = { prompt, aspect_ratio: body.aspect_ratio || "16:9", duration: Math.min(20, Number(body.duration) || 5) };
+      reqBody = { prompt: genPrompt, aspect_ratio: body.aspect_ratio || "16:9", duration: Math.min(20, Number(body.duration) || 5) };
     } else {
       reqBody = { prompt, model };
     }
@@ -60,7 +92,8 @@ export async function POST(request: Request) {
     }
     const requestId = String(data?.request_id || data?.id || data?.job_id || "").trim();
     if (!requestId) return NextResponse.json({ error: "no request_id: " + txt.slice(0, 150) }, { status: 500 });
-    return NextResponse.json({ request_id: requestId });
+    // Return the actually-used prompt so the panel can show what was generated from.
+    return NextResponse.json({ request_id: requestId, prompt: genPrompt });
   } catch (error) {
     console.error("[ai-generate:start]", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

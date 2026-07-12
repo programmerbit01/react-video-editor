@@ -152,12 +152,15 @@ const useAiEditStore = create<AiEditState>()(
       partialize: (st) => ({
         floatPos: st.floatPos,
         panelSize: st.panelSize,
-        isCollapsed: st.isCollapsed,
         streaming: st.streaming,
         showThinking: st.showThinking,
         autoApply: st.autoApply,
         model: st.model,
       }),
+      // The panel opens by DEFAULT now — force it EXPANDED on load so a STALE persisted
+      // "collapsed" state can never leave it opened but blank (header only, no chat body).
+      // (isCollapsed is also dropped from partialize above, so it's no longer persisted.)
+      merge: (persisted, current) => ({ ...current, ...(persisted as any), isCollapsed: false }),
     }
   )
 );

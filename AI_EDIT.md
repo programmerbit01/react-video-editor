@@ -29,6 +29,7 @@ automated MCP pipeline will later drive end‑to‑end.
 |---|---|
 | Prompt → edit: duration, **Ken Burns zoom/pan**, opacity, volume, speed, delete, fade, text, font/color | ✅ |
 | **Generate** audio (TTS), image, video — background + non‑blocking, live progress | ✅ |
+| **Prompt optimization** — image/video generate prompts auto‑rewritten model‑friendly via `/vapp/llm` (`optimize_image`/`optimize_video`) before generating; ✨ shown, fail‑open, `AI_GENERATE_OPTIMIZE=0` to disable | ✅ |
 | **Stock search** (Pexels) image/video | ✅ |
 | **Image edit** (AI img2img regenerate — "make it red") | ✅ |
 | **Smart arrange** — importance weighting + build a whole video from one prompt (`target:"all"`) | ✅ |

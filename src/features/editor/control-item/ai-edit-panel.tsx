@@ -96,7 +96,7 @@ async function runChat(
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Start a background media generation job → request_id (fast, non-blocking).
-async function startGen(payload: Record<string, any>): Promise<string> {
+async function startGen(payload: Record<string, any>): Promise<{ id: string; prompt: string }> {
   const res = await fetch(withEditorBase("/api/ai-generate"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -104,7 +104,8 @@ async function startGen(payload: Record<string, any>): Promise<string> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-  return String(data?.request_id || "");
+  // `prompt` is what the job actually ran with (image/video prompts are optimized via /vapp/llm).
+  return { id: String(data?.request_id || ""), prompt: String(data?.prompt || "") };
 }
 
 // Long-poll the job (each call waits ~35s server-side via /vapp/wait_job) until it
@@ -391,7 +392,8 @@ export default function AiEditPanel() {
         const cur0 = useAiEditStore.getState().messages[i]?.snapshot || {};
         s.updateAt(i, { snapshot: { ...cur0, [g.itemId]: item ? JSON.parse(JSON.stringify(item)) : null } });
       }
-      const id = await startGen({
+      const sentPrompt = String(g.prompt || g.text || "").trim();
+      const { id, prompt: usedPrompt } = await startGen({
         kind: label,
         text: g.text,
         prompt: g.prompt || g.text,
@@ -401,12 +403,17 @@ export default function AiEditPanel() {
         token: getToken(),
       });
       if (!id) throw new Error("no job id");
+      // /vapp/llm rewrote the image/video prompt into a model-friendly one — flag it (✨) so
+      // the user sees their idea was enhanced before generating.
+      const optimized = !!usedPrompt && usedPrompt.trim() !== sentPrompt && !isRegen && label !== "audio";
+      if (optimized) s.updateAt(i, { genStatus: `✨ Optimized prompt → generating ${label}…` });
       const url = await waitGen(id, (d) => {
         const q = d?.queue_position;
         const p = d?.progress;
         s.updateAt(i, {
           genStatus:
-            q != null ? `Queued #${q}…` : p != null ? `Generating ${label} ${p}%…` : `Generating ${label}…`,
+            (optimized ? "✨ " : "") +
+            (q != null ? `Queued #${q}…` : p != null ? `Generating ${label} ${p}%…` : `Generating ${label}…`),
         });
       });
       if (isRegen) {
