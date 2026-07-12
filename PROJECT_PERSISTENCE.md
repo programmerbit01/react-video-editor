@@ -10,8 +10,11 @@
 > **AI Projects** list and restores the full timeline on select. `_render_design` + the
 > `assemble_timeline` preview branch save made **unconditional** (`vapp_server_mcp.py`); the editor
 > navbar now **refreshes** an AI project when the server copy is newer (was: skipped → stale
-> timeline on re‑render). Still TODO: the shared **versioned** PB store + **editor autosave** (P1)
-> + render‑enqueue → project link (P2 for the editor's own render path).
+> timeline on re‑render). **Editor autosave (P1) shipped:** an open project (opened/saved OR
+> AI/MCP) now auto‑saves to localStorage on every timeline change (debounced 2.5s) via a
+> `useStore.subscribe` hook in `navbar.tsx` → manual **and** AI‑Edit edits are never lost, reopen
+> restores. Still TODO: the shared **versioned** PB store (cross‑device + version‑revert), autosave
+> for FRESH unsaved projects, + render‑enqueue → project link.
 
 ---
 

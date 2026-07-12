@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { dispatch } from "@designcombo/events";
 import { HISTORY_UNDO, HISTORY_REDO, DESIGN_RESIZE, DESIGN_LOAD } from "@designcombo/state";
@@ -153,11 +153,19 @@ export default function Navbar({
             if (idx === -1) {
               projects.unshift(proj as SavedProject); // new AI project → front of the list
               changed = true;
-            } else if (Number((proj as any).savedAt || 0) > Number((projects[idx] as any).savedAt || 0)) {
-              // re-rendered / updated server copy is newer → refresh in place (was: skipped,
-              // so a re-rendered MCP project showed the STALE timeline on select).
-              projects[idx] = { ...projects[idx], ...(proj as SavedProject) };
-              changed = true;
+            } else {
+              const serverItems = (((proj as any)?.data?.trackItemIds as any[]) || []).length;
+              const localItems = (((projects[idx] as any)?.data?.trackItemIds as any[]) || []).length;
+              // Refresh the local copy when the server copy is NEWER, OR when the local copy
+              // lost its timeline (e.g. an autosave race emptied it) while the server still has
+              // the real design — otherwise selecting the project shows a BLANK timeline.
+              if (
+                Number((proj as any).savedAt || 0) > Number((projects[idx] as any).savedAt || 0) ||
+                (serverItems > 0 && localItems === 0)
+              ) {
+                projects[idx] = { ...projects[idx], ...(proj as SavedProject) };
+                changed = true;
+              }
             }
           }
           if (changed) {
@@ -283,6 +291,44 @@ export default function Navbar({
       ...(rawJson ? { _guidedScript: rawJson } : {}),
     };
   };
+
+  // ── Autosave ────────────────────────────────────────────────────────────────
+  // Persist the OPEN project automatically whenever the timeline changes (debounced), so
+  // manual edits AND AI-Edit-panel edits are never lost and reopen restores them. Only
+  // updates an already-opened/saved project (currentProjectId); a fresh unsaved project
+  // still needs one manual Save, after which autosave takes over. (New Project clears
+  // currentProjectId, so it never overwrites the previous project.)
+  const autosaveImplRef = useRef<() => void>(() => {});
+  autosaveImplRef.current = () => {
+    if (!currentProjectId) return;
+    const data = buildProjectData();
+    // NEVER autosave an EMPTY timeline over a project — a DESIGN_LOAD race (while opening) or a
+    // New-Project clear must not wipe the saved design (this was blanking opened AI projects).
+    const ids = (data as any)?.trackItemIds;
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    try {
+      updateProject(currentProjectId, title || projectName || "Untitled video", data);
+      setSavedProjects(getSavedProjects());
+    } catch {}
+  };
+  const debouncedAutosave = useMemo(() => debounce(() => autosaveImplRef.current(), 2500), []);
+  useEffect(() => {
+    // Fire on timeline-structure/content changes only (not selection/look) — trackItemsMap
+    // gets a NEW reference on every edit (designcombo does immutable updates).
+    const unsub = useStore.subscribe((state: any, prev: any) => {
+      if (
+        state.trackItemsMap !== prev.trackItemsMap ||
+        state.trackItemIds !== prev.trackItemIds ||
+        state.tracks !== prev.tracks
+      ) {
+        debouncedAutosave();
+      }
+    });
+    return () => {
+      unsub();
+      debouncedAutosave.cancel();
+    };
+  }, [debouncedAutosave]);
 
   const downloadProjectJson = (name: string, data: Record<string, unknown>) => {
     const payload = { name, savedAt: Date.now(), data };

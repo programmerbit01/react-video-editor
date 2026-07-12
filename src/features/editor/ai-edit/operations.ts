@@ -19,7 +19,7 @@ import { getStateManagerRef } from "../utils/state-manager-ref";
 import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search" | "captions";
+  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct";
   itemId?: string;
   itemIds?: string[];
   durationMs?: number;
@@ -43,6 +43,10 @@ export interface AiEditOp {
   startMs?: number;
   items?: { itemId: string; fromMs: number; toMs: number }[]; // explicit per-item timing (importance / script-sync)
   target?: string; // arrange "all" → sequence every visual item (for just-generated media whose ids don't exist yet)
+  // direct (one-shot auto-director: topic → script → voiceover → shots → captions):
+  topic?: string;
+  durationSec?: number;
+  mediaKind?: string; // "stock" (default, fast) | "image" (AI-generate) | "video"
   // search (stock):
   query?: string;
   count?: number;
@@ -316,6 +320,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "add") return `Add ${op.type || "text"}: "${op.text || ""}"`;
   if (op.op === "fade") return `Fade ${op.mode || "both"}  (${op.itemId})`;
   if (op.op === "captions") return `Add word-synced captions`;
+  if (op.op === "direct") return `🎬 Make a video: "${(op.topic || op.prompt || "").slice(0, 40)}"${op.durationSec ? ` (~${op.durationSec}s)` : ""}`;
   if (op.op === "arrange") return `Arrange ${op.items?.length || op.itemIds?.length || 0} items${op.totalMs ? ` over ${(op.totalMs / 1000).toFixed(1)}s` : op.items?.length ? " (smart timing)" : ""}`;
   if (op.op === "search") return `Stock ${op.kind || "image"}: "${(op.query || op.prompt || "").slice(0, 30)}" ×${op.count || 1}`;
   if (op.op === "regenerate") return `Edit image (AI): "${(op.prompt || "").slice(0, 40)}"  (${op.itemId})`;
@@ -376,6 +381,13 @@ export function revertSnapshot(snapshot: Record<string, any>): void {
 // ── capabilities (Features popover) ───────────────────────────────────────────
 
 export const CAPABILITIES: { group: string; items: { label: string; example: string }[] }[] = [
+  {
+    group: "🎬 Make a whole video (auto-director)",
+    items: [
+      { label: "Video from a topic", example: "make me a video about the Nazca Lines" },
+      { label: "With AI-generated visuals", example: "create a 40 second video about deep sea creatures with generated images" },
+    ],
+  },
   {
     group: "Motion (Ken Burns)",
     items: [
@@ -464,6 +476,7 @@ Supported operations:
     Use "search" (stock) when the user says "stock", "find", or "footage". Use "generate" (AI) ONLY when they say "generate", "create", or "make an AI …". Keep queries relevant to the narration/topic.
 - For a DYNAMIC look, VARY the kenBurns kind across clips (alternate zoomIn / zoomOut / panLeft / panRight) — don't put the same motion on every clip.
 - Add word‑synced CAPTIONS / subtitles under the voiceover (uses the narration transcript automatically): { "op":"captions" }   (no itemId needed — it captions the voiceover/audio track)
+- MAKE A WHOLE VIDEO FROM A TOPIC — one‑shot auto‑director. When the user asks to "make / create / build me a video about X" FROM SCRATCH (there are NO existing clips to assemble), emit EXACTLY ONE op and nothing else: { "op":"direct", "topic":"<the subject, e.g. the Nazca Lines>", "durationSec":40, "mediaKind":"stock", "captions":true }. The editor then auto‑writes the script, generates the voiceover, plans the shots, adds time‑synced visuals (with Ken Burns) and captions — do NOT add generate/voiceover/arrange/captions ops yourself. Set mediaKind:"image" if the user wants AI‑GENERATED visuals (else "stock" = fast real footage); durationSec from the ask (default 40). Use "direct" ONLY to build a NEW video from a topic — NOT for editing or arranging clips that already exist.
 
 IMPORTANT: For "zoom in/out" or "pan" ALWAYS use the kenBurns fields above — NEVER a CSS transform/scale (the player ignores that).
 Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. A "generate" op needs no itemId. If nothing is selected and the request isn't add/generate, return "operations": [] and explain in "summary". Output ONLY the json block.`;

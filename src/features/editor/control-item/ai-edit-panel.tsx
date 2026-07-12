@@ -173,6 +173,22 @@ async function transcribeAudio(
   throw new Error("transcription timed out");
 }
 
+// Generic unified-LLM text call → /api/ai-llm → vApp /vapp/llm. Used by the auto-director
+// for the `script` + `beat_plan` tasks. Fail-open: returns "" on any error.
+async function llmText(task: string, input: string, token: string): Promise<string> {
+  try {
+    const res = await fetch(withEditorBase("/api/ai-llm"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task, input, token }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return String(d?.text || "");
+  } catch {
+    return "";
+  }
+}
+
 export default function AiEditPanel() {
   const s = useAiEditStore();
   const { activeIds, trackItemsMap } = useStore();
@@ -498,12 +514,146 @@ export default function AiEditPanel() {
     }
   };
 
+  // One-shot auto-director: topic → script → voiceover → beat-plan → time-synced visuals → captions.
+  // Everything runs in the background; the chat stays free. Created ids accrue into the message
+  // snapshot so a single Revert removes the whole generated video.
+  const runDirect = async (i: number, op: any) => {
+    const topic = String(op.topic || op.prompt || "").trim();
+    if (!topic) {
+      s.updateAt(i, { genStatus: "⚠️ no topic given" });
+      return;
+    }
+    const durationSec = Math.min(180, Math.max(15, Number(op.durationSec) || 40));
+    const useStock = op.mediaKind !== "image" && op.mediaKind !== "video";
+    const wantCaptions = op.captions !== false;
+    const token = getToken();
+    const created: string[] = [];
+    const snap = () => {
+      const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
+      const ns: any = { ...cur };
+      created.forEach((id) => (ns[id] = null));
+      s.updateAt(i, { snapshot: ns });
+    };
+    try {
+      // 1. Script (faceless-YT scriptwriter task)
+      s.updateAt(i, { genStatus: "✍️ Writing the script…" });
+      const script = (
+        await llmText("script", `Topic: ${topic}\nWrite about ${durationSec} seconds of spoken narration.`, token)
+      ).trim();
+      if (!script) throw new Error("script generation failed");
+
+      // 2. Voiceover (TTS — spoken verbatim, not optimized)
+      s.updateAt(i, { genStatus: "🎙️ Recording the voiceover…" });
+      const a = await startGen({ kind: "audio", text: script, token });
+      const audioUrl = await waitGen(a.id, (d) =>
+        s.updateAt(i, {
+          genStatus: d?.queue_position != null ? `🎙️ Voiceover queued #${d.queue_position}…` : "🎙️ Voiceover…",
+        })
+      );
+      const audioId = addAudio(audioUrl, "Voiceover");
+      created.push(audioId);
+      snap();
+
+      // 3. Transcribe (timing for beats + captions)
+      s.updateAt(i, { genStatus: "📝 Transcribing…" });
+      const segs = await transcribeAudio(audioUrl, token);
+      const transcript = {
+        text: "",
+        language: "",
+        segment_count: segs.length,
+        segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
+      };
+      if (segs.length) useCaptionTranscribeStore.getState().setTranscriptResult(audioUrl, transcript);
+
+      // 4. Beat plan → timed visual beats { from_ms, to_ms, keyword }
+      s.updateAt(i, { genStatus: "🎬 Planning the shots…" });
+      let beats: any[] = [];
+      if (segs.length) {
+        try {
+          const tLines = segs
+            .map((x: any) => `[${Number(x.start).toFixed(1)}-${Number(x.end).toFixed(1)}] ${x.text}`)
+            .join("\n");
+          const bj = await llmText("beat_plan", tLines, token);
+          const mm = bj.match(/\{[\s\S]*\}/);
+          const parsed = mm ? JSON.parse(mm[0]) : {};
+          beats = Array.isArray(parsed?.beats) ? parsed.beats : [];
+        } catch {
+          /* fall through to per-segment fallback */
+        }
+      }
+      if (!beats.length) {
+        beats = segs.map((x: any) => ({
+          from_ms: Math.round(Number(x.start) * 1000),
+          to_ms: Math.round(Number(x.end) * 1000),
+          keyword: String(x.text || topic).replace(/[.,!?].*$/, "").slice(0, 60),
+        }));
+      }
+      if (!beats.length) beats = [{ from_ms: 0, to_ms: durationSec * 1000, keyword: topic }];
+
+      // 5. Media per beat (stock search or AI-generate)
+      const items: { itemId: string; fromMs: number; toMs: number }[] = [];
+      for (let k = 0; k < beats.length; k++) {
+        const b = beats[k];
+        const kw = String(b.keyword || topic).trim();
+        s.updateAt(i, { genStatus: `🖼️ Visual ${k + 1}/${beats.length}: ${kw.slice(0, 24)}…` });
+        let url = "";
+        try {
+          if (useStock) {
+            const res = await fetch(withEditorBase(`/api/pexels?query=${encodeURIComponent(kw)}&per_page=1`));
+            const data = await res.json().catch(() => ({}));
+            url = data?.photos?.[0]?.src || "";
+          }
+          if (!url) {
+            const g = await startGen({ kind: "image", prompt: `${kw}, ${topic}`, token });
+            url = await waitGen(g.id, () => {});
+          }
+        } catch {
+          /* skip this beat */
+        }
+        if (!url) continue;
+        const id = addImage(url, kw);
+        created.push(id);
+        items.push({ itemId: id, fromMs: Number(b.from_ms) || 0, toMs: Number(b.to_ms) || 0 });
+      }
+      snap();
+
+      // 6. Arrange to exact beat windows + subtle alternating Ken Burns
+      if (items.length) {
+        applyOperations([{ op: "arrange", items }] as any);
+        applyOperations(
+          items.map((it, k) => ({
+            op: "edit",
+            itemId: it.itemId,
+            details: { kenBurns: k % 2 ? "zoomOut" : "zoomIn", kenBurnsIntensity: 16 },
+          })) as any
+        );
+      }
+
+      // 7. Captions
+      if (wantCaptions && segs.length) {
+        const audio = useStore.getState().trackItemsMap?.[audioId];
+        if (audio) {
+          const capIds = addCaptions(audio, transcript);
+          created.push(...capIds);
+          snap();
+        }
+      }
+
+      s.updateAt(i, {
+        genStatus: `✓ Video built — ${items.length} shots${wantCaptions && segs.length ? " + captions" : ""}`,
+      });
+    } catch (e: any) {
+      s.updateAt(i, { genStatus: "⚠️ Director failed: " + (e?.message || "unknown") });
+    }
+  };
+
   const applyMsg = (i: number, m: any) => {
     if (!m.ops?.length) return;
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "arrange", "captions"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "arrange", "captions", "direct"].includes(o.op));
     const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
+    const directs = m.ops.filter((o: any) => o.op === "direct");
 
     // sync ops apply immediately
     const snapshot = captureSnapshot(sync, trackItemsMap);
@@ -518,6 +668,7 @@ export default function AiEditPanel() {
     // generation (+ deferred arrange) + captions run in the background — chat stays free
     if (gens.length || arranges.length) runBuild(i, gens, arranges);
     if (captionOps.length) runCaptions(i, captionOps);
+    for (const d of directs) runDirect(i, d);
   };
 
   const revertMsg = (i: number, m: any) => {
