@@ -146,18 +146,24 @@ export default function Navbar({
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (!data?.projects?.length) return;
-          const existing = getSavedProjects();
-          const existingIds = new Set(existing.map((p: SavedProject) => p.id));
-          let added = false;
+          const projects = getSavedProjects();
+          let changed = false;
           for (const proj of data.projects) {
-            if (!existingIds.has(proj.id)) {
-              const projects = getSavedProjects();
-              projects.unshift(proj as SavedProject);
-              localStorage.setItem("vapp_saved_projects", JSON.stringify(projects));
-              added = true;
+            const idx = projects.findIndex((p: SavedProject) => p.id === proj.id);
+            if (idx === -1) {
+              projects.unshift(proj as SavedProject); // new AI project → front of the list
+              changed = true;
+            } else if (Number((proj as any).savedAt || 0) > Number((projects[idx] as any).savedAt || 0)) {
+              // re-rendered / updated server copy is newer → refresh in place (was: skipped,
+              // so a re-rendered MCP project showed the STALE timeline on select).
+              projects[idx] = { ...projects[idx], ...(proj as SavedProject) };
+              changed = true;
             }
           }
-          if (added) setSavedProjects(getSavedProjects());
+          if (changed) {
+            localStorage.setItem("vapp_saved_projects", JSON.stringify(projects));
+            setSavedProjects(getSavedProjects());
+          }
         })
         .catch(() => {});
     } catch {}

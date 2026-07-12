@@ -1,10 +1,17 @@
 # Project Persistence — auto‑saved, versioned project JSON (editor · MCP · render)
 
-> **Status: PLAN / SPEC (not built).** Blueprint to approve before any backend change.
-> Goal: **any** tool that edits or renders a video (editor, AI Edit panel, MCP, Dify,
-> vidrush, render) writes the **same project JSON** to **one shared, versioned store**,
-> so opening a project restores the **full timeline** (as the editor already does) and you
-> can **revert / resume from any point**.
+> **Status: PLAN / SPEC.** Blueprint for the full store. Goal: **any** tool that edits or
+> renders a video (editor, AI Edit panel, MCP, Dify, vidrush, render) writes the **same project
+> JSON** to **one shared, versioned store**, so opening a project restores the **full timeline**
+> (as the editor already does) and you can **revert / resume from any point**.
+
+> **✅ Partially shipped (2026‑07‑12)** — the MCP slice of §8/§9: **every MCP render/assemble now
+> ALWAYS saves an editor project** (auto‑unique name when none given) so it shows in the editor's
+> **AI Projects** list and restores the full timeline on select. `_render_design` + the
+> `assemble_timeline` preview branch save made **unconditional** (`vapp_server_mcp.py`); the editor
+> navbar now **refreshes** an AI project when the server copy is newer (was: skipped → stale
+> timeline on re‑render). Still TODO: the shared **versioned** PB store + **editor autosave** (P1)
+> + render‑enqueue → project link (P2 for the editor's own render path).
 
 ---
 
