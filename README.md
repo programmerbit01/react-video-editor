@@ -27,6 +27,7 @@ Video Editor application using React and TypeScript.
 - 🔀 Multi-track Support: Edit multiple video and audio tracks simultaneously.
 - 📤 Export Options: Save videos in various resolutions and formats.
 - 👀 Real-time Preview: See immediate previews of edits.
+- ✦ AI Edit: turn natural‑language prompts into timeline edits + generated/stock media + script‑synced captions — see [AI_EDIT.md](AI_EDIT.md).
 
 ## 🚀 See It in Action
 
@@ -138,6 +139,15 @@ If no `?token=` is present (standalone/local mode), the original `/api/uploads/l
 
 ---
 
+### Timeline clip context menu
+
+**File:** `src/features/editor/timeline/timeline.tsx` (right‑click a selected clip)
+
+- **Download clip** — a cross‑origin `<a download>` is ignored by browsers, so it fetches the media as a blob and downloads that (R2 serves CORS `*`, so it's a **direct** fetch — no `/api/proxy`). Falls back to opening the file in a new tab if the fetch is blocked.
+- **Upload to library** — the clip already lives on R2, so it just **registers the existing URL** as a library asset via `POST {baseUrl}/vapp/media/register-upload` (Bearer token, `registerVappMediaUrl` in `vapp-upload-client.ts`). No byte re‑upload, no client fetch, **no proxy** — the same register step the file‑upload flow ends with. The item shows in the media library immediately.
+
+---
+
 ### Timeline clip thumbnails
 
 **File:** `src/features/editor/timeline/items/video.ts` — `CanvasVideoClip`
@@ -171,6 +181,12 @@ const isVappItem = (u: any) =>
 All vapp items (both fetched and freshly uploaded) satisfy `metadata.vappItem = true`. The URL fallbacks cover legacy items that predate the `vappItem` flag.
 
 ---
+
+### Render output — scratch cleanup (`public/exports`)
+
+**File:** `src/app/api/render/route.ts`
+
+Each ffmpeg export writes intermediate frames/media into `public/exports/tmp_<jobId>/`, and the final `.mp4`/`.json` to `public/exports/`. The scratch dir is removed in the render promise's **`.finally()`** — so it's cleaned on **success *and* failure/abort** and never accumulates. (A build‑time Turbopack warning — "overly broad pattern … matches N files" — is just the file tracer seeing a bloated `public/exports`; keeping it lean via this cleanup avoids it. Hiding the path behind a helper does **not** help — it makes the traced pattern broader.)
 
 ---
 

@@ -241,3 +241,50 @@ export async function uploadVappMediaFile(
     name: (reg && reg.name) || file.name || publicUrl.split('/').pop()?.split('?')[0] || 'media',
   };
 }
+
+// Read vApp context (token/baseUrl/host) from the editor URL — the SAME params the
+// media upload flow reads. Returns null when there's no token (local dev, no vApp).
+export function getVappUploadCtx(): VappCtx | null {
+  if (typeof window === 'undefined') return null;
+  const p = new URLSearchParams(window.location.search);
+  const token = p.get('token') || '';
+  if (!token) return null;
+  const baseUrl = p.get('baseUrl') || 'https://api.muapi.ai';
+  const vappHost = p.get('vappHost') || `${window.location.protocol}//${window.location.hostname}`;
+  return { vappHost, token, baseUrl };
+}
+
+const EXT_MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', svg: 'image/svg+xml',
+  mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', avi: 'video/x-msvideo',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+  aac: 'audio/aac', flac: 'audio/flac',
+};
+
+function contentTypeFromUrl(url: string): string {
+  const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
+  return EXT_MIME[ext] || 'application/octet-stream';
+}
+
+// Register an EXISTING R2 url as a library asset — NO byte re-upload. A timeline
+// clip's media already lives on R2, so "Upload to library" just needs to persist a
+// library record pointing at it (direct vApp `/vapp/media/register-upload`, Bearer
+// token). No client fetch of the blob, no /api/proxy hop.
+export async function registerVappMediaUrl(
+  url: string,
+  ctx: VappCtx,
+  opts?: { contentType?: string; mediaType?: 'image' | 'video' | 'audio'; filename?: string }
+): Promise<VappUploadResult> {
+  const contentType = opts?.contentType || contentTypeFromUrl(url);
+  const mediaType = opts?.mediaType || mediaTypeOf(contentType);
+  const filename = opts?.filename || url.split('/').pop()?.split('?')[0] || 'media';
+  const reg = await presignPost(ctx, 'register', {
+    url,
+    content_type: contentType,
+    media_type: mediaType,
+    filename,
+    size: 0,
+  });
+  return { url, type: mediaType, name: (reg && reg.name) || filename };
+}

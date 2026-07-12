@@ -85,7 +85,7 @@ interface AiEditState {
 const useAiEditStore = create<AiEditState>()(
   persist(
     (set) => ({
-  isOpen: false,
+  isOpen: true,
   isFullscreen: false,
   floatPos: { x: typeof window !== "undefined" ? window.innerWidth - 360 : 900, y: 60 },
   panelSize: {
@@ -148,7 +148,7 @@ const useAiEditStore = create<AiEditState>()(
     {
       name: "vapp-ai-edit",
       storage: createJSONStorage(() => localStorage),
-      // Persist prefs/position only — NOT isOpen (panel stays closed on refresh) or chat.
+      // Persist prefs/position only — NOT isOpen (defaults OPEN on every editor load) or chat.
       partialize: (st) => ({
         floatPos: st.floatPos,
         panelSize: st.panelSize,

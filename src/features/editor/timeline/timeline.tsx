@@ -34,6 +34,8 @@ import useLayoutStore from "../store/use-layout-store";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import { Captions as CaptionsIcon, Download, Upload, Loader2, CheckCircle2 } from "lucide-react";
 import { processFileUpload } from "@/utils/upload-service";
+import { registerVappMediaUrl, getVappUploadCtx } from "@/utils/vapp-upload-client";
+import useUploadStore from "@/features/editor/store/use-upload-store";
 import { download } from "@/utils/download";
 import useTranscriptGuideStore from "../store/use-transcript-guide-store";
 import TrackControlsOverlay from "./track-controls-overlay";
@@ -407,17 +409,28 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     setContextMenu(null);
   };
 
-  const handleDownloadClip = () => {
+  const handleDownloadClip = async () => {
     if (!selectedSrc) return;
-    const ext = selectedSrc.split("?")[0].split(".").pop() || "mp4";
-    const name = selectedSrc.split("/").pop()?.split("?")[0] || `clip.${ext}`;
-    const a = document.createElement("a");
-    a.href = selectedSrc;
-    a.download = name;
-    a.target = "_blank";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const name = selectedSrc.split("/").pop()?.split("?")[0] || "clip";
+    try {
+      // A cross-origin <a download> is IGNORED by browsers (it just navigates), so
+      // fetch the bytes and download the blob. R2 serves CORS `*` → direct fetch,
+      // no /api/proxy hop.
+      const res = await fetch(selectedSrc);
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objUrl), 10000);
+    } catch {
+      // Fallback: open the media so the user can save it manually.
+      window.open(selectedSrc, "_blank", "noopener");
+    }
     setContextMenu(null);
   };
 
@@ -425,17 +438,46 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
     if (!selectedSrc) return;
     setUploadState("uploading");
     try {
-      const res = await fetch(selectedSrc);
-      const blob = await res.blob();
-      const rawName = selectedSrc.split("/").pop()?.split("?")[0] || "clip";
-      const file = new File([blob], rawName, { type: blob.type || "application/octet-stream" });
-      await processFileUpload(`ctx-upload-${Date.now()}`, file, {
-        onProgress: () => {},
-        onStatus: (_, status) => {
-          setUploadState(status === "uploaded" ? "done" : "error");
-          if (status === "uploaded") setTimeout(() => setContextMenu(null), 1000);
-        },
-      });
+      const ctx = getVappUploadCtx();
+      if (ctx) {
+        // The clip already lives on R2 — register its URL into the library
+        // (direct vApp `/vapp/media/register-upload`, no re-upload, no proxy).
+        const t = (selectedMediaItem as any)?.type;
+        const mediaType: "image" | "video" | "audio" =
+          t === "video" ? "video" : t === "audio" ? "audio" : "image";
+        const reg = await registerVappMediaUrl(selectedSrc, ctx, { mediaType });
+        // Surface it in the media library immediately (dedupe by clean url).
+        const cleanUrl = reg.url.split("?")[0];
+        useUploadStore.getState().setUploads((prev: any[]) => [
+          {
+            id: `vapp-${cleanUrl}`,
+            url: reg.url,
+            filePath: reg.url,
+            fileName: reg.name,
+            type: `${mediaType}/*`,
+            contentType: `${mediaType}/*`,
+            metadata: { uploadedUrl: reg.url, directUrl: reg.url, vappItem: true },
+            status: "uploaded",
+            createdAt: new Date().toISOString(),
+          },
+          ...prev.filter((u: any) => (u?.url || "").split("?")[0] !== cleanUrl),
+        ]);
+        setUploadState("done");
+        setTimeout(() => setContextMenu(null), 1000);
+      } else {
+        // Local dev (no vApp token): fall back to fetching bytes + file upload.
+        const res = await fetch(selectedSrc);
+        const blob = await res.blob();
+        const rawName = selectedSrc.split("/").pop()?.split("?")[0] || "clip";
+        const file = new File([blob], rawName, { type: blob.type || "application/octet-stream" });
+        await processFileUpload(`ctx-upload-${Date.now()}`, file, {
+          onProgress: () => {},
+          onStatus: (_, status) => {
+            setUploadState(status === "uploaded" ? "done" : "error");
+            if (status === "uploaded") setTimeout(() => setContextMenu(null), 1000);
+          },
+        });
+      }
     } catch {
       setUploadState("error");
     }

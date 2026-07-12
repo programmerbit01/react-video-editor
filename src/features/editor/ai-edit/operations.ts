@@ -19,7 +19,7 @@ import { getStateManagerRef } from "../utils/state-manager-ref";
 import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search";
+  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search" | "captions";
   itemId?: string;
   itemIds?: string[];
   durationMs?: number;
@@ -315,6 +315,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "delete") return `Delete  (${(op.itemIds || [op.itemId]).filter(Boolean).join(", ")})`;
   if (op.op === "add") return `Add ${op.type || "text"}: "${op.text || ""}"`;
   if (op.op === "fade") return `Fade ${op.mode || "both"}  (${op.itemId})`;
+  if (op.op === "captions") return `Add word-synced captions`;
   if (op.op === "arrange") return `Arrange ${op.items?.length || op.itemIds?.length || 0} items${op.totalMs ? ` over ${(op.totalMs / 1000).toFixed(1)}s` : op.items?.length ? " (smart timing)" : ""}`;
   if (op.op === "search") return `Stock ${op.kind || "image"}: "${(op.query || op.prompt || "").slice(0, 30)}" ×${op.count || 1}`;
   if (op.op === "regenerate") return `Edit image (AI): "${(op.prompt || "").slice(0, 40)}"  (${op.itemId})`;
@@ -421,6 +422,7 @@ export const CAPABILITIES: { group: string; items: { label: string; example: str
     items: [
       { label: "Arrange to fit audio", example: "arrange these images across the voiceover into one video" },
       { label: "Sync to script", example: "sync the images to the narration — show each one when it's mentioned" },
+      { label: "Add captions", example: "add word-synced captions to the video" },
       { label: "Stock images", example: "find 3 stock images of snowy mountains and add them" },
       { label: "Stock video", example: "add a stock video of city traffic at night" },
     ],
@@ -461,6 +463,7 @@ Supported operations:
 - Search STOCK footage/photos (Pexels) and add: { "op":"search", "kind":"image", "query":"snowy mountains at sunset", "count":3 }   (kind: "image" | "video")
     Use "search" (stock) when the user says "stock", "find", or "footage". Use "generate" (AI) ONLY when they say "generate", "create", or "make an AI …". Keep queries relevant to the narration/topic.
 - For a DYNAMIC look, VARY the kenBurns kind across clips (alternate zoomIn / zoomOut / panLeft / panRight) — don't put the same motion on every clip.
+- Add word‑synced CAPTIONS / subtitles under the voiceover (uses the narration transcript automatically): { "op":"captions" }   (no itemId needed — it captions the voiceover/audio track)
 
 IMPORTANT: For "zoom in/out" or "pan" ALWAYS use the kenBurns fields above — NEVER a CSS transform/scale (the player ignores that).
 Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. A "generate" op needs no itemId. If nothing is selected and the request isn't add/generate, return "operations": [] and explain in "summary". Output ONLY the json block.`;

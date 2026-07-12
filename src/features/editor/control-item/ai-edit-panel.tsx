@@ -2,14 +2,16 @@
 import { useEffect, useRef } from "react";
 import useAiEditStore from "../store/use-ai-edit-store";
 import useStore from "../store/use-store";
+import { dispatch } from "@designcombo/events";
+import { PLAYER_SEEK } from "../constants/events";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import { addCaptions } from "../ai-edit/caption-builder";
 import {
   applyOperations,
   addAudio,
   addImage,
   addVideo,
   replaceMedia,
-  setSelection,
   selectionChips,
   selectionContext,
   projectContext,
@@ -131,7 +133,7 @@ async function waitGen(id: string, onStatus: (d: any) => void): Promise<string> 
 async function transcribeAudio(
   src: string,
   token: string
-): Promise<{ start: number; end: number; text: string }[]> {
+): Promise<{ start: number; end: number; text: string; words?: any[] }[]> {
   const startRes = await fetch(withEditorBase("/api/transcribe"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -156,7 +158,14 @@ async function transcribeAudio(
     if (pd?.done) {
       const segs = Array.isArray(pd?.stt?.segments) ? pd.stt.segments : [];
       return segs
-        .map((sg: any) => ({ start: Number(sg?.start || 0), end: Number(sg?.end || 0), text: String(sg?.text || "").trim() }))
+        .map((sg: any) => ({
+          start: Number(sg?.start || 0),
+          end: Number(sg?.end || 0),
+          text: String(sg?.text || "").trim(),
+          words: Array.isArray(sg?.words)
+            ? sg.words.map((w: any) => ({ word: String(w?.word || "").trim(), start: Number(w?.start || 0), end: Number(w?.end || 0) }))
+            : undefined,
+        }))
         .filter((x: any) => x.text);
     }
   }
@@ -258,7 +267,7 @@ export default function AiEditPanel() {
 
     // Script-sync: if the request is about matching to the narration, transcribe the
     // voiceover once (cached) so the AI gets exact segment times.
-    if (/\b(script|narration|sync|voiceover|subtitle|caption)\b/i.test(text) || /when .*(say|said|speak)/i.test(text)) {
+    if (/\b(script|narration|sync|voiceover|subtitles?|captions?)\b/i.test(text) || /when .*(say|said|speak)/i.test(text)) {
       const audio: any = Object.values(useStore.getState().trackItemsMap || {}).find((it: any) => it?.type === "audio");
       const asrc: string = audio?.details?.src || "";
       if (asrc && useAiEditStore.getState().transcript?.key !== audio.id) {
@@ -280,7 +289,7 @@ export default function AiEditPanel() {
                 text: "",
                 language: "",
                 segment_count: segs.length,
-                segments: segs.map((x) => ({ start: x.start, end: x.end, text: x.text })),
+                segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
               });
             }
           } catch {
@@ -440,11 +449,54 @@ export default function AiEditPanel() {
     if (gens.length) s.updateAt(i, { genStatus: "✓ built into one video" });
   };
 
+  // Captions — ensure a transcript (transcribe if we don't have one), then lay a
+  // word-synced caption track under the audio. Background so the chat stays free.
+  const runCaptions = async (i: number, captionOps: any[]) => {
+    for (const c of captionOps) {
+      const map = useStore.getState().trackItemsMap || {};
+      const audio: any = (c.itemId && map[c.itemId]) || Object.values(map).find((it: any) => it?.type === "audio");
+      const asrc: string = audio?.details?.src || "";
+      if (!audio || !asrc) {
+        s.updateAt(i, { genStatus: "⚠️ captions: no audio track found" });
+        continue;
+      }
+      let t: any = useCaptionTranscribeStore.getState().resultsByMedia?.[asrc];
+      if (!t?.segments?.length) {
+        s.updateAt(i, { genStatus: "Transcribing for captions…" });
+        try {
+          const segs = await transcribeAudio(asrc, getToken());
+          if (segs.length) {
+            t = {
+              text: "",
+              language: "",
+              segment_count: segs.length,
+              segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
+            };
+            useCaptionTranscribeStore.getState().setTranscriptResult(asrc, t);
+          }
+        } catch (e: any) {
+          s.updateAt(i, { genStatus: "⚠️ captions: " + (e?.message || "transcribe failed") });
+          continue;
+        }
+      }
+      if (t?.segments?.length) {
+        const capIds = addCaptions(audio, t);
+        const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
+        const ns = { ...cur };
+        capIds.forEach((id: string) => (ns[id] = null));
+        s.updateAt(i, { snapshot: ns, genStatus: capIds.length ? `✓ ${capIds.length} captions added` : "⚠️ captions: nothing built" });
+      } else {
+        s.updateAt(i, { genStatus: "⚠️ captions: no transcript" });
+      }
+    }
+  };
+
   const applyMsg = (i: number, m: any) => {
     if (!m.ops?.length) return;
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "arrange"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "arrange", "captions"].includes(o.op));
     const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
+    const captionOps = m.ops.filter((o: any) => o.op === "captions");
 
     // sync ops apply immediately
     const snapshot = captureSnapshot(sync, trackItemsMap);
@@ -456,8 +508,9 @@ export default function AiEditPanel() {
     s.updateAt(i, { applied: true, snapshot, historyId });
     s.addHistory({ id: historyId, time: now.toLocaleTimeString(), summary: m.content || "Applied edit", ops: m.ops, snapshot });
 
-    // generation (+ deferred arrange) runs in the background — chat stays free
+    // generation (+ deferred arrange) + captions run in the background — chat stays free
     if (gens.length || arranges.length) runBuild(i, gens, arranges);
+    if (captionOps.length) runCaptions(i, captionOps);
   };
 
   const revertMsg = (i: number, m: any) => {
@@ -624,9 +677,17 @@ export default function AiEditPanel() {
                 {chips.map((c) => (
                   <span
                     key={c.id}
-                    onClick={() => setSelection([c.id])}
+                    onClick={() => {
+                      // Select ONLY this clip in the timeline + jump the playhead to
+                      // its start. Direct store write is the app's canonical selection
+                      // control (menu-list uses the same) — the LAYER_SELECTION dispatch
+                      // was clearing the whole selection instead of narrowing it.
+                      useStore.setState({ activeIds: [c.id] });
+                      const from = Number((trackItemsMap as any)?.[c.id]?.display?.from) || 0;
+                      dispatch(PLAYER_SEEK, { payload: { time: from } });
+                    }}
                     className="group flex cursor-pointer items-center gap-1 rounded-full border border-border bg-muted/40 py-0.5 pl-0.5 pr-1.5 text-[10px] text-foreground/80 transition hover:border-sky-500/40"
-                    title={`Click to select in timeline · ${c.id}`}
+                    title={`Select in timeline + jump playhead · ${c.id}`}
                   >
                     {c.src ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -641,7 +702,7 @@ export default function AiEditPanel() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelection(activeIds.filter((x) => x !== c.id));
+                        useStore.setState({ activeIds: activeIds.filter((x) => x !== c.id) });
                       }}
                       className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-muted-foreground/40 hover:bg-red-500/20 hover:text-red-500"
                       title="Deselect"

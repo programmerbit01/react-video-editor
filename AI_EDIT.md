@@ -36,6 +36,8 @@ automated MCP pipeline will later drive end‑to‑end.
 | **Context‑awareness** — knows the narration topic (generates relevant media, not literal words) | ✅ |
 | History + **inline revert**, **Auto/Ask** mode, streaming + thinking toggles, gen previews | ✅ |
 | Transcribe pipeline (word/segment highlight) + **persists across refresh** | ✅ |
+| **Auto‑captions** — word‑synced caption track from a prompt (transcribes the audio first if needed) | ✅ |
+| Panel **opens by default** on load; selection chips → click selects just that clip **+ moves the playhead**, × deselects | ✅ |
 | **Transitions** (crossfades), cross‑device transcript persistence, MCP auto‑pipeline | 🔜 |
 
 ---
@@ -82,6 +84,7 @@ The LLM returns **only** a fenced JSON block. The envelope never changes — onl
 | `regenerate` | AI image edit (img2img) | vApp job → `EDIT_OBJECT details.src` |
 | `search` | stock (Pexels) image/video | `/api/pexels` → add |
 | `arrange` | sequence to build a video: `itemIds`+`totalMs` (equal), `items:[{itemId,fromMs,toMs}]` (smart), or `target:"all"` (all visual items after generation) | `stateManager.updateState` (display timing) |
+| `captions` | word‑synced caption track under the selected audio (transcribes first if there's no transcript yet) | `caption-builder.ts` → `stateManager.updateState` (new Captions track) |
 
 **Zoom is Ken Burns.** The Remotion player ignores a static `details.transform`; it
 computes zoom/pan per frame from `details.kenBurns` (`zoomIn`/`zoomOut`/`panLeft`…).
@@ -119,6 +122,7 @@ chat stays free — the user can keep prompting. An `arrange` op in the same mes
 **Editor** (`src/features/editor/`)
 - `ai-edit/operations.ts` — ops schema, `applyOperations`, `add*`/`replaceMedia`/`setSelection`,
   `captureSnapshot`/`revertSnapshot`, `projectContext`/`narrationTimeline`, `CAPABILITIES`, `OPS_SYSTEM_PROMPT`.
+- `ai-edit/caption-builder.ts` — builds a word‑synced **Captions** track from a transcript (same logic as the Captions tab); powers the `captions` op.
 - `store/use-ai-edit-store.ts` — panel + chat + history + settings state (persisted prefs/pos).
 - `control-item/ai-edit-panel.tsx` — the panel: streaming chat, chips, inline apply/revert,
   Features popover, background generation, transcribe + script‑sync.

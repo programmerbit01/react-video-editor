@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { writeFile, mkdir, unlink, readFile } from "fs/promises";
+import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import path from "path";
 import { randomBytes } from "crypto";
 import { createWriteStream } from "fs";
@@ -134,6 +134,14 @@ export async function POST(request: Request) {
         error: err.message,
       });
       if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: err.message });
+    })
+    .finally(() => {
+      // Always remove the scratch frame dir — on success AND on failure/abort — so
+      // public/exports never accumulates leftover tmp_<jobId> frame folders again.
+      rm(path.join(process.cwd(), "public", "exports", `tmp_${jobId}`), {
+        recursive: true,
+        force: true,
+      }).catch(() => {});
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });
@@ -924,6 +932,5 @@ async function runExport(
     video_url: `${EDITOR_BASE}/api/render/${jobId}/download`,
   });
 
-  for (const entry of entries) unlink(entry.path).catch(() => {});
-  for (const cap of captionOverlays) unlink(cap.path).catch(() => {});
+  // Scratch dir (tmp_<jobId>) is removed by the caller's .finally() — covers success AND failure.
 }
