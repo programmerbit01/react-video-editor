@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 
 export interface TranscriptWord {
   word: string;
@@ -28,18 +29,30 @@ interface CaptionTranscribeState {
   setTranscriptResult: (mediaSrc: string, result: TranscriptResult) => void;
 }
 
-const useCaptionTranscribeStore = create<CaptionTranscribeState>((set) => ({
-  pendingMediaSrc: null,
-  resultsByMedia: {},
-  requestTranscription: (mediaSrc) => set({ pendingMediaSrc: mediaSrc }),
-  clearPendingRequest: () => set({ pendingMediaSrc: null }),
-  setTranscriptResult: (mediaSrc, result) =>
-    set((state) => ({
-      resultsByMedia: {
-        ...state.resultsByMedia,
-        [mediaSrc]: result
-      }
-    }))
-}));
+// Persist `resultsByMedia` (keyed by the audio's src) so a generated transcript
+// survives an editor refresh — the audio's captions/word-timestamps auto-restore
+// (from the built-in Captions tab AND AI Edit script-sync) without re-generating.
+const useCaptionTranscribeStore = create<CaptionTranscribeState>()(
+  persist(
+    (set) => ({
+      pendingMediaSrc: null,
+      resultsByMedia: {},
+      requestTranscription: (mediaSrc) => set({ pendingMediaSrc: mediaSrc }),
+      clearPendingRequest: () => set({ pendingMediaSrc: null }),
+      setTranscriptResult: (mediaSrc, result) =>
+        set((state) => ({
+          resultsByMedia: {
+            ...state.resultsByMedia,
+            [mediaSrc]: result,
+          },
+        })),
+    }),
+    {
+      name: "vapp-caption-transcripts",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (s) => ({ resultsByMedia: s.resultsByMedia }),
+    }
+  )
+);
 
 export default useCaptionTranscribeStore;

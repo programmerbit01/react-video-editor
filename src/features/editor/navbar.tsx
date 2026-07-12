@@ -47,6 +47,7 @@ import { ShortcutsModal } from "./shortcuts-modal";
 import { ModeToggle } from "@/components/ui/mode-toggle";
 import { SaveProjectModal } from "./save-project-modal";
 import useScriptGuideStore, { ScriptSegment } from "./store/use-script-guide-store";
+import useAiEditStore from "./store/use-ai-edit-store";
 import { LOOKS } from "./player/film-look";
 import { Clapperboard, Sparkles } from "lucide-react";
 import { parseTimeToMs } from "./store/use-script-guide-store";
@@ -490,6 +491,7 @@ export default function Navbar({
           <LookPicker />
           <MusicBedPicker stateManager={stateManager} />
           <ScriptGuideButton />
+          <AiEditButton />
           <div className="rounded-full border border-border/70 bg-background/80 p-0.5 shadow-sm">
             <ModeToggle />
           </div>
@@ -1393,6 +1395,26 @@ const ScriptGuideButton = () => {
           {segments.length}
         </span>
       )}
+    </Button>
+  );
+};
+
+const AiEditButton = () => {
+  const { isOpen, setOpen } = useAiEditStore();
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => setOpen(!isOpen)}
+      className={`pointer-events-auto h-8 gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+        isOpen
+          ? "border-sky-500/60 bg-sky-500/10 text-sky-600 dark:text-sky-300"
+          : "border-border text-muted-foreground hover:text-foreground"
+      }`}
+      title="AI Edit"
+    >
+      <span>✦</span>
+      <span className="hidden sm:inline">AI Edit</span>
     </Button>
   );
 };

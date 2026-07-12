@@ -18,7 +18,7 @@ export async function GET(
     }
 
     const { searchParams } = new URL(request.url);
-    const baseUrl = String(searchParams.get("baseUrl") || DEFAULT_VAPP_BASE).replace(/\/+$/, "");
+    const baseUrl = DEFAULT_VAPP_BASE.replace(/\/+$/, ""); // always the configured vApp (VAPP_SERVER_BASE) — no client baseUrl / vapp_higgs
     const token = String(searchParams.get("token") || "").replace(/^Bearer\s+/i, "").trim();
 
     const headers: Record<string, string> = {};
@@ -39,12 +39,17 @@ export async function GET(
     const done = COMPLETE_STATES.has(status);
     const failed = FAIL_STATES.has(status);
 
-    const generationDetails =
-      pollData?.raw?.generation_details ||
-      pollData?.generation_details ||
+    const raw = pollData?.raw || {};
+    // Canonical STT is result.stt (exposed by vApp as raw.stt). Legacy paths kept only
+    // as a fallback so we never silently lose segments.
+    const stt =
+      (raw?.stt && Array.isArray(raw.stt.segments) ? raw.stt : null) ||
+      (pollData?.stt && Array.isArray(pollData.stt.segments) ? pollData.stt : null) ||
+      raw?.result?.stt ||
+      raw?.generation_details?.stt ||
       {};
 
-    return NextResponse.json({ status, done, failed, generation_details: generationDetails });
+    return NextResponse.json({ status, done, failed, stt });
   } catch (error: any) {
     console.error(error);
     return NextResponse.json({ message: "Internal server error", status: "unknown", done: false, failed: false }, { status: 500 });

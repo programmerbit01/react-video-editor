@@ -289,15 +289,14 @@ export default function CaptionsPanel({ trackItem }: { trackItem: ITrackItem }) 
         await new Promise((r) => setTimeout(r, 5000));
         try {
           const pollRes = await fetch(
-            `${vappHost}/api/vapp/jobs/${jobId}?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`
+            withEditorBase(`/api/transcribe/${jobId}?token=${encodeURIComponent(token)}&baseUrl=${encodeURIComponent(baseUrl)}`)
           );
           const pollData = await pollRes.json().catch(() => ({}));
           if (pollData?.failed) throw new Error("Transcription job failed");
           if (pollData?.done) {
-            const gd = pollData?.generation_details || {};
-            const raw = gd?.stt || gd;
-            if (Array.isArray(raw?.segments) && raw.segments.length) {
-              sttData = raw as TranscriptResult;
+            const stt = pollData?.stt || {};
+            if (Array.isArray(stt?.segments) && stt.segments.length) {
+              sttData = stt as TranscriptResult;
             }
             break;
           }

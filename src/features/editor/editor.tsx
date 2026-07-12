@@ -32,6 +32,7 @@ import { design } from "./mock";
 import useTranscriptGuides from "./hooks/use-transcript-guides";
 import { setStateManagerRef } from "./utils/state-manager-ref";
 import ScriptGuidePanel from "./control-item/script-guide-panel";
+import AiEditPanel from "./control-item/ai-edit-panel";
 
 const stateManager = new StateManager(
   {
@@ -199,6 +200,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
         setProjectName={setProjectName}
       />
       <ScriptGuidePanel />
+      <AiEditPanel />
 
       <div className="flex flex-1 min-h-0">
         {isLargeScreen ? (

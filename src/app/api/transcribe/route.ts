@@ -21,7 +21,7 @@ const unwrapProxyUrl = (inputUrl: string) => {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const baseUrl = String(body.baseUrl || DEFAULT_VAPP_BASE).replace(/\/+$/, "");
+    const baseUrl = DEFAULT_VAPP_BASE.replace(/\/+$/, ""); // always the configured vApp (VAPP_SERVER_BASE) — no client baseUrl / vapp_higgs
     const token = String(body.token || "").replace(/^Bearer\s+/i, "").trim();
     const audioUrl = unwrapProxyUrl(String(body.url || body.audio_url || ""));
     const timestampType = String(body.timestamp_type || "word").trim();
