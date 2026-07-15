@@ -52,6 +52,16 @@ export async function GET(
       render_fps: job.render_fps,
       speed_x: job.speed_x,
       size_mb: job.size_mb,
+      crf: job.crf,
+      export_quality: job.export_quality,
+      resolution: job.resolution,
+      // observability
+      stages: job.stages,
+      log: job.log,
+      rendered_frames: job.rendered_frames,
+      total_frames: job.total_frames,
+      stalled: job.stalled,
+      stall_reason: job.stall_reason,
     },
   });
 }

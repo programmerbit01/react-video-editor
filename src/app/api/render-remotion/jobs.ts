@@ -1,21 +1,8 @@
-export interface RenderJob {
-  status: string;
-  progress: number;
-  error?: string;
-  engine?: string;
-  source?: string;
-  project_name?: string;
-  started_at?: number;
-  video_seconds?: number;
-  // Optional render metrics / config (for visibility + debugging speed).
-  concurrency?: number;
-  cores?: number;
-  gpu?: string;
-  hwAccel?: string;
-  render_seconds?: number;
-  render_fps?: number;
-  speed_x?: number;
-  size_mb?: number;
-}
+// The in-memory render-job store. Typed by the SHARED RenderJob shape (same one
+// the reporting UI reads) so server-written telemetry and client-rendered fields
+// never drift. render-report-types has no client/React deps → safe to import here.
+import type { RenderJob, RenderStage } from "@/features/editor/render-report-types";
+
+export type { RenderJob, RenderStage };
 
 export const jobs = new Map<string, RenderJob>();

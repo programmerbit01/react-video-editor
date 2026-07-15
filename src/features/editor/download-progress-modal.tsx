@@ -1,7 +1,8 @@
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { useDownloadState, type RenderMetrics } from "./store/use-download-state";
+import { useDownloadState } from "./store/use-download-state";
+import { RenderReportRow, type RenderJob } from "./render-report";
 import { Button } from "@/components/ui/button";
-import { ChevronUpIcon, CircleCheckIcon, Minimize2Icon, XCircleIcon, XIcon } from "lucide-react";
+import { CircleCheckIcon, Minimize2Icon, XIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
 import { processFileUpload } from "@/utils/upload-service";
@@ -9,27 +10,8 @@ import { useEffect, useRef, useState } from "react";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
-// Dev-facing render telemetry line. Shows only the fields present; extend freely as
-// more metrics land (kept flat + defensive so a missing/new field never breaks it).
-const metricsLine = (m: RenderMetrics | undefined, phase: "live" | "done"): string => {
-  if (!m) return "";
-  const parts: string[] = [];
-  if (m.engine) parts.push(String(m.engine).toLowerCase() === "remotion" ? "RE" : "FF");
-  if (phase === "done") {
-    if (m.render_seconds != null) parts.push(`${m.render_seconds}s render`);
-    if (m.speed_x) parts.push(`${m.speed_x}x`);
-    if (m.render_fps) parts.push(`${m.render_fps} fps`);
-    if (m.size_mb) parts.push(`${m.size_mb}MB`);
-  }
-  if (m.gpu) parts.push(`GPU ${m.gpu}`);
-  if (m.cores) parts.push(`${m.cores} cores`);
-  if (m.concurrency) parts.push(`cc ${m.concurrency}`);
-  if (m.hwAccel) parts.push(m.hwAccel);
-  return parts.join(" · ");
-};
-
 const DownloadProgressModal = () => {
-  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, exportRunId, metrics, actions } =
+  const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, exportRunId, metrics, report, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
@@ -141,6 +123,20 @@ const DownloadProgressModal = () => {
     actions.setDisplayProgressModal(false);
   };
 
+  // Shape this export into the SAME job object the Exports widget renders, so the
+  // Download modal shows the one shared <RenderReportRow> (no separate reporting UI).
+  const modalJob: RenderJob = {
+    ...(metrics ?? {}),
+    ...(report ?? {}),
+    job_id: `export-${exportRunId}`,
+    status: isFailed ? "FAILED" : isCompleted ? "COMPLETED" : exporting ? "PROCESSING" : "PENDING",
+    progress: Math.floor(progress),
+    project_name: "User Export",
+    source: "editor-manual",
+    error: error ?? undefined,
+    started_at: startRef.current ? Math.floor(startRef.current / 1000) : undefined,
+  };
+
   return (
     <>
       {showDock && (
@@ -193,92 +189,73 @@ const DownloadProgressModal = () => {
           Download
         </div>
 
-        {isCompleted ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 space-y-4">
-            <div className="flex flex-col items-center space-y-1 text-center">
-              <CircleCheckIcon className="h-10 w-10 text-green-500" />
-              <div className="text-xl font-bold">Done — Downloaded!</div>
-              <div className="text-muted-foreground text-sm">
-                Your video has been saved to your Downloads folder.
-              </div>
-              {finalRef.current > 0 && (
-                <div className="text-xs text-muted-foreground/60">
-                  Exported in {fmt(finalRef.current)}
-                </div>
-              )}
-              {metricsLine(metrics, "done") && (
-                <div className="text-xs tabular-nums text-muted-foreground/60 font-mono">
-                  {metricsLine(metrics, "done")}
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleDownload}>
-                Download again
-              </Button>
-              {cloudState === "idle" && (
-                <Button variant="outline" size="sm" onClick={handleUploadToCloud}>
-                  Upload to Cloud
-                </Button>
-              )}
-              {cloudState === "uploading" && (
-                <Button variant="outline" size="sm" disabled>
-                  Uploading…
-                </Button>
-              )}
-            </div>
-
-            {cloudState === "done" && cloudUrl && (
-              <div className="flex flex-col items-center gap-1 w-full max-w-sm px-4">
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL</div>
-                <div className="flex w-full items-center gap-2">
-                  <input
-                    readOnly
-                    value={cloudUrl}
-                    className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
-                    onClick={(e) => (e.target as HTMLInputElement).select()}
-                  />
-                  <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(cloudUrl)}>
-                    Copy
-                  </Button>
-                </div>
-              </div>
-            )}
-            {cloudState === "error" && (
-              <div className="text-xs text-red-400">Upload failed. Try again.</div>
-            )}
+        <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6">
+          {/* The ONE reporting module — same <RenderReportRow> the Exports widget uses. */}
+          <div className="w-full max-w-md overflow-hidden rounded-xl border border-[#222] bg-[#111] text-white shadow-lg">
+            <RenderReportRow job={modalJob} borderBottom={false} />
           </div>
-        ) : isFailed ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6">
-            <XCircleIcon className="h-10 w-10 text-red-500" />
-            <div className="font-bold text-red-500">Export Failed</div>
-            <div className="max-h-40 w-full overflow-auto rounded-md bg-zinc-900 px-4 py-3 text-xs text-zinc-300 font-mono whitespace-pre-wrap">
-              {error}
-            </div>
+
+          {isCompleted && (
+            <>
+              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <CircleCheckIcon className="h-4 w-4 text-green-500" />
+                Saved to your Downloads{finalRef.current > 0 ? ` · ${fmt(finalRef.current)}` : ""}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={handleDownload}>
+                  Download again
+                </Button>
+                {cloudState === "idle" && (
+                  <Button variant="outline" size="sm" onClick={handleUploadToCloud}>
+                    Upload to Cloud
+                  </Button>
+                )}
+                {cloudState === "uploading" && (
+                  <Button variant="outline" size="sm" disabled>
+                    Uploading…
+                  </Button>
+                )}
+              </div>
+              {cloudState === "done" && cloudUrl && (
+                <div className="flex flex-col items-center gap-1 w-full max-w-sm">
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL</div>
+                  <div className="flex w-full items-center gap-2">
+                    <input
+                      readOnly
+                      value={cloudUrl}
+                      className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                    />
+                    <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(cloudUrl)}>
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {cloudState === "error" && (
+                <div className="text-xs text-red-400">Upload failed. Try again.</div>
+              )}
+            </>
+          )}
+
+          {isFailed && (
             <Button variant="outline" onClick={handleDismiss}>
               Close
             </Button>
-          </div>
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4">
-            <div className="text-5xl font-semibold">{Math.floor(progress)}%</div>
-            <div className="font-bold">Exporting...</div>
-            <div className="text-sm tabular-nums text-muted-foreground">{fmt(elapsed)}</div>
-            {metricsLine(metrics, "live") && (
-              <div className="text-xs tabular-nums text-muted-foreground/70 font-mono">
-                {metricsLine(metrics, "live")}
+          )}
+
+          {!isCompleted && !isFailed && (
+            <>
+              <div className="text-center text-xs text-zinc-500">
+                <div>Closing the browser will not cancel the export.</div>
+                <div>You can minimize this and keep working.</div>
               </div>
-            )}
-            <div className="text-center text-zinc-500">
-              <div>Closing the browser will not cancel the export.</div>
-              <div>You can minimize this and keep working.</div>
-            </div>
-            <Button variant="outline" onClick={handleMinimize}>
-              Minimize
-            </Button>
-          </div>
-        )}
+              <Button variant="outline" onClick={handleMinimize}>
+                Minimize
+              </Button>
+            </>
+          )}
+        </div>
       </DialogContent>
       </Dialog>
     </>

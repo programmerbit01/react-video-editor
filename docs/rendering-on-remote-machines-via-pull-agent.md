@@ -202,3 +202,87 @@ cd vapp_server && git pull && <restart vapp_server>
 | `/editor` → `Internal Server Error` | editor `:3001` process down (higgs up) — restart editor |
 | FF selected but renders RE (or vice-versa) | queue path ignored `options.engine` — ensure agent routes by engine |
 | Double upload / stray render-library entry | `skipCallback` not set in pull mode |
+
+---
+
+## 9. Speed + observability overhaul (2026-07-15)
+
+A pass on the **RE (remotion) queue render** path took an 11-min / 190-item project
+from **0.36× → 1.29× realtime** and its output from **1.2 GB → ~400 MB**, while making
+the render fully observable. All of the below apply to **every** render on the RE
+route — GUI (Local / Remote / Queue) *and* MCP/AI renders (same `runRemotionExport`).
+
+### 9.1 Direct asset URLs (no proxy)
+Assets load **DIRECT from R2** (`rpublic.tomtap.ai` serves CORS `*`) — each render
+worker pulls R2 in parallel = fast. A same-origin `/api/proxy` hop only serializes
+everything through one Next process = slow ("proxy shit"). Single source of truth:
+`src/features/editor/utils/asset-url.ts` → `resolveAssetUrl()` (unwraps legacy
+`/api/proxy?url=` baked into old/imported designs → direct; used in navbar
+`patchDesignMetadata` + zip-export, uploads `getPlayerSrc`). `/api/proxy` is now a
+minimal dormant shim — it only activates for the legacy Garage host
+`vapp-media-gar.tomtap.ai` and ONLY when `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1`
+(default OFF). **Never re-wrap R2 URLs in the proxy.**
+
+### 9.2 Localize prefetch + local asset cache (overlapped)
+Before the render, `localizeAssets()` (in `render-remotion/route.ts`) rewrites every
+remote asset src → a **local cache route** `/api/asset-cache/[key]` instantly, then
+**warms that cache in the BACKGROUND (timeline order)** while the render runs. The
+render starts immediately; the cache-through route serves any not-yet-warm asset from
+R2 on demand + caches it. So the render is compute-bound (no mid-render R2 stalls),
+total ≈ `max(download, render)`, and a **re-render reuses the cache instantly**
+(`✓ cached`). The cache lives on the **render machine** (populated at render time —
+where it's needed). Store: `src/utils/asset-cache-store.ts` (`.asset-cache/`, LRU
+`ASSET_CACHE_MAX_GB` default 40, key by pathname so presigned `?X-Amz-…` doesn't
+defeat reuse). Toggles: `RENDER_LOCALIZE=0`, `RENDER_LOCALIZE_CONCURRENCY`.
+
+### 9.3 Observability (stages / logs / stall / fps)
+`render-remotion/route.ts` now writes per-stage timers (**Bundle → Localize → Prepare
+→ Render frames → Encode**) + a rolling `log[]` + a **stall watchdog** (flags + logs
+`⚠ STALL — no frame for Ns` after `STALL_AFTER_MS=90s`; skips once all frames are
+rendered so Encode doesn't false-stall) + **instantaneous fps** + `onDownload` /
+`onBrowserLog` capture. Surfaced via `[id]/route.ts` GET → store → the reporting card.
+
+### 9.4 One reporting module
+`render-report-types.ts` (pure, server-safe types/helpers + `pickMetrics`) +
+`render-report.tsx` (`RenderReportRow`). BOTH the Download modal and the Exports
+widget render the SAME row — identical stats, stages, logs. Edit reporting once here.
+
+### 9.5 CRF (output size)
+RE passed NO crf → Remotion's default made a ~1.2 GB near-lossless file. Now
+`CRF_BY_QUALITY {high:20, medium:24, low:28}` (visually lossless, ~⅓ the size, faster
+encode + upload). Reported as `CRF 20 · 1080p` in the card.
+
+### 9.6 NVENC (opt-in, NVIDIA boxes)
+Remotion 4.x has NO nvenc (only macOS VideoToolbox) — its Linux encode is CPU libx264.
+So on an NVIDIA box, **opt-in** `RENDER_NVENC=1` switches to: Remotion `renderFrames`
+(all animations) → JPEG sequence + `renderMedia codec:wav` (audio) → the **system
+ffmpeg's `h264_nvenc`** combines them. Guarded by a real nvenc probe; **any failure
+falls back to the standard `renderMedia`** path, so it can only help. Pair with
+`REMOTION_CONCURRENCY=24` (more cores → faster frames — the bigger cost). Untested on
+real NVIDIA at time of writing — verify on the box (`NVENC: available ✓` log).
+
+### 9.7 Pull agent (deployed per render box — see its own repo)
+- **Poll-retry:** a status-poll timeout no longer fails the job (a fast CPU-saturated
+  render starves the editor's Node loop). Retries (60s timeout, up to 12×).
+- **S3 multipart output upload:** files >20 MB split into parts, PUT in **parallel**
+  (conc 4) via the server's **already-existing** agent-trusted endpoints
+  `/vapp/presign-multipart-{start,complete}`. Falls back to single PUT on any error.
+  Env: `VAPP_MULTIPART`, `VAPP_MULTIPART_CONCURRENCY`, `VAPP_MULTIPART_MIN_MB`.
+- **Upload visibility:** the download-from-editor + R2 upload (the "98% tail") report
+  size/speed into the modal log (`⬆ uploaded X MB in Ys (Z MB/s)`).
+
+### 9.8 Deploy rule (avoid mismatch drama)
+> Per render box: deploy the **editor** (build + restart) AND the **agent** (restart)
+> **together**. Keep the vApp server (presign-multipart endpoints) current. A box with
+> a new editor but no `/api/asset-cache` route, or an old agent, is the only way to
+> break this — a clean full deploy avoids it. Legacy Garage-host assets need
+> `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1` or migration to R2.
+
+### 9.9 Quick failure → cause map (additions)
+| Symptom | Likely cause |
+|---|---|
+| Render stuck at ~65% with no error | (pre-fix) asset download stall via proxy — now direct + localized; check the stall banner + logs |
+| `Localize assets` errors `✕ … (cache-through)` | that asset wasn't prewarmed; served direct from R2 — harmless |
+| `NVENC path failed — falling back…` | frame glob / ffmpeg / no nvenc — using libx264; safe |
+| Agent reports `R2 upload ok` not `R2 multipart ok` | server multipart endpoints unreachable (old vApp) — single-PUT fallback |
+| Some old-project asset fails to load (CORS) | it's on the legacy Garage host — set `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1` or migrate |

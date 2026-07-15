@@ -3,45 +3,15 @@ import { create } from "zustand";
 import useTrackVisibilityStore from "./use-track-visibility-store";
 import useStore from "./use-store";
 import { vappCtx, vappAuth } from "@/utils/vapp-api";
+import { pickMetrics, type RenderMetrics, type RenderJob } from "../render-report";
 
 export type ExportQuality = "high" | "medium" | "low";
 export type ExportResolution = "720p" | "1080p" | "540p" | "2k";
 export type ExportEngine = "ffmpeg" | "remotion";
 
-// Render performance/telemetry surfaced in the Download modal (dev-facing). All
-// optional — the poll fills whatever the engine reports; the UI shows what's present.
-// Extend by adding a key here + to METRIC_KEYS + to the modal's line builder.
-export interface RenderMetrics {
-  engine?: string;
-  gpu?: string;
-  cores?: number;
-  concurrency?: number;
-  hwAccel?: string;
-  render_seconds?: number;
-  render_fps?: number;
-  speed_x?: number;
-  size_mb?: number;
-  video_seconds?: number;
-  encoder?: string;
-}
-
-const METRIC_KEYS: (keyof RenderMetrics)[] = [
-  "engine", "gpu", "cores", "concurrency", "hwAccel",
-  "render_seconds", "render_fps", "speed_x", "size_mb", "video_seconds", "encoder",
-];
-
-// Pull the known metric fields out of any status/result object (render-remotion GET,
-// or a queue job's result.metrics). Returns undefined if nothing useful is present.
-const pickMetrics = (src: any): RenderMetrics | undefined => {
-  if (!src || typeof src !== "object") return undefined;
-  const m: RenderMetrics = {};
-  let any = false;
-  for (const k of METRIC_KEYS) {
-    const v = (src as any)[k];
-    if (v !== undefined && v !== null && v !== "") { (m as any)[k] = v; any = true; }
-  }
-  return any ? m : undefined;
-};
+// RenderMetrics + pickMetrics now live in render-report.ts (single source of truth
+// shared with the Exports widget). Re-exported so existing importers keep working.
+export type { RenderMetrics } from "../render-report";
 
 // Longest-side max dimension — server uses canvas AR to compute actual W×H
 const RESOLUTION_MAX_DIM: Record<ExportResolution, number> = {
@@ -69,6 +39,8 @@ interface DownloadState {
   error: string | null;
   output?: Output;
   metrics?: RenderMetrics;
+  // Live render telemetry (stages / logs / stall) for the reporting card.
+  report?: Pick<RenderJob, "stages" | "log" | "stalled" | "stall_reason" | "rendered_frames" | "total_frames">;
   payload?: IDesign;
   remoteUrl: string;
   displayProgressModal: boolean;
@@ -137,6 +109,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
           error: null,
           output: undefined,
           metrics: undefined,
+          report: undefined,
         });
         const { payload, exportQuality, exportResolution, exportType, exportEngine } = get();
         const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
@@ -198,7 +171,18 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             const statusInfo = await statusResponse.json();
             const r = statusInfo.render || {};
             const { status, progress, presigned_url: url, error, public_url: publicUrl } = r;
-            set({ progress, metrics: pickMetrics(r) ?? get().metrics });
+            set({
+              progress,
+              metrics: pickMetrics(r) ?? get().metrics,
+              report: {
+                stages: r.stages ?? get().report?.stages,
+                log: r.log ?? get().report?.log,
+                stalled: r.stalled,
+                stall_reason: r.stall_reason,
+                rendered_frames: r.rendered_frames,
+                total_frames: r.total_frames,
+              },
+            });
 
             if (status === "COMPLETED") {
               // Remote render → the download endpoint lives on the remote machine (under its basePath).
@@ -236,6 +220,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
           error: null,
           output: undefined,
           metrics: undefined,
+          report: undefined,
         });
         const { payload, exportQuality, exportResolution, exportType, exportEngine } = get();
         const maxDim = RESOLUTION_MAX_DIM[exportResolution] ?? 1920;
@@ -291,8 +276,21 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             const prog = Number(j?.progress);
             if (Number.isFinite(prog)) set({ progress: Math.max(0, Math.min(100, prog)) });
             // Queue metrics arrive (if at all) in result.metrics — surfaced when the agent forwards them.
-            const qm = pickMetrics(j?.result?.metrics ?? j?.metrics);
+            const rm = j?.result?.metrics ?? j?.metrics;
+            const qm = pickMetrics(rm);
             if (qm) set({ metrics: qm });
+            if (rm && (rm.stages || rm.log || rm.stalled)) {
+              set({
+                report: {
+                  stages: rm.stages ?? get().report?.stages,
+                  log: rm.log ?? get().report?.log,
+                  stalled: rm.stalled,
+                  stall_reason: rm.stall_reason,
+                  rendered_frames: rm.rendered_frames,
+                  total_frames: rm.total_frames,
+                },
+              });
+            }
 
             const files = Array.isArray(j?.result?.files) ? j.result.files : [];
             const url =

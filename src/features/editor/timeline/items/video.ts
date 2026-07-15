@@ -8,6 +8,7 @@ import {
 } from "@designcombo/timeline";
 import { Filmstrip, FilmstripBacklogOptions } from "../types";
 import ThumbnailCache from "../../utils/thumbnail-cache";
+import { getThumbBlob, putThumbBlob } from "../../utils/thumbnail-store";
 import { IDisplay, IMetadata, ITrim } from "@designcombo/types";
 import {
   calculateOffscreenSegments,
@@ -89,6 +90,11 @@ class CanvasVideoClip {
     const results: { ts: number; img: Blob }[] = [];
 
     for (const ts of timestamps) {
+      // Persistent cache first — a hit skips the (slow) seek+decode entirely, so a
+      // reloaded/re-opened project fills its filmstrip straight from IndexedDB.
+      const cached = await getThumbBlob(this.src, width, ts);
+      if (cached) { results.push({ ts, img: cached }); continue; }
+
       const secs = ts / 1e6;
       // Always seek explicitly — skipping when currentTime matches causes black frames
       // because the decoder may not have produced the frame yet (especially at t=0 via proxy)
@@ -102,7 +108,10 @@ class CanvasVideoClip {
         await new Promise<void>((res) => requestAnimationFrame(() => res()));
         ctx.drawImage(v, 0, 0, width, h);
         const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.7));
-        if (blob) results.push({ ts, img: blob });
+        if (blob) {
+          results.push({ ts, img: blob });
+          void putThumbBlob(this.src, width, ts, blob); // persist for next load
+        }
       } catch { /* canvas tainted — skip */ }
     }
 

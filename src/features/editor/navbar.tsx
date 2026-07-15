@@ -65,16 +65,11 @@ import {
   getManagedAudioItems,
   upsertMusicBed,
 } from "./utils/scene-audio";
+import { resolveAssetUrl } from "./utils/asset-url";
 
-const toProxyMediaSrc = (src: unknown) => {
-  const raw = String(src || "");
-  if (!raw) return "";
-  if (raw.startsWith("/api/proxy?url=") || raw.startsWith("/editor/api/proxy?url=")) return raw;
-  if (raw.includes("rpublic.tomtap.ai")) {
-    return `/api/proxy?url=${encodeURIComponent(raw)}`;
-  }
-  return raw;
-};
+// Asset URLs resolve DIRECT (see utils/asset-url). This also unwraps any legacy
+// /api/proxy wrapper baked into old/imported designs → direct R2.
+const toDirectMediaSrc = (src: unknown) => resolveAssetUrl(src);
 
 const withEditorBase = (path: string) => {
   if (typeof window === "undefined") return path;
@@ -229,19 +224,31 @@ export default function Navbar({
     for (const [, item] of Object.entries(map)) {
       const details = (item.details ?? {}) as Record<string, unknown>;
       const meta = (item.metadata ?? {}) as Record<string, unknown>;
-      const proxiedSrc = toProxyMediaSrc(details.src);
+      const directSrc = toDirectMediaSrc(details.src);
 
-      if (proxiedSrc && proxiedSrc !== details.src) {
-        item.details = { ...details, src: proxiedSrc };
+      if (directSrc && directSrc !== details.src) {
+        item.details = { ...details, src: directSrc };
       }
 
       if (item?.type === "video") {
-        const normalizedPreview = toProxyMediaSrc(meta.previewUrl || proxiedSrc || details.src);
+        const normalizedPreview = toDirectMediaSrc(meta.previewUrl || directSrc || details.src);
         if (normalizedPreview && normalizedPreview !== meta.previewUrl) {
           item.metadata = { ...meta, previewUrl: normalizedPreview };
-        } else if (!meta.previewUrl && proxiedSrc) {
-          item.metadata = { ...meta, previewUrl: proxiedSrc };
+        } else if (!meta.previewUrl && directSrc) {
+          item.metadata = { ...meta, previewUrl: directSrc };
         }
+      }
+    }
+
+    // Collapse empty tracks: an imported design can carry blank tracks (items: []),
+    // which render as empty timeline rows and push captions/clips far apart ("kaafi
+    // jagah chhod kar neeche"). Empty tracks hold no item references, so dropping them
+    // is safe and pulls caption/content rows back adjacent. Never leaves zero tracks.
+    const tracks = (data as any).tracks;
+    if (Array.isArray(tracks)) {
+      const nonEmpty = tracks.filter((t: any) => Array.isArray(t?.items) && t.items.length > 0);
+      if (nonEmpty.length && nonEmpty.length < tracks.length) {
+        (data as any).tracks = nonEmpty;
       }
     }
     return data;
@@ -871,12 +878,11 @@ const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) =>
         folder.file(`project.${ext}`, xml);
         const mediaFolder = folder.folder("media") ?? folder;
 
-        // Fetch via server proxy to avoid CORS issues with R2 URLs
+        // Fetch DIRECT (R2 serves CORS `*`); resolver only proxies the legacy host.
         let done = 0;
         for (const { filename, url } of mediaFiles) {
           try {
-            const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
-            const r = await fetch(proxyUrl);
+            const r = await fetch(resolveAssetUrl(url));
             if (r.ok) mediaFolder.file(filename, await r.blob());
           } catch {}
           done++;

@@ -46,3 +46,5 @@ next-env.d.ts
 
 # stream proxy disk cache (regenerated, never commit)
 .proxy-cache/
+# render-machine local asset cache (localize prefetch — regenerated, never commit)
+.asset-cache/

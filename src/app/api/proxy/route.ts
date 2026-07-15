@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "crypto";
-import { mkdir, readFile, writeFile, stat } from "fs/promises";
-import path from "path";
 import { Readable } from "stream";
 
-const CACHE_DIR = path.join(process.cwd(), ".proxy-cache");
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// ─────────────────────────────────────────────────────────────────────────────
+// Minimal CORS + Range passthrough proxy.
+//
+// Assets should be loaded DIRECT (R2 serves CORS `*`) — that's fast and parallel.
+// This proxy is only a fallback for the legacy Garage host (no CORS preflight);
+// see toDirectMediaSrc in navbar.tsx, which routes ONLY that host here. Kept
+// deliberately thin (stream-only, no disk cache) — nothing hot depends on it.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -13,33 +16,6 @@ const CORS = {
   "Access-Control-Allow-Headers": "*",
   "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
 };
-
-function cacheKey(url: string) {
-  return createHash("sha1").update(url).digest("hex");
-}
-
-async function getCached(url: string): Promise<{ data: Buffer; contentType: string } | null> {
-  const key = cacheKey(url);
-  const dataFile = path.join(CACHE_DIR, key);
-  const metaFile = path.join(CACHE_DIR, `${key}.meta`);
-  try {
-    const s = await stat(dataFile);
-    if (Date.now() - s.mtimeMs > CACHE_TTL_MS) return null;
-    const [data, meta] = await Promise.all([readFile(dataFile), readFile(metaFile, "utf8")]);
-    return { data, contentType: meta };
-  } catch {
-    return null;
-  }
-}
-
-async function putCache(url: string, data: Buffer, contentType: string) {
-  await mkdir(CACHE_DIR, { recursive: true });
-  const key = cacheKey(url);
-  await Promise.all([
-    writeFile(path.join(CACHE_DIR, key), data),
-    writeFile(path.join(CACHE_DIR, `${key}.meta`), contentType),
-  ]);
-}
 
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
@@ -69,47 +45,26 @@ export async function GET(request: NextRequest) {
   if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
 
   const rangeHeader = request.headers.get("range");
-  // Disk caching disabled — stream-only proxy (CORS + Range passthrough). This route
-  // exists ONLY so Remotion/timeline CORS-strict fetch() works (the R2/garage host
-  // 403s the CORS preflight). No disk bloat (.proxy-cache).
-
   try {
-    const upstream = await fetch(url, {
-      headers: rangeHeader ? { Range: rangeHeader } : {},
-    });
-
+    const upstream = await fetch(url, { headers: rangeHeader ? { Range: rangeHeader } : {} });
     if (!upstream.ok && upstream.status !== 206) {
       return NextResponse.json({ error: `upstream ${upstream.status}` }, { status: 502 });
     }
 
-    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const contentLength = upstream.headers.get("content-length");
-    const shouldBufferForCache = false; // stream-only, no disk cache
-
     const headers: Record<string, string> = {
       ...CORS,
-      "Content-Type": contentType,
+      "Content-Type": upstream.headers.get("content-type") || "application/octet-stream",
       "Cache-Control": "public, max-age=604800",
       "Accept-Ranges": "bytes",
-      "X-Cache": "MISS",
     };
-    if (upstream.headers.get("content-range")) {
-      headers["Content-Range"] = upstream.headers.get("content-range")!;
-    }
-    if (contentLength) {
-      headers["Content-Length"] = contentLength;
-    }
-
-    if (shouldBufferForCache) {
-      const body = Buffer.from(await upstream.arrayBuffer());
-      putCache(url, body, contentType).catch(() => {});
-      return new NextResponse(body, { status: upstream.status, headers });
-    }
+    const cr = upstream.headers.get("content-range");
+    if (cr) headers["Content-Range"] = cr;
+    const cl = upstream.headers.get("content-length");
+    if (cl) headers["Content-Length"] = cl;
 
     if (!upstream.body) {
       return NextResponse.json({ error: "upstream body empty" }, { status: 502 });
     }
-
     return new NextResponse(Readable.fromWeb(upstream.body as any) as any, {
       status: upstream.status,
       headers,

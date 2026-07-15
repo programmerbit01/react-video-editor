@@ -2,9 +2,36 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import path from "path";
 import os from "os";
-import { execSync } from "child_process";
-import { mkdir } from "fs/promises";
+import { execSync, execFile } from "child_process";
+import { promisify } from "util";
+import { mkdir, rm } from "fs/promises";
 import { jobs } from "./jobs";
+import { ensureCached, enforceCap, registerAsset } from "@/utils/asset-cache-store";
+
+const execFileAsync = promisify(execFile);
+
+// NVENC (NVIDIA hardware h264) for the RE engine. Remotion 4.x has NO nvenc (only
+// macOS VideoToolbox) — its Linux encode is CPU libx264. So on an NVIDIA box we render
+// FRAMES with Remotion (all animations) → encode with the SYSTEM ffmpeg's h264_nvenc.
+// OPT-IN via RENDER_NVENC=1 (Mac path is untouched); any failure falls back to the
+// standard renderMedia libx264/videotoolbox path, so it can only help.
+const RENDER_NVENC_WANTED = process.env.RENDER_NVENC === "1";
+let _nvencOk: boolean | null = null;
+async function hasNvenc(): Promise<boolean> {
+  if (!RENDER_NVENC_WANTED) return false;
+  if (_nvencOk !== null) return _nvencOk;
+  try {
+    await execFileAsync("ffmpeg", [
+      "-hide_banner", "-f", "lavfi", "-i", "testsrc2=s=1280x720:d=0.2:r=30",
+      "-c:v", "h264_nvenc", "-f", "null", "-",
+    ], { timeout: 8000 });
+    _nvencOk = true;
+  } catch {
+    _nvencOk = false;
+  }
+  console.log(`[render-remotion] NVENC: ${_nvencOk ? "available ✓" : "not available → libx264/renderMedia"}`);
+  return _nvencOk;
+}
 
 // Bundle is created once and reused for the lifetime of the server process.
 let cachedBundleUrl: string | null = null;
@@ -13,6 +40,59 @@ const CALLBACK_BASE = (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").
 function mergeJob(jobId: string, patch: Record<string, unknown>) {
   const current = jobs.get(jobId) ?? { status: "PENDING", progress: 0 };
   jobs.set(jobId, { ...current, ...patch } as any);
+}
+
+// ── observability helpers ────────────────────────────────────────────────────
+// Per-stage timers + a rolling log, written onto the job so the reporting card
+// can show WHERE the time goes and WHERE a render stalls. _t0 is stripped by GET.
+
+const _stageStart = new Map<string, Map<string, number>>(); // jobId → stage → t0
+
+function logLine(jobId: string, msg: string) {
+  const j = jobs.get(jobId) as any;
+  const ts = new Date().toISOString().slice(11, 19);
+  const log = [ ...((j?.log as string[]) ?? []), `${ts}  ${msg}` ].slice(-300);
+  mergeJob(jobId, { log });
+  console.log(`[render-remotion] ${jobId} · ${msg}`);
+}
+
+function startStage(jobId: string, name: string, detail?: string) {
+  const j = jobs.get(jobId) as any;
+  const stages = [ ...((j?.stages as any[]) ?? []), { name, status: "running", detail } ];
+  let m = _stageStart.get(jobId); if (!m) { m = new Map(); _stageStart.set(jobId, m); }
+  m.set(name, Date.now());
+  mergeJob(jobId, { stages });
+  logLine(jobId, `▶ ${name}${detail ? " · " + detail : ""}`);
+}
+
+function updateStage(jobId: string, name: string, patch: Record<string, unknown>) {
+  const j = jobs.get(jobId) as any;
+  const stages = ((j?.stages as any[]) ?? []).map((s) => (s.name === name ? { ...s, ...patch } : s));
+  mergeJob(jobId, { stages });
+}
+
+function endStage(jobId: string, name: string, status: "done" | "failed" | "stalled" = "done", detail?: string) {
+  const j = jobs.get(jobId) as any;
+  const t0 = _stageStart.get(jobId)?.get(name);
+  const ms = t0 ? Date.now() - t0 : undefined;
+  const stages = ((j?.stages as any[]) ?? []).map((s) =>
+    s.name === name ? { ...s, status, ms, ...(detail ? { detail } : {}) } : s,
+  );
+  mergeJob(jobId, { stages });
+  logLine(jobId, `${status === "done" ? "✓" : status === "stalled" ? "⚠" : "✕"} ${name}${ms != null ? " · " + (ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s") : ""}${detail ? " · " + detail : ""}`);
+}
+
+// Marks a render stalled (no frame progress) so the UI stops showing a silent %.
+// Observability only — it does NOT kill the render (that's the stall root-fix pass).
+const STALL_AFTER_MS = 90_000;
+
+function shortAsset(src: string): string {
+  try {
+    const u = new URL(src, "http://x");
+    const q = u.searchParams.get("url") || u.searchParams.get("src");
+    const path = (q ? new URL(q, "http://x").pathname : u.pathname) || src;
+    return path.split("/").filter(Boolean).slice(-1)[0] || src;
+  } catch { return src.slice(-48); }
 }
 
 async function registerRenderJob(payload: Record<string, unknown>) {
@@ -86,6 +166,162 @@ const RENDER_GL = (() => {
   }
 })();
 
+// h264 CRF by quality tier. RE previously passed NO crf → Remotion's default made a
+// ~1.2GB near-lossless file. These are VISUALLY lossless but far smaller + faster to
+// encode AND upload (the "98% tail"). Lower number = higher quality/bigger file.
+const CRF_BY_QUALITY: Record<string, number> = { high: 20, medium: 24, low: 28 };
+
+// Bounded-concurrency worker pool.
+async function runPool<T>(items: T[], limit: number, fn: (t: T) => Promise<void>) {
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (i < items.length) { const idx = i++; await fn(items[idx]); }
+    }),
+  );
+}
+
+// Stage 0 — Localize (OVERLAPPED): instantly rewrite every remote asset src to a local
+// cache route, then warm that cache in the BACKGROUND while the render runs. Assets are
+// warmed in timeline order (earliest-used first). The cache-through route serves any
+// asset the warm hasn't reached yet straight from R2, so the render NEVER waits for the
+// full download up front — total ≈ max(download, render) instead of download + render.
+// Re-render reuses the cache (all ✓ cached, instant). Disable with RENDER_LOCALIZE=0.
+async function localizeAssets(jobId: string, design: any, serverOrigin: string): Promise<any> {
+  if (process.env.RENDER_LOCALIZE === "0") return design;
+  let d: any;
+  try { d = JSON.parse(JSON.stringify(design)); } catch { return design; }
+  const map = (d?.trackItemsMap ?? {}) as Record<string, any>;
+  const items = Object.values(map);
+
+  // Collect unique srcs + each one's earliest timeline use → warm what plays first.
+  const firstUse = new Map<string, number>();
+  for (const it of items) {
+    const s = it?.details?.src;
+    if (typeof s === "string" && /^https?:\/\//i.test(s)) {
+      const from = Number(it?.display?.from ?? it?.trim?.from ?? 0) || 0;
+      firstUse.set(s, Math.min(firstUse.get(s) ?? Infinity, from));
+    }
+  }
+  const list = [...firstUse.keys()].sort((a, b) => (firstUse.get(a)! - firstUse.get(b)!));
+  if (!list.length) return d;
+
+  startStage(jobId, "Localize assets", `0/${list.length}`);
+
+  // 1) Register (write key→url sidecar) + rewrite srcs → local route. Instant, no download.
+  const urlToLocal = new Map<string, string>();
+  for (const url of list) {
+    const key = await registerAsset(url);
+    urlToLocal.set(url, `${serverOrigin}/api/asset-cache/${key}`);
+  }
+  for (const it of items) {
+    const s = it?.details?.src;
+    if (typeof s === "string" && urlToLocal.has(s)) it.details.src = urlToLocal.get(s);
+  }
+
+  // 2) Warm the cache in the BACKGROUND (not awaited) — the render (returned design)
+  //    starts now; cache-through covers anything not yet warmed.
+  void (async () => {
+    let done = 0, hits = 0, pulled = 0, pulledBytes = 0;
+    const CONC = Number(process.env.RENDER_LOCALIZE_CONCURRENCY || 8);
+    await runPool(list, CONC, async (url) => {
+      try {
+        const { hit, size } = await ensureCached(url);
+        if (hit) hits++; else { pulled++; pulledBytes += size; }
+        done++;
+        logLine(jobId, `    ${done}/${list.length} ${hit ? "✓ cached" : "⬇ pulled"}  ${shortAsset(url)}${hit ? "" : ` (${(size / 1048576).toFixed(1)}MB)`}`);
+      } catch (e) {
+        done++;
+        logLine(jobId, `    ${done}/${list.length} ✕ ${shortAsset(url)} — ${String((e as any)?.message || e).slice(0, 60)} (cache-through)`);
+      }
+      updateStage(jobId, "Localize assets", { detail: `${done}/${list.length}${hits ? ` · ${hits} cached` : ""} (warming)` });
+    });
+    enforceCap().catch(() => {});
+    endStage(jobId, "Localize assets", "done", `${list.length} assets · ${hits} cached · ${(pulledBytes / 1048576).toFixed(0)}MB pulled`);
+  })();
+
+  return d; // return immediately → render proceeds while the cache warms
+}
+
+// NVENC render: Remotion renderFrames → JPEG sequence (all animations) + audio-only
+// WAV, then the SYSTEM ffmpeg encodes with h264_nvenc. Writes the final mp4 to
+// outputPath. Throws on any failure so the caller falls back to renderMedia.
+async function renderViaNvenc(
+  jobId: string, composition: any, serveUrl: string, inputProps: any, outputPath: string, crf: number, t0: number,
+): Promise<void> {
+  const { renderFrames, renderMedia } = await import("@remotion/renderer");
+  const totalFrames = composition.durationInFrames;
+  const tmpDir = path.join(os.tmpdir(), `rmn-${jobId}`);
+  const framesDir = path.join(tmpDir, "frames");
+  const audioPath = path.join(tmpDir, "audio.wav");
+  await mkdir(framesDir, { recursive: true });
+
+  try {
+    // 1) Render frames (image sequence) — with a stall watchdog + live fps.
+    startStage(jobId, "Render frames", `0/${totalFrames}`);
+    let lastFrames = 0, lastAt = Date.now(), tickF = 0, tickAt = Date.now(), inst = 0, lastPct = 0, stalled = false;
+    const watch = setInterval(() => {
+      if (lastFrames >= totalFrames) return;
+      const idle = Date.now() - lastAt;
+      if (idle >= STALL_AFTER_MS) {
+        const reason = `no frame for ${Math.round(idle / 1000)}s at ${lastFrames}/${totalFrames}`;
+        updateStage(jobId, "Render frames", { status: "stalled", detail: reason });
+        mergeJob(jobId, { stalled: true, stall_reason: reason });
+        if (!stalled) { logLine(jobId, `⚠ STALL — ${reason}`); stalled = true; }
+      }
+    }, 5000);
+    try {
+      await renderFrames({
+        composition, serveUrl, inputProps,
+        outputDir: framesDir,
+        imageFormat: "jpeg", jpegQuality: 90,
+        concurrency: RENDER_CONCURRENCY,
+        ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
+        timeoutInMilliseconds: RENDER_TIMEOUT_MS,
+        onFrameUpdate: (framesRendered: number) => {
+          const now = Date.now();
+          if (framesRendered > lastFrames) {
+            lastFrames = framesRendered; lastAt = now;
+            mergeJob(jobId, { stalled: false, stall_reason: undefined, rendered_frames: framesRendered, total_frames: totalFrames });
+          }
+          if (now - tickAt >= 2000) { inst = (framesRendered - tickF) / ((now - tickAt) / 1000); tickF = framesRendered; tickAt = now; }
+          const fps = inst > 0 ? inst : framesRendered / Math.max(0.001, (now - t0) / 1000);
+          const pct = Math.round(10 + (framesRendered / totalFrames) * 70); // frames = 10..80%
+          updateStage(jobId, "Render frames", { status: lastFrames >= totalFrames ? "done" : "running", detail: `${framesRendered}/${totalFrames} · ${fps.toFixed(1)} fps` });
+          mergeJob(jobId, { status: "PROCESSING", progress: pct });
+          if (pct - lastPct >= 10) { lastPct = pct; logLine(jobId, `${pct}% · ${framesRendered}/${totalFrames} frames · ${fps.toFixed(1)} fps`); }
+        },
+      } as any);
+    } finally { clearInterval(watch); }
+    endStage(jobId, "Render frames", "done", `${totalFrames}/${totalFrames}`);
+
+    // 2) Audio-only WAV (fast — no video encode).
+    startStage(jobId, "Audio");
+    mergeJob(jobId, { status: "PROCESSING", progress: 84 });
+    await renderMedia({ composition, serveUrl, inputProps, codec: "wav" as any, outputLocation: audioPath, timeoutInMilliseconds: RENDER_TIMEOUT_MS });
+    endStage(jobId, "Audio", "done");
+
+    // 3) NVENC encode: JPEG sequence (glob-sorted) + audio → mp4.
+    startStage(jobId, "Encode (NVENC)");
+    mergeJob(jobId, { status: "PROCESSING", progress: 90 });
+    const args = [
+      "-y", "-hide_banner", "-nostats", "-loglevel", "warning",
+      "-framerate", String(composition.fps),
+      "-pattern_type", "glob", "-i", path.join(framesDir, "element-*.jpeg"),
+      "-i", audioPath,
+      "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", String(crf), "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "192k",
+      "-shortest", outputPath,
+    ];
+    await execFileAsync("ffmpeg", args, { timeout: 3_600_000, maxBuffer: 64 * 1024 * 1024 });
+    endStage(jobId, "Encode (NVENC)", "done");
+    mergeJob(jobId, { encoder: "h264_nvenc" });
+    logLine(jobId, "✓ NVENC encode complete");
+  } finally {
+    rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function runRemotionExport(jobId: string, design: any, options: any) {
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
@@ -99,9 +335,12 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor"
   ).replace(/\/$/, "");
 
-  mergeJob(jobId, { status: "PROCESSING", progress: 5 });
+  mergeJob(jobId, { status: "PROCESSING", progress: 5, stages: [], log: [] });
 
+  // Stage 1 — Bundle (webpack; cached after the first render of the process).
+  startStage(jobId, "Bundle", cachedBundleUrl ? "cached" : "first run — slower");
   const serveUrl = await getBundleUrl();
+  endStage(jobId, "Bundle", "done");
 
   mergeJob(jobId, { status: "PROCESSING", progress: 10 });
 
@@ -111,21 +350,33 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   for (const id of (options?.mutedTrackIds ?? [])) mutedMap[id] = true;
   for (const id of (options?.hiddenTrackIds ?? [])) hiddenMap[id] = true;
 
-  const inputProps = { design, serverOrigin, mutedMap, hiddenMap };
+  // Stage 0 — Localize (overlapped): rewrite srcs → local cache route instantly, warm
+  // the cache in the background. Render starts now; cache-through covers un-warmed assets.
+  const localizedDesign = await localizeAssets(jobId, design, serverOrigin);
+
+  // Stage 2 — Prepare composition (evaluates the Root, resolves durationInFrames).
+  startStage(jobId, "Prepare");
+  const inputProps = { design: localizedDesign, serverOrigin, mutedMap, hiddenMap };
   const composition = await selectComposition({
     serveUrl,
     id: "main",
     inputProps,
     timeoutInMilliseconds: RENDER_TIMEOUT_MS,
   });
+  endStage(jobId, "Prepare", "done", `${composition.width}x${composition.height} · ${composition.durationInFrames}f @ ${composition.fps}fps`);
 
   const totalCores = os.cpus()?.length || 0;
   const videoSecs = composition.durationInFrames / composition.fps;
+  const exportQuality = String(options?.quality || "high");
+  const crf = CRF_BY_QUALITY[exportQuality] ?? 20;
   const renderCfg = {
     concurrency: RENDER_CONCURRENCY,
     cores: totalCores,
     gpu: RENDER_GL ? `on (${RENDER_GL})` : "off",
     hwAccel: "if-possible",
+    crf,
+    export_quality: exportQuality,
+    resolution: `${composition.width}x${composition.height}`,
   };
   console.log(
     `[render-remotion] ▶ START job=${jobId} | ${composition.width}x${composition.height}@${composition.fps}fps ` +
@@ -144,28 +395,123 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     ...renderCfg,
   });
 
-  await renderMedia({
-    composition,
-    serveUrl,
-    codec: "h264",
-    outputLocation: outputPath,
-    inputProps,
-    concurrency: RENDER_CONCURRENCY,
-    // Use hardware encoding when available (e.g. macOS VideoToolbox). Falls back
-    // to CPU (libx264) automatically if not supported.
-    hardwareAcceleration: "if-possible",
-    ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
-    timeoutInMilliseconds: RENDER_TIMEOUT_MS,
-    imageFormat: "jpeg",
-    jpegQuality: 90,
-    // cache decoded video frames in memory across Chrome instances
-    offthreadVideoCacheSizeInBytes: 200 * 1024 * 1024,
-    onProgress: ({ progress }) => {
-      const pct = Math.round(15 + progress * 83);
-      mergeJob(jobId, { status: "PROCESSING", progress: pct });
-      if (pct % 10 === 0) console.log(`[render-remotion] job ${jobId}: ${pct}%`);
-    },
-  });
+  // NVENC path (opt-in RENDER_NVENC=1, NVIDIA box): render frames + audio, then encode
+  // via the system ffmpeg's h264_nvenc. Any failure falls through to renderMedia below.
+  let usedNvenc = false;
+  if (await hasNvenc()) {
+    try {
+      await renderViaNvenc(jobId, composition, serveUrl, inputProps, outputPath, crf, _t0);
+      usedNvenc = true;
+    } catch (e) {
+      logLine(jobId, `NVENC path failed — falling back to Remotion libx264: ${String((e as any)?.message || e).slice(0, 120)}`);
+      mergeJob(jobId, { stalled: false, stall_reason: undefined });
+    }
+  }
+
+  if (!usedNvenc) {
+  // Stage 3 — Render frames. This is the heavy phase (OffthreadVideo/ffmpeg frame
+  // extraction). A stall watchdog watches frame throughput: if no NEW frame lands
+  // for STALL_AFTER_MS we flag the render stalled + the last asset it was pulling,
+  // so the UI stops showing a silent % (the "stuck at 65%" case).
+  const totalFrames = composition.durationInFrames;
+  startStage(jobId, "Render frames", `0/${totalFrames}`);
+  let lastFrames = 0;
+  let lastFrameAt = Date.now();
+  let lastAsset = "";
+  let encodeStarted = false;
+  let lastPctLogged = 0;
+  // For INSTANTANEOUS fps (throughput right now) vs the cumulative average, which
+  // is dragged down by asset-download stalls and misleads ("30→11").
+  let tickFrames = 0;
+  let tickAt = Date.now();
+  let instFps = 0;
+
+  let stallLogged = false;
+  const watchdog = setInterval(() => {
+    // Once all frames are rendered, the Encode/mux phase legitimately produces NO new
+    // frames — don't misread that as a stall (it was firing a false ⚠ during encode).
+    if (lastFrames >= totalFrames) return;
+    const idleMs = Date.now() - lastFrameAt;
+    if (idleMs >= STALL_AFTER_MS) {
+      const reason = `no frame for ${Math.round(idleMs / 1000)}s at ${lastFrames}/${totalFrames}` +
+        (lastAsset ? ` · last asset ${lastAsset}` : "");
+      updateStage(jobId, "Render frames", { status: "stalled", detail: reason });
+      mergeJob(jobId, { stalled: true, stall_reason: reason });
+      // Log the stall too (not just the GUI badge) so it's confirmed in the record.
+      if (!stallLogged) { logLine(jobId, `⚠ STALL — ${reason}`); stallLogged = true; }
+    } else if (stallLogged && idleMs < STALL_AFTER_MS) {
+      logLine(jobId, `▶ resumed at ${lastFrames}/${totalFrames}`);
+      stallLogged = false;
+    }
+  }, 5000);
+
+  try {
+    await renderMedia({
+      composition,
+      serveUrl,
+      codec: "h264",
+      crf, // visually-lossless-but-smaller (was Remotion default → ~1.2GB)
+      outputLocation: outputPath,
+      inputProps,
+      concurrency: RENDER_CONCURRENCY,
+      // Use hardware encoding when available (e.g. macOS VideoToolbox). Falls back
+      // to CPU (libx264) automatically if not supported.
+      hardwareAcceleration: "if-possible",
+      ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
+      timeoutInMilliseconds: RENDER_TIMEOUT_MS,
+      imageFormat: "jpeg",
+      jpegQuality: 90,
+      // cache decoded video frames in memory across Chrome instances
+      offthreadVideoCacheSizeInBytes: 200 * 1024 * 1024,
+      // Which asset each frame is fetching — surfaces a slow/stuck source video.
+      onDownload: (src: string) => {
+        lastAsset = shortAsset(src);
+        logLine(jobId, `⬇ asset ${lastAsset}`);
+        return undefined;
+      },
+      // Headless-Chrome errors (image decode, font, /api/proxy 404, …) → logs.
+      onBrowserLog: (l: any) => {
+        if (l?.type === "error") logLine(jobId, `browser✕ ${String(l.text).slice(0, 200)}`);
+      },
+      onProgress: ({ progress, renderedFrames, encodedFrames, stitchStage }: any) => {
+        const nowMs = Date.now();
+        if (typeof renderedFrames === "number" && renderedFrames > lastFrames) {
+          lastFrames = renderedFrames;
+          lastFrameAt = nowMs;
+          mergeJob(jobId, { stalled: false, stall_reason: undefined, rendered_frames: renderedFrames, total_frames: totalFrames });
+        }
+        const pct = Math.round(15 + progress * 83);
+        const secs = (nowMs - _t0) / 1000;
+        const avgFps = (renderedFrames ?? 0) / Math.max(0.001, secs);
+        // Instantaneous fps over the last ~2s window — the real current throughput.
+        if (nowMs - tickAt >= 2000) {
+          instFps = ((renderedFrames ?? 0) - tickFrames) / ((nowMs - tickAt) / 1000);
+          tickFrames = renderedFrames ?? 0;
+          tickAt = nowMs;
+        }
+        const fps = instFps > 0 ? instFps : avgFps;
+        updateStage(jobId, "Render frames", {
+          status: lastFrames >= totalFrames ? "done" : "running",
+          detail: `${renderedFrames ?? 0}/${totalFrames} · ${fps.toFixed(1)} fps${lastAsset ? " · ⬇ " + lastAsset.slice(0, 28) : ""}`,
+        });
+        // Stage 4 — Encode/mux runs concurrently once frames start landing.
+        if (!encodeStarted && ((encodedFrames ?? 0) > 0 || stitchStage === "muxing")) {
+          encodeStarted = true;
+          startStage(jobId, "Encode", stitchStage || "encoding");
+        }
+        if (encodeStarted) {
+          updateStage(jobId, "Encode", { detail: `${encodedFrames ?? 0}/${totalFrames}${stitchStage ? " · " + stitchStage : ""}` });
+        }
+        mergeJob(jobId, { status: "PROCESSING", progress: pct });
+        if (pct - lastPctLogged >= 10) { lastPctLogged = pct; logLine(jobId, `${pct}% · ${renderedFrames ?? 0}/${totalFrames} frames · ${fps.toFixed(1)} fps`); }
+      },
+    });
+  } finally {
+    clearInterval(watchdog);
+  }
+  endStage(jobId, "Render frames", "done", `${totalFrames}/${totalFrames}`);
+  if (encodeStarted) endStage(jobId, "Encode", "done");
+  } // end !usedNvenc (standard Remotion renderMedia path)
 
   // Render speed metrics — so you can SEE if the cores/GPU/hwAccel actually help.
   const renderSecs = (Date.now() - _t0) / 1000;
@@ -181,9 +527,13 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     `(${speedX.toFixed(2)}x realtime, ${fps.toFixed(1)} render-fps) | ${sizeMB.toFixed(1)}MB | ` +
     `concurrency=${RENDER_CONCURRENCY} gpu=${RENDER_GL || "off"}`
   );
+  logLine(jobId, `✓ done · ${renderSecs.toFixed(1)}s for ${videoSecs.toFixed(1)}s video (${speedX.toFixed(2)}x) · ${sizeMB.toFixed(1)}MB`);
+  _stageStart.delete(jobId);
   mergeJob(jobId, {
     status: "COMPLETED",
     progress: 100,
+    stalled: false,
+    stall_reason: undefined,
     render_seconds: Math.round(renderSecs),
     render_fps: Math.round(fps * 10) / 10,
     speed_x: Math.round(speedX * 100) / 100,
@@ -240,8 +590,14 @@ export async function POST(request: Request) {
 
     runRemotionExport(jobId, design, options).catch((err) => {
       console.error(`[render-remotion] job ${jobId} failed:`, err);
-      const current = jobs.get(jobId);
-      mergeJob(jobId, { status: "FAILED", progress: current?.progress ?? 0, error: err.message });
+      const current = jobs.get(jobId) as any;
+      // Mark whatever stage was running as failed, so the breakdown shows where.
+      const stages = ((current?.stages as any[]) ?? []).map((s) =>
+        s.status === "running" || s.status === "stalled" ? { ...s, status: "failed" } : s,
+      );
+      logLine(jobId, `✕ FAILED · ${String(err?.message || err).slice(0, 300)}`);
+      _stageStart.delete(jobId);
+      mergeJob(jobId, { status: "FAILED", progress: current?.progress ?? 0, error: err.message, stages, stalled: false });
       // Notify vapp_server of failure — skipped in pull mode (agent reports failure).
       if (!options?.skipCallback) {
         fetch(`${CALLBACK_BASE}/vapp/render_callback`, {
@@ -275,6 +631,13 @@ export async function GET(request: Request) {
         job.status === "COMPLETED"
           ? `/api/render-remotion/${id}/download`
           : undefined,
+      // observability
+      stages: job.stages,
+      log: job.log,
+      rendered_frames: job.rendered_frames,
+      total_frames: job.total_frames,
+      stalled: job.stalled,
+      stall_reason: job.stall_reason,
     },
   });
 }

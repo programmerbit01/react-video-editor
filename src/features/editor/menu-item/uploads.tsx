@@ -4,6 +4,7 @@ import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause, AlertCircle
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
+import { resolveAssetUrl } from "../utils/asset-url";
 import { vappAuth, sttForUrl } from "@/utils/vapp-api";
 import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
 import ModalUpload from "@/components/modal-upload";
@@ -184,29 +185,10 @@ const normalizeMediaSrc = (src?: string) => {
   return src;
 };
 
-// Same-origin proxy wrapper. Remotion (<Video>/<Img>/<Audio>) and the timeline
-// filmstrip do CORS-strict `fetch()` + Range on the clip src — the R2/garage host
-// returns 403 on the CORS preflight (OPTIONS), so a direct url fails ("Failed to
-// fetch") there. The editor's own /api/proxy adds CORS + passes Range through.
-// GRID DISPLAY stays DIRECT (getDisplaySrc) — <video>/<img> don't need this.
-const proxied = (src?: string) => {
-  if (!src) return "";
-  if (src.startsWith("/")) return src; // already same-origin (e.g. /editor/uploads/…)
-  const base = (typeof window !== "undefined" && window.location.pathname.startsWith("/editor")) ? "/editor" : "";
-  return `${base}/api/proxy?url=${encodeURIComponent(src)}`;
-};
-
-// R2 (rpublic.tomtap.ai) serves proper CORS (preflight 204 + range) → fetch DIRECT.
-// Only the legacy Garage host 403s the CORS preflight → route those through the proxy.
-const PROXY_ONLY_HOSTS = ["vapp-media-gar.tomtap.ai"];
-const getPlayerSrc = (item: any) => {
-  const src = normalizeMediaSrc(item.metadata?.uploadedUrl || item.url);
-  if (!src || src.startsWith("/")) return src;
-  try {
-    if (PROXY_ONLY_HOSTS.includes(new URL(src).hostname)) return proxied(src);
-  } catch {}
-  return src; // direct — R2 supports CORS-strict fetch()+Range
-};
+// Player src resolves DIRECT (R2 CORS `*`) via the shared resolver — no proxy hop.
+// See utils/asset-url. Grid display uses getDisplaySrc (also direct).
+const getPlayerSrc = (item: any) =>
+  resolveAssetUrl(normalizeMediaSrc(item.metadata?.uploadedUrl || item.url));
 
 const getDisplaySrc = (item: any) => {
   // DIRECT R2 for grid display — <img>/<video>/canvas capture don't need CORS-fetch.
