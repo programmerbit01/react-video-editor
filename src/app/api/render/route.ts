@@ -326,6 +326,7 @@ async function generateHighlightedCaptionOverlays(
   canvasW: number,
   tmpDir: string,
   capIdx: number,
+  baseOnly: boolean = false,
 ): Promise<{ path: string; fromS: number; toS: number }[]> {
   const { createCanvas } = await import("@napi-rs/canvas");
 
@@ -423,13 +424,16 @@ async function generateHighlightedCaptionOverlays(
 
   const overlays: { path: string; fromS: number; toS: number }[] = [];
 
-  // Base overlay — full caption in normal color, covers the whole caption window
+  // Base overlay — full caption in normal color, covers the whole caption window.
   const basePath = path.join(tmpDir, `cap_${capIdx}_base.png`);
   await drawCaption(null, basePath);
   overlays.push({ path: basePath, fromS, toS });
 
-  // Per-word highlighted overlays — generated in parallel for speed
-  if (hasWordHighlight) {
+  // Per-word highlighted overlays (parallel) — SKIPPED in baseOnly mode. Each word adds one
+  // ffmpeg image input downstream, so on a caption-heavy timeline the caller switches to
+  // baseOnly to keep the total input count sane (thousands of full-frame PNG inputs
+  // otherwise exhaust RAM + file descriptors and crash ffmpeg).
+  if (hasWordHighlight && !baseOnly) {
     const firstWordMs = Number(words[0]?.start ?? 0);
     const offsetMs = (captionItem.display?.from ?? 0) - firstWordMs;
     const wordTasks = words.map(async (w: any, wi: number) => {
@@ -816,15 +820,27 @@ async function runExport(
   interface CaptionOverlay { path: string; fromS: number; toS: number; }
   const captionOverlays: CaptionOverlay[] = [];
 
-  // Generate all caption PNGs in parallel across caption items
-  if (captionItems.length) startStage(jobId, "Captions", `${captionItems.length} items`);
+  // Each caption OVERLAY becomes one ffmpeg image input. Per-word highlight multiplies that
+  // by the word count, and a caption-heavy timeline (200+ items) then opens THOUSANDS of
+  // full-frame PNG decoders → tens of GB of RAM + "too many open files" crashes. So estimate
+  // the total up front: if it blows past a safe ceiling, fall back to ONE base PNG per
+  // caption (no per-word highlight) so the input count stays bounded and the render survives.
+  const MAX_CAPTION_INPUTS = Number(process.env.FF_MAX_CAPTION_INPUTS) || 150;
+  const estWordPngs = captionItems.reduce((n: number, it: any) => {
+    const words = Array.isArray(it.details?.words) ? it.details.words.length : 0;
+    const hl = words > 0 && String(it.details?.activeColor || "") && it.details?.activeColor !== it.details?.color;
+    return n + 1 + (hl ? words : 0);
+  }, 0);
+  const captionBaseOnly = estWordPngs > MAX_CAPTION_INPUTS;
+
+  if (captionItems.length) startStage(jobId, "Captions", `${captionItems.length} items${captionBaseOnly ? " · base-only (too many words for per-word highlight)" : " · word-highlight"}`);
   const allWordOverlays = await Promise.all(
     captionItems.map((item: any, i: number) =>
-      generateHighlightedCaptionOverlays(item, outW, outH, canvasW, tmpDir, i)
+      generateHighlightedCaptionOverlays(item, outW, outH, canvasW, tmpDir, i, captionBaseOnly)
     )
   );
   for (const overlays of allWordOverlays) captionOverlays.push(...overlays);
-  if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays`);
+  if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays${captionBaseOnly ? " (base-only)" : ""}`);
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
 
@@ -851,7 +867,7 @@ async function runExport(
     }
   }
 
-  // Add caption PNG inputs (inputs N+1..N+M) — each loops for full duration
+  // Caption PNG inputs (bounded by the base-only fallback above) — each loops full duration.
   const captionInputStart = 1 + entries.length;
   for (const cap of captionOverlays) {
     ffmpegArgs.push("-loop", "1", "-framerate", "1", "-t", String(totalSec), "-i", cap.path);
@@ -942,14 +958,13 @@ async function runExport(
     }
   }
 
-  // Chain caption PNG overlays onto video output
+  // Chain caption overlays onto the video output, each shown only during its window.
   let finalVideoLabel = "vout";
   if (captionOverlays.length > 0) {
     let prevLabel = "vout";
     for (let i = 0; i < captionOverlays.length; i++) {
       const { fromS, toS } = captionOverlays[i];
       const capInputIdx = captionInputStart + i;
-      // scale caption PNG to video size, then overlay with alpha during its time window
       filterParts.push(
         `[${capInputIdx}:v]scale=${outW}:${outH},format=rgba[capscaled${i}]`,
       );
