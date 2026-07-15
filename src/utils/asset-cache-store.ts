@@ -20,7 +20,7 @@ import { Readable } from "stream";
 import path from "path";
 
 export const ASSET_CACHE_DIR = path.join(process.cwd(), ".asset-cache");
-const CACHE_MAX_BYTES = Number(process.env.ASSET_CACHE_MAX_GB || 40) * 1024 * 1024 * 1024;
+const CACHE_MAX_BYTES = Number(process.env.ASSET_CACHE_MAX_GB || 20) * 1024 * 1024 * 1024;
 
 // Key by the STABLE part of the URL (pathname) so presigned/rotating query params
 // don't defeat reuse. Keep the extension so the served file's Content-Type is right.
