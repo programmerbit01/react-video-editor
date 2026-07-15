@@ -11,14 +11,15 @@ import { ensureCached, enforceCap, registerAsset } from "@/utils/asset-cache-sto
 const execFileAsync = promisify(execFile);
 
 // NVENC (NVIDIA hardware h264) for the RE engine. Remotion 4.x has NO nvenc (only
-// macOS VideoToolbox) — its Linux encode is CPU libx264. So on an NVIDIA box we render
-// FRAMES with Remotion (all animations) → encode with the SYSTEM ffmpeg's h264_nvenc.
-// OPT-IN via RENDER_NVENC=1 (Mac path is untouched); any failure falls back to the
-// standard renderMedia libx264/videotoolbox path, so it can only help.
-const RENDER_NVENC_WANTED = process.env.RENDER_NVENC === "1";
+// macOS VideoToolbox) — its Linux encode is CPU libx264. So where the SYSTEM ffmpeg
+// actually supports nvenc we render FRAMES with Remotion (all animations) → encode
+// with h264_nvenc. AUTO-DETECTED (like the GPU GL backend): probe ffmpeg once; if it
+// can nvenc, use it — no manual flag. On Mac/CPU-only boxes the probe fails → standard
+// renderMedia. Force off with RENDER_NVENC=0. Any failure falls back to renderMedia.
+const RENDER_NVENC_OFF = process.env.RENDER_NVENC === "0";
 let _nvencOk: boolean | null = null;
 async function hasNvenc(): Promise<boolean> {
-  if (!RENDER_NVENC_WANTED) return false;
+  if (RENDER_NVENC_OFF) return false;
   if (_nvencOk !== null) return _nvencOk;
   try {
     await execFileAsync("ffmpeg", [
@@ -29,7 +30,7 @@ async function hasNvenc(): Promise<boolean> {
   } catch {
     _nvencOk = false;
   }
-  console.log(`[render-remotion] NVENC: ${_nvencOk ? "available ✓" : "not available → libx264/renderMedia"}`);
+  console.log(`[render-remotion] NVENC auto-detect: ${_nvencOk ? "available ✓ → h264_nvenc" : "not available → libx264/renderMedia"}`);
   return _nvencOk;
 }
 

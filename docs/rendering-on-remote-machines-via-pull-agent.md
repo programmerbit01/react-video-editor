@@ -254,12 +254,13 @@ encode + upload). Reported as `CRF 20 · 1080p` in the card.
 
 ### 9.6 NVENC (opt-in, NVIDIA boxes)
 Remotion 4.x has NO nvenc (only macOS VideoToolbox) — its Linux encode is CPU libx264.
-So on an NVIDIA box, **opt-in** `RENDER_NVENC=1` switches to: Remotion `renderFrames`
+So where the system ffmpeg supports nvenc it switches to: Remotion `renderFrames`
 (all animations) → JPEG sequence + `renderMedia codec:wav` (audio) → the **system
-ffmpeg's `h264_nvenc`** combines them. Guarded by a real nvenc probe; **any failure
-falls back to the standard `renderMedia`** path, so it can only help. Pair with
-`REMOTION_CONCURRENCY=24` (more cores → faster frames — the bigger cost). Untested on
-real NVIDIA at time of writing — verify on the box (`NVENC: available ✓` log).
+ffmpeg's `h264_nvenc`** combines them. **AUTO-DETECTED** (like the GPU GL backend) — a
+one-time ffmpeg probe; if it can nvenc, use it, else standard `renderMedia`. No manual
+flag; force off with `RENDER_NVENC=0`. **Any failure falls back to `renderMedia`**, so
+it can only help. Pair with `REMOTION_CONCURRENCY=24` (more cores → faster frames — the
+bigger cost). Verify on the box (`NVENC auto-detect: available ✓` log).
 
 ### 9.7 Pull agent (deployed per render box — see its own repo)
 - **Poll-retry:** a status-poll timeout no longer fails the job (a fast CPU-saturated
