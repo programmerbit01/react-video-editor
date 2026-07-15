@@ -846,7 +846,15 @@ async function runExport(
 
   // ─── Build FFmpeg filter_complex ─────────────────────────────────────────
   startStage(jobId, "Filter graph");
-  const ffmpegArgs: string[] = ["-y"];
+  // Cap filter threading. A 190-clip Ken Burns timeline builds ~800 filter nodes; with the
+  // default per-pipeline thread pool (= core count) ffmpeg spawned ~9,000 threads, and each
+  // thread's 8MB stack ALONE added up to ~65GB of RAM — the real FF "RAM explosion" once the
+  // caption-PNG blowup was fixed. Bounding the pools keeps the thread count (and its stack
+  // memory) flat; the trade is slower CPU filtering (NVENC still encodes on the GPU).
+  // Tunable via env for boxes with RAM headroom.
+  const FC_THREADS = process.env.FF_FILTER_COMPLEX_THREADS || "1";
+  const FILTER_THREADS = process.env.FF_FILTER_THREADS || "1";
+  const ffmpegArgs: string[] = ["-y", "-filter_threads", FILTER_THREADS, "-filter_complex_threads", FC_THREADS];
 
   // Input 0: base black canvas
   ffmpegArgs.push(
