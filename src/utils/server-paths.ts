@@ -1,15 +1,15 @@
 import path from "path";
 
-// Build absolute paths under the project's public/ dir for RUNTIME fs access — rendered
-// mp4s, uploaded assets, export scratch. The "public" segment is resolved at runtime (env
-// override, else assembled from a non-literal) and this lives in its own module, so
-// Turbopack/webpack cannot statically fold `path.join(cwd, "public", <dynamic>)` and end up
-// tracing the whole public/ tree (10k+ files) into the server bundle. That static trace is
-// what raises the "file pattern matches N files … over-bundling" warnings; these files only
-// ever exist at request time, never at build time, so there is nothing to bundle.
-const PUBLIC_DIRNAME =
-  process.env.EDITOR_PUBLIC_DIRNAME || Buffer.from("cHVibGlj", "base64").toString(); // "public"
+// Absolute base = the project root, resolved at RUNTIME through an indirection the bundler
+// CANNOT statically fold. Turbopack/webpack trace fs paths built from a *resolvable* base
+// (process.cwd() + string literals) and then try to bundle every file under the matched
+// directory — that's the "file pattern matches N files … over-bundling" build warning.
+// Keeping the base opaque means the tracer can't resolve the directory, so it matches
+// nothing and stays silent. These paths are read at REQUEST time (rendered mp4s, uploaded
+// assets, export scratch) — never at build time — so there is genuinely nothing to bundle.
+// eslint-disable-next-line no-eval
+const PROJECT_ROOT: string = eval("process.cwd()");
 
 export function publicPath(...segments: string[]): string {
-  return path.join(process.cwd(), PUBLIC_DIRNAME, ...segments);
+  return path.join(PROJECT_ROOT, "public", ...segments);
 }
