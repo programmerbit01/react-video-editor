@@ -182,12 +182,15 @@ async function runPool<T>(items: T[], limit: number, fn: (t: T) => Promise<void>
   );
 }
 
-// Stage 0 — Localize (OVERLAPPED): instantly rewrite every remote asset src to a local
-// cache route, then warm that cache in the BACKGROUND while the render runs. Assets are
-// warmed in timeline order (earliest-used first). The cache-through route serves any
-// asset the warm hasn't reached yet straight from R2, so the render NEVER waits for the
-// full download up front — total ≈ max(download, render) instead of download + render.
-// Re-render reuses the cache (all ✓ cached, instant). Disable with RENDER_LOCALIZE=0.
+// Stage 0 — Localize: rewrite every remote asset src → a local cache route + warm the
+// cache. DEFAULT is DOWNLOAD-ALL-FIRST (await), because Remotion renders frames in
+// PARALLEL across the whole timeline — the render can request ANY asset at any moment,
+// so if it outruns the download on a slow uplink a frame's <Img> hits the delayRender
+// timeout and the whole render FAILS. Downloading first is safe (render then reads
+// everything locally; re-renders are instant, all ✓ cached).
+// OVERLAP (render-while-downloading, total ≈ max(download,render)) is opt-in via
+// RENDER_LOCALIZE_OVERLAP=1 — only safe on a FAST/datacenter link. Disable localize
+// entirely with RENDER_LOCALIZE=0. The cache-through route stays a safety net either way.
 async function localizeAssets(jobId: string, design: any, serverOrigin: string): Promise<any> {
   if (process.env.RENDER_LOCALIZE === "0") return design;
   let d: any;
@@ -220,9 +223,9 @@ async function localizeAssets(jobId: string, design: any, serverOrigin: string):
     if (typeof s === "string" && urlToLocal.has(s)) it.details.src = urlToLocal.get(s);
   }
 
-  // 2) Warm the cache in the BACKGROUND (not awaited) — the render (returned design)
-  //    starts now; cache-through covers anything not yet warmed.
-  void (async () => {
+  // 2) Warm the cache. Downloads all assets (deduped, bounded concurrency).
+  const overlap = process.env.RENDER_LOCALIZE_OVERLAP === "1";
+  const warm = async () => {
     let done = 0, hits = 0, pulled = 0, pulledBytes = 0;
     const CONC = Number(process.env.RENDER_LOCALIZE_CONCURRENCY || 8);
     await runPool(list, CONC, async (url) => {
@@ -235,13 +238,19 @@ async function localizeAssets(jobId: string, design: any, serverOrigin: string):
         done++;
         logLine(jobId, `    ${done}/${list.length} ✕ ${shortAsset(url)} — ${String((e as any)?.message || e).slice(0, 60)} (cache-through)`);
       }
-      updateStage(jobId, "Localize assets", { detail: `${done}/${list.length}${hits ? ` · ${hits} cached` : ""} (warming)` });
+      updateStage(jobId, "Localize assets", { detail: `${done}/${list.length}${hits ? ` · ${hits} cached` : ""}${overlap ? " (warming)" : ""}` });
     });
     enforceCap().catch(() => {});
     endStage(jobId, "Localize assets", "done", `${list.length} assets · ${hits} cached · ${(pulledBytes / 1048576).toFixed(0)}MB pulled`);
-  })();
+  };
 
-  return d; // return immediately → render proceeds while the cache warms
+  if (overlap) {
+    void warm();            // render starts now, cache warms in background (fast link only)
+  } else {
+    await warm();           // SAFE default: download all → then render reads locally
+  }
+
+  return d;
 }
 
 // NVENC render: Remotion renderFrames → JPEG sequence (all animations) + audio-only

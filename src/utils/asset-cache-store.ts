@@ -65,20 +65,33 @@ export async function cachedSize(key: string): Promise<number | null> {
   try { return (await stat(cacheFilePath(key))).size; } catch { return null; }
 }
 
+// Dedup concurrent downloads of the SAME url → one fetch shared by all callers (the
+// background warm and a cache-through request would otherwise pull the same asset 2-3×,
+// wasting a slow uplink's bandwidth).
+const _inflight = new Map<string, Promise<{ key: string; hit: boolean; size: number }>>();
+
 // Download url → cache (skips if already present). Streams to disk — never buffers a
 // whole (possibly GB-sized) file in memory. `hit` = already cached (reused, no fetch).
 export async function ensureCached(url: string): Promise<{ key: string; hit: boolean; size: number }> {
   const key = assetKey(url);
   const existing = await cachedSize(key);
   if (existing != null) return { key, hit: true, size: existing };
-  await mkdir(ASSET_CACHE_DIR, { recursive: true });
-  const res = await fetch(url);
-  if (!res.ok || !res.body) throw new Error(`fetch ${res.status}`);
-  const file = cacheFilePath(key);
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  await pipeline(Readable.fromWeb(res.body as any), createWriteStream(tmp));
-  await rename(tmp, file);
-  return { key, hit: false, size: (await cachedSize(key)) ?? 0 };
+
+  const running = _inflight.get(url);
+  if (running) return running;
+
+  const task = (async () => {
+    await mkdir(ASSET_CACHE_DIR, { recursive: true });
+    const res = await fetch(url);
+    if (!res.ok || !res.body) throw new Error(`fetch ${res.status}`);
+    const file = cacheFilePath(key);
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    await pipeline(Readable.fromWeb(res.body as any), createWriteStream(tmp));
+    await rename(tmp, file);
+    return { key, hit: false, size: (await cachedSize(key)) ?? 0 };
+  })();
+  _inflight.set(url, task);
+  try { return await task; } finally { _inflight.delete(url); }
 }
 
 // Keep the cache under CACHE_MAX_BYTES by evicting oldest files (LRU by mtime).

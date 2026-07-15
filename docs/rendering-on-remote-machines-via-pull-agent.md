@@ -223,17 +223,23 @@ minimal dormant shim — it only activates for the legacy Garage host
 `vapp-media-gar.tomtap.ai` and ONLY when `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1`
 (default OFF). **Never re-wrap R2 URLs in the proxy.**
 
-### 9.2 Localize prefetch + local asset cache (overlapped)
+### 9.2 Localize prefetch + local asset cache
 Before the render, `localizeAssets()` (in `render-remotion/route.ts`) rewrites every
-remote asset src → a **local cache route** `/api/asset-cache/[key]` instantly, then
-**warms that cache in the BACKGROUND (timeline order)** while the render runs. The
-render starts immediately; the cache-through route serves any not-yet-warm asset from
-R2 on demand + caches it. So the render is compute-bound (no mid-render R2 stalls),
-total ≈ `max(download, render)`, and a **re-render reuses the cache instantly**
-(`✓ cached`). The cache lives on the **render machine** (populated at render time —
-where it's needed). Store: `src/utils/asset-cache-store.ts` (`.asset-cache/`, LRU
-`ASSET_CACHE_MAX_GB` default 40, key by pathname so presigned `?X-Amz-…` doesn't
-defeat reuse). Toggles: `RENDER_LOCALIZE=0`, `RENDER_LOCALIZE_CONCURRENCY`.
+remote asset src → a **local cache route** `/api/asset-cache/[key]` and warms the cache.
+The render then reads all media from localhost = no per-asset R2 stalls; **re-renders
+reuse the cache instantly** (`✓ cached`). Cache lives on the **render machine**
+(populated at render time). Store: `src/utils/asset-cache-store.ts` (`.asset-cache/`,
+LRU `ASSET_CACHE_MAX_GB` default 40, key by pathname so presigned `?X-Amz-…` doesn't
+defeat reuse; **in-flight dedup** so the warm + a cache-through never double-pull).
+
+**Download-all-first is the DEFAULT (safe).** Remotion renders frames in **parallel
+across the whole timeline**, so the render can request ANY asset at any moment — if it
+outruns the download on a slow uplink, a frame's `<Img>` hits the `delayRender` timeout
+and the whole render **FAILS** (`… was called but not cleared after Nms`). So we download
+everything first, then render. **Overlap** (render-while-downloading, total ≈
+`max(download,render)`) is **opt-in via `RENDER_LOCALIZE_OVERLAP=1`** — only safe on a
+fast/datacenter link. The `/api/asset-cache` cache-through route is a safety net either
+way. Toggles: `RENDER_LOCALIZE=0`, `RENDER_LOCALIZE_OVERLAP=1`, `RENDER_LOCALIZE_CONCURRENCY`.
 
 ### 9.3 Observability (stages / logs / stall / fps)
 `render-remotion/route.ts` now writes per-stage timers (**Bundle → Localize → Prepare
