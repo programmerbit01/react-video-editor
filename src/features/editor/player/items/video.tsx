@@ -4,7 +4,7 @@ import { BoxAnim, ContentAnim, MaskAnim } from "@designcombo/animations";
 import { calculateContainerStyles, calculateMediaStyles } from "../styles";
 import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
-import { OffthreadVideo } from "remotion";
+import { OffthreadVideo, getRemotionEnvironment } from "remotion";
 import { kenBurnsTransform } from "./ken-burns";
 import { resolveAssetUrl } from "../../utils/asset-url";
 
@@ -32,6 +32,10 @@ export const Video = ({
   };
   const { durationInFrames } = calculateFrames(item.display, fps);
   const currentFrame = (frame || 0) - (item.display.from * fps) / 1000;
+
+  // GPU-layer promotion (will-change) only in the interactive player — during an
+  // offline render it pins a full-res backing texture per clip and wastes RAM.
+  const promoteLayer = !getRemotionEnvironment().isRendering;
 
   // Ken Burns: optional slow pan/zoom (subtle motion on archival footage too).
   const kbTransform = kenBurnsTransform(
@@ -86,8 +90,9 @@ export const Video = ({
                   ? {
                       transform: kbTransform,
                       transformOrigin: "center center",
-                      willChange: "transform",
-                      backfaceVisibility: "hidden" as const,
+                      ...(promoteLayer
+                        ? { willChange: "transform", backfaceVisibility: "hidden" as const }
+                        : {}),
                     }
                   : {})
               }}

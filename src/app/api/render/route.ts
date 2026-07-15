@@ -105,17 +105,18 @@ export async function POST(request: Request) {
     // so the editor skips its own push-tracking registration + callbacks here.
     const skipCallback = !!options?.skipCallback;
     if (!skipCallback) {
-      try {
-        await registerRenderJob({
-          job_id: jobId,
-          engine: "ffmpeg",
-          source: "editor-manual",
-          project_name: "User Export",
-        });
-        appendJobLog(jobId, "registered in shared render widget");
-      } catch (err) {
-        appendJobLog(jobId, `register failed: ${String(err)}`);
-      }
+      // Fire-and-forget: do NOT await. This posts to the shared render widget on the
+      // vApp server, which can be slow or timing out — awaiting it stalled the jobId
+      // response, so the browser sat at 0% for the whole registration timeout before it
+      // could even start polling. The render itself doesn't depend on this.
+      registerRenderJob({
+        job_id: jobId,
+        engine: "ffmpeg",
+        source: "editor-manual",
+        project_name: "User Export",
+      })
+        .then(() => appendJobLog(jobId, "registered in shared render widget"))
+        .catch((err) => appendJobLog(jobId, `register failed: ${String(err)}`));
     }
 
     runExport(

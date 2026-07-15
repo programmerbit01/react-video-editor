@@ -157,6 +157,13 @@ const RENDER_CONCURRENCY = (() => {
   return Math.max(4, cores - 2);
 })();
 
+// Concurrency is NOT RAM-capped — per-worker RAM is kept low at the source (no GPU-layer
+// texture pinning in render; see items/image.tsx + video.tsx), so full `cores-2` workers
+// stay within budget the way they always did. Helper just reports value + total cores.
+function effectiveConcurrency(): { value: number; cores: number } {
+  return { value: RENDER_CONCURRENCY, cores: os.cpus()?.length || 0 };
+}
+
 // GPU GL backend for headless-Chrome rendering. AUTO: if an NVIDIA GPU is
 // detected (nvidia-smi present, e.g. the 3090 box) we default to "angle" so the
 // GPU is used; on Mac / GPU-less servers we leave it on Remotion's CPU default.
@@ -321,6 +328,8 @@ async function renderViaNvenc(
     mergeJob(jobId, { encoder: "h264_nvenc" }); // so the report shows NVENC live, not just at the end
     logLine(jobId, "NVENC path: renderFrames → ffmpeg h264_nvenc");
     // 1) Render frames (image sequence) — with a stall watchdog + live fps.
+    const conc = effectiveConcurrency();
+    logLine(jobId, `render workers: ${conc.value}/${conc.cores} cores`);
     startStage(jobId, "Render frames", `0/${totalFrames}`);
     let lastFrames = 0, lastAt = Date.now(), tickF = 0, tickAt = Date.now(), inst = 0, lastPct = 0, stalled = false;
     const watch = setInterval(() => {
@@ -338,7 +347,7 @@ async function renderViaNvenc(
         composition, serveUrl, inputProps,
         outputDir: framesDir,
         imageFormat: "jpeg", jpegQuality: 90,
-        concurrency: RENDER_CONCURRENCY,
+        concurrency: conc.value,
         ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
         timeoutInMilliseconds: RENDER_ASSET_TIMEOUT_MS,
         onFrameUpdate: (framesRendered: number) => {
@@ -446,8 +455,10 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   const videoSecs = composition.durationInFrames / composition.fps;
   const exportQuality = String(options?.quality || "high");
   const crf = CRF_BY_QUALITY[exportQuality] ?? 20;
+  const conc = effectiveConcurrency();
+  logLine(jobId, `render workers: ${conc.value}/${conc.cores} cores`);
   const renderCfg = {
-    concurrency: RENDER_CONCURRENCY,
+    concurrency: conc.value,
     cores: totalCores,
     gpu: RENDER_GL ? `on (${RENDER_GL})` : "off",
     hwAccel: "if-possible",
@@ -533,7 +544,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
       crf, // visually-lossless-but-smaller (was Remotion default → ~1.2GB)
       outputLocation: outputPath,
       inputProps,
-      concurrency: RENDER_CONCURRENCY,
+      concurrency: conc.value,
       // Use hardware encoding when available (e.g. macOS VideoToolbox). Falls back
       // to CPU (libx264) automatically if not supported.
       hardwareAcceleration: "if-possible",
@@ -605,7 +616,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   console.log(
     `[render-remotion] ✓ DONE job=${jobId} | ${renderSecs.toFixed(1)}s render for ${videoSecs.toFixed(1)}s video ` +
     `(${speedX.toFixed(2)}x realtime, ${fps.toFixed(1)} render-fps) | ${sizeMB.toFixed(1)}MB | ` +
-    `concurrency=${RENDER_CONCURRENCY} gpu=${RENDER_GL || "off"}`
+    `concurrency=${conc.value} gpu=${RENDER_GL || "off"}`
   );
   logLine(jobId, `✓ done · ${renderSecs.toFixed(1)}s for ${videoSecs.toFixed(1)}s video (${speedX.toFixed(2)}x) · ${sizeMB.toFixed(1)}MB`);
   _stageStart.delete(jobId);
@@ -618,7 +629,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     render_fps: Math.round(fps * 10) / 10,
     speed_x: Math.round(speedX * 100) / 100,
     size_mb: Math.round(sizeMB * 10) / 10,
-    concurrency: RENDER_CONCURRENCY,
+    concurrency: conc.value,
     gpu: RENDER_GL ? `on (${RENDER_GL})` : "off",
   });
 
@@ -656,16 +667,14 @@ export async function POST(request: Request) {
     // Pull mode (skipCallback): the agent registers/reports the job on its source
     // vApp, so the editor skips its own push-tracking registration here.
     if (!options?.skipCallback) {
-      try {
-        await registerRenderJob({
-          job_id: jobId,
-          engine: "remotion",
-          source: "editor-manual",
-          project_name: "User Export",
-        });
-      } catch (err) {
-        console.warn("[render-remotion] register_render_job failed:", err);
-      }
+      // Fire-and-forget — don't await a possibly-slow/timing-out vApp server before
+      // returning the jobId, or the browser sits at 0% until the registration timeout.
+      registerRenderJob({
+        job_id: jobId,
+        engine: "remotion",
+        source: "editor-manual",
+        project_name: "User Export",
+      }).catch((err) => console.warn("[render-remotion] register_render_job failed:", err));
     }
 
     runRemotionExport(jobId, design, options).catch((err) => {

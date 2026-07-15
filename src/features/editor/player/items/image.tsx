@@ -4,7 +4,7 @@ import { BoxAnim, ContentAnim, MaskAnim } from "@designcombo/animations";
 import { calculateContainerStyles, calculateMediaStyles } from "../styles";
 import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
-import { Img } from "remotion";
+import { Img, getRemotionEnvironment } from "remotion";
 import { kenBurnsTransform } from "./ken-burns";
 
 export default function Image({
@@ -30,6 +30,13 @@ export default function Image({
   };
   const { durationInFrames } = calculateFrames(item.display, fps);
   const currentFrame = (frame || 0) - (item.display.from * fps) / 1000;
+
+  // will-change promotes the image to a persistent GPU compositor layer — smooth for
+  // INTERACTIVE preview, but during an offline render it pins a full-resolution backing
+  // texture per image. With many stills across N headless-Chrome workers that alone
+  // exhausted RAM (the "Ken Burns GPU-layer" regression). Each render frame is rasterized
+  // fresh anyway, so the hint buys nothing there — apply it ONLY in the player.
+  const promoteLayer = !getRemotionEnvironment().isRendering;
 
   // Ken Burns: slow pan/zoom on the still, driven by the current frame.
   const kbTransform = kenBurnsTransform(
@@ -84,11 +91,12 @@ export default function Image({
                   ? {
                       transform: kbTransform,
                       transformOrigin: "center center",
-                      // Promote to a GPU compositor layer so the per-frame Ken
-                      // Burns transform is a cheap composite, not a full
-                      // re-rasterize of the (large) image every frame.
-                      willChange: "transform",
-                      backfaceVisibility: "hidden" as const,
+                      // GPU-layer promotion ONLY in the interactive player — during a
+                      // headless render it pins a huge backing texture per still and
+                      // blows up RAM for no gain (see promoteLayer above).
+                      ...(promoteLayer
+                        ? { willChange: "transform", backfaceVisibility: "hidden" as const }
+                        : {}),
                     }
                   : {})
               }}
