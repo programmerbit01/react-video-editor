@@ -139,6 +139,14 @@ async function getBundleUrl(): Promise<string> {
 // 2 minutes gives the bundle/root ample time to evaluate and render.
 const RENDER_TIMEOUT_MS = 120_000;
 
+// A MUCH longer per-frame (delayRender) timeout for the actual render passes. With the
+// overlapped localize, a frame can request an asset that's still downloading; on a slow
+// uplink that fetch can take minutes. This lets the frame WAIT for it instead of failing
+// ("delayRender … not cleared after Nms"). A genuinely-broken asset still fails, just
+// later (the stall watchdog surfaces a no-progress render meanwhile). selectComposition
+// keeps the shorter RENDER_TIMEOUT_MS. Override via RENDER_ASSET_TIMEOUT_MS.
+const RENDER_ASSET_TIMEOUT_MS = Number(process.env.RENDER_ASSET_TIMEOUT_MS) || 600_000;
+
 // Concurrency = parallel headless-Chrome render workers; the biggest single-machine
 // speed lever. AUTO = (cores - 2) so it scales with the box (a 32-core renders with 30,
 // not an artificial cap of 16). Floor 4. Override with REMOTION_CONCURRENCY.
@@ -225,7 +233,11 @@ async function localizeAssets(jobId: string, design: any, serverOrigin: string):
   }
 
   // 2) Warm the cache. Downloads all assets (deduped, bounded concurrency).
-  const overlap = process.env.RENDER_LOCALIZE_OVERLAP === "1";
+  // DEFAULT overlap: render starts immediately, cache warms in the background, and a
+  // frame that needs a not-yet-warm asset WAITS (up to RENDER_ASSET_TIMEOUT_MS) via the
+  // cache-through route instead of blocking the whole render up front. total ≈
+  // max(download, render). Opt out to strict download-all-first with RENDER_LOCALIZE_OVERLAP=0.
+  const overlap = process.env.RENDER_LOCALIZE_OVERLAP !== "0";
   const warm = async () => {
     let done = 0, hits = 0, pulled = 0, pulledBytes = 0;
     const CONC = Number(process.env.RENDER_LOCALIZE_CONCURRENCY || 8);
@@ -290,7 +302,7 @@ async function renderViaNvenc(
         imageFormat: "jpeg", jpegQuality: 90,
         concurrency: RENDER_CONCURRENCY,
         ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
-        timeoutInMilliseconds: RENDER_TIMEOUT_MS,
+        timeoutInMilliseconds: RENDER_ASSET_TIMEOUT_MS,
         onFrameUpdate: (framesRendered: number) => {
           const now = Date.now();
           if (framesRendered > lastFrames) {
@@ -311,7 +323,7 @@ async function renderViaNvenc(
     // 2) Audio-only WAV (fast — no video encode).
     startStage(jobId, "Audio");
     mergeJob(jobId, { status: "PROCESSING", progress: 84 });
-    await renderMedia({ composition, serveUrl, inputProps, codec: "wav" as any, outputLocation: audioPath, timeoutInMilliseconds: RENDER_TIMEOUT_MS });
+    await renderMedia({ composition, serveUrl, inputProps, codec: "wav" as any, outputLocation: audioPath, timeoutInMilliseconds: RENDER_ASSET_TIMEOUT_MS });
     endStage(jobId, "Audio", "done");
 
     // 3) NVENC encode: JPEG sequence (glob-sorted) + audio → mp4.
@@ -474,7 +486,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
       // to CPU (libx264) automatically if not supported.
       hardwareAcceleration: "if-possible",
       ...(RENDER_GL ? { chromiumOptions: { gl: RENDER_GL as any } } : {}),
-      timeoutInMilliseconds: RENDER_TIMEOUT_MS,
+      timeoutInMilliseconds: RENDER_ASSET_TIMEOUT_MS,
       imageFormat: "jpeg",
       jpegQuality: 90,
       // cache decoded video frames in memory across Chrome instances
