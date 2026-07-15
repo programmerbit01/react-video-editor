@@ -197,6 +197,21 @@ export default function AiEditPanel() {
   const resizeRef = useRef({ resizing: false, startX: 0, startY: 0, originW: 0, originH: 0 });
   const resizeLeftRef = useRef({ resizing: false, startX: 0, originW: 0, originX: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Close the settings popover on any click outside it (except the gear toggle, which
+  // handles its own open/close). Was sticking open until the gear was clicked again.
+  useEffect(() => {
+    if (!s.showSettings) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (settingsRef.current?.contains(t) || settingsBtnRef.current?.contains(t)) return;
+      s.setShowSettings(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [s.showSettings]);
 
   useEffect(() => {
     fetch(withEditorBase("/api/ai-edit"))
@@ -755,6 +770,7 @@ export default function AiEditPanel() {
             💡
           </button>
           <button
+            ref={settingsBtnRef}
             onClick={() => s.setShowSettings(!s.showSettings)}
             className={`${iconBtn} ${s.showSettings ? "bg-sky-500/20 text-sky-600" : ""}`}
             title="Settings"
@@ -784,7 +800,7 @@ export default function AiEditPanel() {
         <div className="relative flex flex-col rounded-b-2xl" style={{ height: bodyHeight }}>
           {/* Settings popover */}
           {s.showSettings && (
-            <div className="absolute right-2 top-1 z-20 w-56 rounded-xl border border-border bg-popover p-2.5 shadow-lg">
+            <div ref={settingsRef} className="absolute right-2 top-1 z-20 w-56 rounded-xl border border-border bg-popover p-2.5 shadow-lg">
               <label className="flex items-center justify-between py-1 text-[12px] text-foreground">
                 <span>Mode</span>
                 <select

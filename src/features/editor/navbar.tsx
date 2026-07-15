@@ -485,7 +485,7 @@ export default function Navbar({
               />
             </div>
 
-            <PopoverContent align="center" className="z-[250] w-72 p-2" sideOffset={6}>
+            <PopoverContent align="center" className="z-[10000] w-72 p-2" sideOffset={6}>
               <div
                 onClick={handleNewProject}
                 className="mb-1 flex cursor-pointer items-center gap-2 rounded-md border-b border-border/60 px-2 py-2 text-sm font-medium hover:bg-accent"
@@ -673,7 +673,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="bg-sidebar z-[250] flex w-60 flex-col gap-4"
+        className="bg-sidebar z-[10000] flex w-60 flex-col gap-4"
       >
         <div className="flex items-center justify-between">
           <Label>Export settings</Label>
@@ -689,7 +689,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
               <ChevronDown width={16} className="shrink-0" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="bg-background z-[251] w-[--radix-popover-trigger-width] px-2 py-2">
+          <PopoverContent className="bg-background z-[10001] w-[--radix-popover-trigger-width] px-2 py-2">
             {(Object.entries(EXPORT_TYPE_LABELS) as [string, string][]).map(([val, label]) => (
               <div
                 key={val}
@@ -709,7 +709,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
               <ChevronDown width={16} />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="bg-background z-[251] w-[--radix-popover-trigger-width] px-2 py-2">
+          <PopoverContent className="bg-background z-[10001] w-[--radix-popover-trigger-width] px-2 py-2">
             {(Object.keys(RESOLUTION_LABELS) as (keyof typeof RESOLUTION_LABELS)[]).map((r) => (
               <div
                 key={r}
@@ -729,7 +729,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
               <ChevronDown width={16} />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="bg-background z-[251] w-[--radix-popover-trigger-width] px-2 py-2">
+          <PopoverContent className="bg-background z-[10001] w-[--radix-popover-trigger-width] px-2 py-2">
             {(["high", "medium", "low"] as const).map((q) => (
               <div
                 key={q}
@@ -941,7 +941,7 @@ const TimelineExportMenu = ({ stateManager }: { stateManager: StateManager }) =>
           <ChevronDown width={14} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="bg-background z-[252] w-[--radix-popover-trigger-width] px-2 py-2">
+      <PopoverContent className="bg-background z-[10002] w-[--radix-popover-trigger-width] px-2 py-2">
         {/* Media mode toggle */}
         <div className="flex items-center gap-1.5 px-3 pb-2">
           <span className="text-[10px] text-muted-foreground mr-1">Media:</span>
@@ -1045,7 +1045,7 @@ const ResizeVideo = () => {
           <div>Resize</div>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="z-[250] w-60 px-2.5 py-3">
+      <PopoverContent className="z-[10000] w-60 px-2.5 py-3">
         <div className="text-sm">
           {RESIZE_OPTIONS.map((option, index) => (
             <ResizeOption
@@ -1156,7 +1156,7 @@ const StylePackPicker = () => {
           <span className="hidden sm:inline">{active?.label || "Style Pack"}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="bg-background z-[251] w-60 px-2 py-2" sideOffset={6}>
+      <PopoverContent align="end" className="bg-background z-[10001] w-60 px-2 py-2" sideOffset={6}>
         <p className="px-2 pb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
           Style Pack
         </p>
@@ -1254,7 +1254,7 @@ const LookPicker = () => {
           <span className="hidden sm:inline">{isOn ? active.label : "Look"}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="bg-background z-[251] w-56 px-2 py-2" sideOffset={6}>
+      <PopoverContent align="end" className="bg-background z-[10001] w-56 px-2 py-2" sideOffset={6}>
         <p className="px-2 pb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
           Film Look
         </p>
@@ -1348,7 +1348,7 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
           <span className="hidden sm:inline">{activeTrack?.name || "Music bed"}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="bg-background z-[251] w-72 px-3 py-3" sideOffset={6}>
+      <PopoverContent align="end" className="bg-background z-[10001] w-72 px-3 py-3" sideOffset={6}>
         <audio
           ref={previewAudioRef}
           onEnded={() => setPreviewSrc(null)}

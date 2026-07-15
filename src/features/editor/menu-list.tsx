@@ -96,8 +96,8 @@ const MenuButton = memo<{
       className={cn(
         "flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1 transition-all duration-200",
         isActive
-          ? "bg-white/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-          : "text-muted-foreground hover:bg-white/5 hover:text-white"
+          ? "bg-foreground/10 text-foreground shadow-[inset_0_1px_0_rgba(127,127,127,0.08)]"
+          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
       )}
       key={item.id}
     >
@@ -106,7 +106,7 @@ const MenuButton = memo<{
           <div
             className={cn(
               "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
-              isActive ? "text-white" : `${item.color}`
+              isActive ? "text-foreground" : `${item.color}`
             )}
           >
             <IconComponent width={15} height={15} />
