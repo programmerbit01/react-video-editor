@@ -96,8 +96,9 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
   const { scene } = useSceneStore();
   const timelinePanelRef = useRef<ImperativePanelHandle>(null);
   const sceneRef = useRef<SceneRef>(null);
-  const { timeline, playerRef } = useStore();
+  const { timeline, playerRef, fps } = useStore();
   const { activeIds, trackItemsMap, transitionsMap } = useStore();
+  const lastSeekedIdRef = useRef<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [trackItem, setTrackItem] = useState<ITrackItem | null>(null);
   const {
@@ -176,10 +177,21 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
         if ((trackItem as any).type === "caption") {
           setActiveMenuItem("captions");
         }
+        // Clicking a clip should jump the playhead + preview to it. Seek only when the
+        // selected id actually changes (not on every trackItemsMap churn), so it's a
+        // click response, not a re-seek. Robust vs the LAYER_SELECTION event path.
+        if (lastSeekedIdRef.current !== id) {
+          lastSeekedIdRef.current = id;
+          const fromMs = (trackItem as any)?.display?.from;
+          if (playerRef?.current && typeof fromMs === "number" && Number.isFinite(fromMs)) {
+            playerRef.current.seekTo(Math.max(0, Math.round((fromMs / 1000) * (fps || 30))));
+          }
+        }
       } else console.log(transitionsMap[id]);
     } else {
       setTrackItem(null);
       setLayoutTrackItem(null);
+      lastSeekedIdRef.current = null;
     }
   }, [activeIds, trackItemsMap]);
 
