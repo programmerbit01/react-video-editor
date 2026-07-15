@@ -26,6 +26,18 @@ const TRANSCRIPT_ZONE_H = 16;
 // Type declaration for MP4Clip to avoid SSR issues
 type MP4ClipType = any;
 
+// True only for a near-PURE-black canvas (undecoded/timed-out frame). A strict, low
+// threshold so genuinely dark scenes still pass — we only want to reject the black
+// frames that otherwise get cached permanently. Tainted canvas → can't read → false.
+function isCtxMostlyBlack(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
+  try {
+    const { data } = ctx.getImageData(0, 0, Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)));
+    let sum = 0, n = 0;
+    for (let i = 0; i < data.length; i += 4 * 37) { sum += data[i] + data[i + 1] + data[i + 2]; n++; }
+    return n > 0 && sum / (n * 3) < 6;
+  } catch { return false; }
+}
+
 // Canvas-based thumbnail extractor — fallback when OPFS (MP4Clip) is unavailable (HTTP context).
 // Works with proxied URLs that return Access-Control-Allow-Origin: *.
 class CanvasVideoClip {
@@ -96,17 +108,22 @@ class CanvasVideoClip {
       if (cached) { results.push({ ts, img: cached }); continue; }
 
       const secs = ts / 1e6;
-      // Always seek explicitly — skipping when currentTime matches causes black frames
-      // because the decoder may not have produced the frame yet (especially at t=0 via proxy)
+      // Seek and WAIT for the frame. Nudge t=0 slightly — assigning the CURRENT
+      // currentTime emits no `seeked` event, so we'd draw an undecoded (black) frame.
+      const target = secs <= 0 ? Math.min(0.04, (v.duration || 1) / 2) : secs;
       await new Promise<void>((res) => {
         const timeout = setTimeout(res, 6000);
         const onSeeked = () => { clearTimeout(timeout); v.removeEventListener("seeked", onSeeked); res(); };
         v.addEventListener("seeked", onSeeked);
-        v.currentTime = secs;
+        try { v.currentTime = target; } catch { clearTimeout(timeout); res(); }
       });
       try {
         await new Promise<void>((res) => requestAnimationFrame(() => res()));
+        // Skip undecoded (readyState<2) or near-black frames — capturing them here and
+        // caching to IndexedDB is exactly why thumbnails went black and STAYED black.
+        if (v.readyState < 2) continue;
         ctx.drawImage(v, 0, 0, width, h);
+        if (isCtxMostlyBlack(ctx, width, h)) continue;
         const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.7));
         if (blob) {
           results.push({ ts, img: blob });
@@ -512,6 +529,9 @@ class Video extends Trimmable {
           this.thumbnailCache.setThumbnail(thumbnail.ts, img);
           resolve();
         };
+        // Without onerror a corrupt/empty blob never resolves → Promise.all hangs →
+        // isFetchingThumbnails stays true → the clip refuses all future segment loads.
+        img.onerror = () => { URL.revokeObjectURL(img.src); resolve(); };
       });
     });
 

@@ -214,12 +214,47 @@ export interface VappUploadResult {
   name: string;
 }
 
+// Shrink large images to WebP ≤ this dimension BEFORE upload. A 1080p render never
+// needs more than ~1920px, and WebP q0.85 is visually lossless for photos — a 10MB PNG
+// → ~0.4MB. This is why a 190-image project was 1.8GB of source; downscaling on upload
+// keeps it ~200MB (faster render download + editor load). Override the cap via env.
+const IMG_MAX_DIM = Number(process.env.NEXT_PUBLIC_UPLOAD_IMG_MAX_DIM) || 1920;
+const IMG_WEBP_QUALITY = 0.85;
+
+async function downscaleImageForUpload(file: File): Promise<File> {
+  // Only raster images; keep vectors (svg) + animations (gif) intact.
+  if (!file.type.startsWith('image/') || file.type === 'image/svg+xml' || file.type === 'image/gif') return file;
+  if (typeof document === 'undefined' || typeof createImageBitmap === 'undefined') return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const { width, height } = bitmap;
+    const scale = Math.min(1, IMG_MAX_DIM / Math.max(width, height));
+    // Already small enough → leave it (don't re-encode a tiny asset).
+    if (scale === 1 && file.size < 1_500_000) { bitmap.close?.(); return file; }
+    const w = Math.max(1, Math.round(width * scale));
+    const h = Math.max(1, Math.round(height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const cx = canvas.getContext('2d');
+    if (!cx) { bitmap.close?.(); return file; }
+    cx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, 'image/webp', IMG_WEBP_QUALITY));
+    if (!blob || blob.size >= file.size) return file; // no gain → keep original
+    const name = (file.name || 'image').replace(/\.[^.]+$/, '') + '.webp';
+    return new File([blob], name, { type: 'image/webp' });
+  } catch {
+    return file; // any failure → upload the original untouched
+  }
+}
+
 // Upload a file directly to R2 (presigned) then register it as a library asset.
 export async function uploadVappMediaFile(
   file: File,
   ctx: VappCtx,
   onProgress?: ProgressCb
 ): Promise<VappUploadResult> {
+  file = await downscaleImageForUpload(file); // large images → WebP ≤1920px before upload
   const contentType = file.type || 'application/octet-stream';
   const publicUrl = file.size > MULTIPART_THRESHOLD
     ? await uploadMultipart(ctx, file, contentType, onProgress)

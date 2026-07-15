@@ -6,6 +6,7 @@ import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
 import { OffthreadVideo } from "remotion";
 import { kenBurnsTransform } from "./ken-burns";
+import { resolveAssetUrl } from "../../utils/asset-url";
 
 export const Video = ({
   item,
@@ -74,7 +75,7 @@ export const Video = ({
               startFrom={(item.trim?.from! / 1000) * fps}
               endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
               playbackRate={playbackRate}
-              src={details.src}
+              src={resolveAssetUrl(details.src)}
               volume={options.isMuted ? 0 : (details.volume ?? 100) / 100}
               style={{
                 width: "100%",

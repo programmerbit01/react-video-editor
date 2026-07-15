@@ -244,12 +244,37 @@ export default function Navbar({
     // which render as empty timeline rows and push captions/clips far apart ("kaafi
     // jagah chhod kar neeche"). Empty tracks hold no item references, so dropping them
     // is safe and pulls caption/content rows back adjacent. Never leaves zero tracks.
-    const tracks = (data as any).tracks;
+    let tracks = (data as any).tracks;
     if (Array.isArray(tracks)) {
       const nonEmpty = tracks.filter((t: any) => Array.isArray(t?.items) && t.items.length > 0);
       if (nonEmpty.length && nonEmpty.length < tracks.length) {
-        (data as any).tracks = nonEmpty;
+        tracks = nonEmpty;
+        (data as any).tracks = tracks;
       }
+    }
+
+    // Re-anchor caption tracks next to their clip. A caption track's id is
+    // `captions-track--<clipId>` (and metadata.sourceTrackItemId), so on import we
+    // move each caption track to sit right after the track that contains its clip —
+    // fixes captions rendering rows away from the clip they belong to. Row order = the
+    // tracks-array order, so this deterministically restores adjacency. Load-time only.
+    if (Array.isArray(tracks) && tracks.length > 1) {
+      const clipTrackIndex = (clipId: string) =>
+        tracks.findIndex((t: any) => Array.isArray(t?.items) && t.items.includes(clipId));
+      const captionTracks = tracks.filter((t: any) => typeof t?.id === "string" && t.id.startsWith("captions-track--"));
+      let moved = false;
+      for (const capTrack of captionTracks) {
+        const clipId = String(capTrack.id).slice("captions-track--".length);
+        const clipIdx = clipTrackIndex(clipId);
+        if (clipIdx < 0) continue; // clip not found → leave in place
+        const curIdx = tracks.indexOf(capTrack);
+        if (curIdx === clipIdx + 1) continue; // already adjacent
+        tracks.splice(curIdx, 1); // remove
+        const insertAt = tracks.findIndex((t: any) => Array.isArray(t?.items) && t.items.includes(clipId)) + 1;
+        tracks.splice(insertAt, 0, capTrack);
+        moved = true;
+      }
+      if (moved) (data as any).tracks = tracks;
     }
     return data;
   };

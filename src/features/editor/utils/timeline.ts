@@ -16,7 +16,11 @@ export function getPreviousZoomLevel(
 }
 
 export function getZoomByIndex(index: number) {
-  return TIMELINE_ZOOM_LEVELS[index];
+  // Clamp — an out-of-range index (e.g. -1 from getFitZoomLevel) returns undefined,
+  // which the timeline applies as scale=undefined → NaN left/width → every item
+  // collapses to the origin ("timeline scatters/breaks"). Never return undefined.
+  const i = Math.min(Math.max(index | 0, 0), TIMELINE_ZOOM_LEVELS.length - 1);
+  return TIMELINE_ZOOM_LEVELS[i];
 }
 export function getNextZoomLevel(
   currentZoom: ITimelineScaleState
@@ -101,11 +105,16 @@ export function getFitZoomLevel(
     return level.zoom > targetZoom;
   });
 
-  // const clampedIndex = clamp(fitZoomIndex, 0, TIMELINE_ZOOM_LEVELS.length - 1);
+  // findIndex returns -1 when the target is more zoomed-in than every level (short
+  // clip + Fit) → clamp to the last level so scale.index stays valid (a -1 poisons
+  // the zoom slider → undefined scale → NaN item positions).
+  const clampedIndex = fitZoomIndex < 0
+    ? TIMELINE_ZOOM_LEVELS.length - 1
+    : Math.min(fitZoomIndex, TIMELINE_ZOOM_LEVELS.length - 1);
 
   return {
     segments: 5,
-    index: fitZoomIndex,
+    index: clampedIndex,
     zoom: targetZoom,
     unit: 1 / targetZoom
   };
