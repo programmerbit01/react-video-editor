@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import path from "path";
@@ -32,6 +32,79 @@ function appendJobLog(jobId: string, line: string) {
   const prev = Array.isArray((current as any).log) ? (current as any).log : [];
   const next = [...prev, line].slice(-50);
   jobs.set(jobId, { ...current, log: next });
+}
+
+// Stage timeline — same shape the Remotion path emits so the report card shows FF
+// stage-by-stage (Download / Captions / Filter / Encode) with live detail + timings,
+// instead of a single bar that looks frozen while media downloads.
+const _stageStart = new Map<string, Map<string, number>>();
+function startStage(jobId: string, name: string, detail?: string) {
+  const j = jobs.get(jobId) as any;
+  const stages = [...((j?.stages as any[]) ?? []), { name, status: "running", detail }];
+  let m = _stageStart.get(jobId); if (!m) { m = new Map(); _stageStart.set(jobId, m); }
+  m.set(name, Date.now());
+  mergeJob(jobId, { stages });
+  appendJobLog(jobId, `▶ ${name}${detail ? " · " + detail : ""}`);
+}
+function updateStage(jobId: string, name: string, patch: Record<string, unknown>) {
+  const j = jobs.get(jobId) as any;
+  const stages = ((j?.stages as any[]) ?? []).map((s) => (s.name === name ? { ...s, ...patch } : s));
+  mergeJob(jobId, { stages });
+}
+function endStage(jobId: string, name: string, status: "done" | "failed" = "done", detail?: string) {
+  const j = jobs.get(jobId) as any;
+  const t0 = _stageStart.get(jobId)?.get(name);
+  const ms = t0 ? Date.now() - t0 : undefined;
+  const stages = ((j?.stages as any[]) ?? []).map((s) =>
+    s.name === name ? { ...s, status, ms, ...(detail ? { detail } : {}) } : s,
+  );
+  mergeJob(jobId, { stages });
+  appendJobLog(jobId, `${status === "done" ? "✓" : "✕"} ${name}${ms != null ? " · " + (ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s") : ""}${detail ? " · " + detail : ""}`);
+}
+
+// Run ffmpeg with `-progress pipe:1` so the encode reports LIVE frame/fps/time/speed
+// (ffmpeg's single pass is FF's equivalent of Remotion's "Render frames" stage). Rejects
+// with the stderr tail on a non-zero exit. onProgress fires on each ffmpeg progress block.
+function runFfmpegProgress(
+  args: string[],
+  totalSec: number,
+  onProgress: (p: { frame?: number; fps?: number; timeSec: number; speed?: string; pct: number }) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("ffmpeg", ["-progress", "pipe:1", "-nostats", ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderrTail = "", buf = "";
+    let frame: number | undefined, fps: number | undefined, speed: string | undefined, timeSec = 0;
+    const timeout = setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} reject(new Error("ffmpeg timeout (1h)")); }, 3_600_000);
+    proc.stdout?.on("data", (d) => {
+      buf += d.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        const idx = line.indexOf("=");
+        if (idx < 0) continue;
+        const k = line.slice(0, idx).trim(), v = line.slice(idx + 1).trim();
+        if (k === "frame") frame = parseInt(v, 10) || frame;
+        else if (k === "fps") fps = parseFloat(v) || fps;
+        else if (k === "speed") speed = v;
+        else if (k === "out_time") {
+          const m = v.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/);
+          if (m) timeSec = +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]);
+        } else if (k === "progress") {
+          const pct = totalSec > 0 ? Math.min(100, Math.round((timeSec / totalSec) * 100)) : 0;
+          onProgress({ frame, fps, timeSec, speed, pct });
+        }
+      }
+    });
+    proc.stderr?.on("data", (d) => { stderrTail = (stderrTail + d.toString()).slice(-2000); });
+    proc.on("error", (e) => { clearTimeout(timeout); reject(e); });
+    proc.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(stderrTail || `ffmpeg exited ${code}`));
+    });
+  });
 }
 
 function pickVideoEncoder(
@@ -144,6 +217,7 @@ export async function POST(request: Request) {
         recursive: true,
         force: true,
       }).catch(() => {});
+      _stageStart.delete(jobId); // drop the per-job stage timers
     });
 
     return NextResponse.json({ render: { id: jobId } }, { status: 200 });
@@ -700,10 +774,12 @@ async function runExport(
       return null;
     }
   };
-  // Fixed-size worker pool over a shared cursor.
+  // Fixed-size worker pool over a shared cursor. The Download stage updates LIVE as each
+  // file lands (X/Y · cached · failed) so the report keeps moving instead of sitting on
+  // one static "downloading" line for minutes.
   const entryResults: (MediaEntry | null)[] = new Array(allMedia.length).fill(null);
   let cursor = 0;
-  appendJobLog(jobId, `downloading ${allMedia.length} media (${DL_CONCURRENCY} at a time)`);
+  startStage(jobId, "Download", `0/${allMedia.length} · ${DL_CONCURRENCY} at a time`);
   await Promise.all(
     Array.from({ length: Math.min(DL_CONCURRENCY, allMedia.length) }, async () => {
       while (true) {
@@ -711,13 +787,14 @@ async function runExport(
         if (i >= allMedia.length) return;
         entryResults[i] = await downloadOne(allMedia[i], i);
         dlDone++;
+        updateStage(jobId, "Download", { detail: `${dlDone}/${allMedia.length} · ${dlHit} cached · ${dlFail} failed` });
         // Nudge progress 5→45% across the download phase so the bar moves.
         mergeJob(jobId, { status: "PROCESSING", progress: 5 + Math.round((dlDone / allMedia.length) * 40) });
       }
     }),
   );
   const entries: MediaEntry[] = entryResults.filter(Boolean) as MediaEntry[];
-  appendJobLog(jobId, `media ready ${dlOk}/${allMedia.length} (${dlHit} from cache, ${dlOk - dlHit} pulled, ${dlFail} failed)`);
+  endStage(jobId, "Download", dlOk > 0 ? "done" : "failed", `${dlOk}/${allMedia.length} · ${dlHit} cached · ${dlOk - dlHit} pulled · ${dlFail} failed`);
 
   if (entries.length === 0) {
     const cur = jobs.get(jobId);
@@ -743,17 +820,19 @@ async function runExport(
   const captionOverlays: CaptionOverlay[] = [];
 
   // Generate all caption PNGs in parallel across caption items
+  if (captionItems.length) startStage(jobId, "Captions", `${captionItems.length} items`);
   const allWordOverlays = await Promise.all(
     captionItems.map((item: any, i: number) =>
       generateHighlightedCaptionOverlays(item, outW, outH, canvasW, tmpDir, i)
     )
   );
   for (const overlays of allWordOverlays) captionOverlays.push(...overlays);
+  if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays`);
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
 
   // ─── Build FFmpeg filter_complex ─────────────────────────────────────────
-
+  startStage(jobId, "Filter graph");
   const ffmpegArgs: string[] = ["-y"];
 
   // Input 0: base black canvas
@@ -909,7 +988,7 @@ async function runExport(
   const filterGraph = filterParts.join(";");
   const filterScriptPath = path.join(tmpDir, "filtergraph.txt");
   await writeFile(filterScriptPath, filterGraph, "utf8");
-  appendJobLog(jobId, `filter graph: ${filterParts.length} nodes, ${(filterGraph.length / 1024).toFixed(1)}KB → script file (avoids argv limit)`);
+  endStage(jobId, "Filter graph", "done", `${filterParts.length} nodes · ${(filterGraph.length / 1024).toFixed(1)}KB → script file`);
   ffmpegArgs.push("-filter_complex_script", filterScriptPath);
   ffmpegArgs.push("-map", `[${finalVideoLabel}]`);
   if (hasAudio) ffmpegArgs.push("-map", "[aout]");
@@ -949,22 +1028,33 @@ async function runExport(
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
   ffmpegArgs.push(outputPath);
 
+  startStage(jobId, "Encode", `${platformPreset ? "platform-preset" : encoder.label} · ${totalSec.toFixed(1)}s @ ${outW}x${outH}`);
   mergeJob(jobId, { status: "PROCESSING", progress: 60 });
 
+  let lastEncPct = 0;
   try {
-    await execFileAsync("ffmpeg", ffmpegArgs, {
-      maxBuffer: 256 * 1024 * 1024,
-      timeout: 900_000,
+    await runFfmpegProgress(ffmpegArgs, totalSec, ({ frame, fps, timeSec, speed, pct }) => {
+      // Live encode detail — frame/fps/time/speed, like Remotion's render-frames line.
+      const detail =
+        `${pct}% · ${timeSec.toFixed(1)}/${totalSec.toFixed(0)}s` +
+        (frame != null ? ` · frame ${frame}` : "") +
+        (fps != null ? ` · ${fps.toFixed(0)} fps` : "") +
+        (speed ? ` · ${speed}` : "");
+      updateStage(jobId, "Encode", { detail });
+      // Overall bar: encode occupies 60→95%.
+      mergeJob(jobId, { status: "PROCESSING", progress: 60 + Math.round((pct / 100) * 35) });
+      if (pct - lastEncPct >= 20) { lastEncPct = pct; appendJobLog(jobId, `encoding ${detail}`); }
     });
   } catch (ffErr: any) {
     const cur = jobs.get(jobId);
-    const stderr = ffErr?.stderr ? String(ffErr.stderr).slice(-2000) : "";
-    const msg = stderr || ffErr?.message || "FFmpeg failed";
+    const msg = String(ffErr?.message || "FFmpeg failed");
+    endStage(jobId, "Encode", "failed", msg.slice(0, 120));
     mergeJob(jobId, { status: "FAILED", progress: cur?.progress ?? 60, error: msg });
     appendJobLog(jobId, `FAILED: ${msg}`);
     if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
     return;
   }
+  endStage(jobId, "Encode", "done");
 
   const renderSecs = Math.max(0.001, (Date.now() - startedAt) / 1000);
   const speedX = totalSec / renderSecs;
