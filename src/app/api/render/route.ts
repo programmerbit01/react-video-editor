@@ -36,6 +36,15 @@ function appendJobLog(jobId: string, line: string) {
   jobs.set(jobId, { ...current, log: next });
 }
 
+// Live system-RAM snapshot for the export log — so a RAM spike is visible per-stage and we
+// can see which phase (captions / segments) drives it, and whether it grows (leak) or holds.
+function ramLine(): string {
+  const total = os.totalmem() / 1073741824;
+  const free = os.freemem() / 1073741824;
+  return `📊 RAM ${(total - free).toFixed(1)}/${total.toFixed(1)}GB used · ${free.toFixed(1)}GB free · rss ${(process.memoryUsage().rss / 1073741824).toFixed(2)}GB`;
+}
+function logRam(jobId: string, label: string) { appendJobLog(jobId, `${label} — ${ramLine()}`); }
+
 // Stage timeline — same shape the Remotion path emits so the report card shows FF
 // stage-by-stage (Download / Captions / Filter / Encode) with live detail + timings,
 // instead of a single bar that looks frozen while media downloads.
@@ -713,6 +722,7 @@ async function runExport(
     .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
 
   appendJobLog(jobId, `timeline ${videoItems.length} visual items, ${audioItems.length} audio items, total ${totalSec.toFixed(2)}s`);
+  logRam(jobId, "start (baseline)");
 
   if (videoItems.length === 0 && audioItems.length === 0) {
     mergeJob(jobId, { status: "FAILED", progress: 0, error: "No media items in timeline" });
@@ -858,6 +868,7 @@ async function runExport(
   }));
   for (const overlays of allWordOverlays) if (overlays) captionOverlays.push(...overlays);
   if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays${captionBaseOnly ? " (base-only)" : ""}`);
+  if (captionItems.length) logRam(jobId, "after captions");
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
   if (jobs.get(jobId)?.cancelled) { appendJobLog(jobId, "✕ cancelled by user"); return; } // cancelled during download/captions
@@ -947,10 +958,16 @@ async function runExport(
 
   // Render segments with bounded concurrency (each is RAM-light → a few in parallel is fine).
   // FF_SEG_CONCURRENCY = how many ffmpeg run at once (RAM ∝ this; lower it if RAM is tight).
-  const SEG_CONC = Math.max(2, Number(process.env.FF_SEG_CONCURRENCY) || Math.min(totalCores - 1 || 3, 8));
+  // RAM-AWARE: budget ~2.5GB per segment ffmpeg and never exceed FREE RAM, so a starved box
+  // (this one runs an 18GB LLM + services) auto-drops parallelism instead of OOMing. Explicit
+  // FF_SEG_CONCURRENCY overrides. Floor 2.
+  const freeGB = os.freemem() / 1073741824;
+  const ramCap = Math.max(2, Math.floor(freeGB / 2.5));
+  const SEG_CONC = Math.max(2, Number(process.env.FF_SEG_CONCURRENCY) || Math.min(totalCores - 1 || 3, 8, ramCap));
   const nGap = segs.filter((s) => !s.entry).length;
   startStage(jobId, "Render segments", `0/${segs.length} · ${SEG_CONC} ffmpeg parallel`);
-  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg · supersample ${Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2)}x`);
+  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg (RAM-bounded, ${freeGB.toFixed(1)}GB free) · supersample ${Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2)}x`);
+  logRam(jobId, "segments start");
   const segPaths: string[] = new Array(segs.length);
   let segDone = 0, segCursor = 0; const encStartT = Date.now();
   try {
@@ -965,7 +982,7 @@ async function runExport(
         updateStage(jobId, "Render segments", { detail: `${segDone}/${segs.length} · ${SEG_CONC} parallel · ${spd.toFixed(1)} seg/s` });
         if (segDone % 25 === 0 || segDone === segs.length) {
           const eta = spd > 0 ? Math.round((segs.length - segDone) / spd) : 0;
-          appendJobLog(jobId, `segments ${segDone}/${segs.length} · ${spd.toFixed(1)}/s · ~${eta}s left`);
+          appendJobLog(jobId, `segments ${segDone}/${segs.length} · ${spd.toFixed(1)}/s · ~${eta}s left · ${ramLine()}`);
         }
         mergeJob(jobId, { status: "PROCESSING", progress: 55 + Math.round((segDone / segs.length) * 35) });
       }

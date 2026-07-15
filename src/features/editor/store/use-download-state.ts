@@ -381,13 +381,33 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             } else if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") {
               set({ exporting: false, error: String(j?.error || "Render queue job failed.") });
             } else {
+              qPollFails = 0; // reached the server
+              // A queued job sits at 0% until a render AGENT claims it — show WHAT it's waiting
+              // on so it isn't a blank 0%. Once the agent reports stages/log, that takes over.
+              if (!rm?.log && !rm?.stages) {
+                const waiting = status === "" || status === "pending" || status === "queued";
+                set({
+                  report: {
+                    ...get().report,
+                    log: [waiting
+                      ? "⏳ Queued — waiting for a free render agent to pick this up…"
+                      : `▶ Agent claimed the job (${status}) — starting render…`],
+                  },
+                });
+              }
               setTimeout(checkStatus, 2500);
             }
           } catch (pollErr) {
-            set({ exporting: false, error: String(pollErr) });
+            // Don't kill the export on one transient miss — the queue job keeps running.
+            if (++qPollFails >= 12) {
+              set({ exporting: false, error: `Lost contact with the render queue (${String(pollErr)}). The job may still be running — reopen to check.` });
+            } else {
+              setTimeout(checkStatus, 3000);
+            }
           }
         };
 
+        let qPollFails = 0;
         setTimeout(checkStatus, 2000);
       } catch (error) {
         console.error(error);
