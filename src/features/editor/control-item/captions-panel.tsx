@@ -131,21 +131,32 @@ function buildCaptionItem(trackItem: ITrackItem, segment: any, segIdx: number, s
 function removeCaption(trackItem: ITrackItem) {
   const sm = getStateManagerRef();
   if (!sm) return;
-  const captionTrackId = `${CAPTION_TRACK_PREFIX}${trackItem.id}`;
   const state = sm.getState();
   const tracks: any[] = Array.isArray(state?.tracks) ? state.tracks : [];
   const map = { ...(state?.trackItemsMap || {}) };
   const ids: string[] = Array.isArray(state?.trackItemIds) ? [...state.trackItemIds] : [];
 
-  const toRemove = Object.keys(map).filter(
-    (id) => map[id]?.metadata?.sourceTrackItemId === trackItem.id && map[id]?.metadata?.addedCaption
+  const toRemove = new Set(
+    Object.keys(map).filter(
+      (id) => map[id]?.metadata?.sourceTrackItemId === trackItem.id && map[id]?.metadata?.addedCaption
+    )
   );
   toRemove.forEach((id) => delete map[id]);
 
+  // Captions share ONE track — remove only THIS clip's caption items from the caption
+  // track(s), and drop a caption track only if it ends up empty.
+  const nextTracks = tracks
+    .map((t) =>
+      t?.type === "caption"
+        ? { ...t, items: (Array.isArray(t.items) ? t.items : []).filter((id: string) => !toRemove.has(id)) }
+        : t
+    )
+    .filter((t) => t?.type !== "caption" || (Array.isArray(t.items) && t.items.length > 0));
+
   sm.updateState(
     {
-      tracks: tracks.filter((t) => t.id !== captionTrackId),
-      trackItemIds: ids.filter((id) => !toRemove.includes(id)),
+      tracks: nextTracks,
+      trackItemIds: ids.filter((id) => !toRemove.has(id)),
       trackItemsMap: map
     },
     { updateHistory: true }
@@ -166,7 +177,6 @@ function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style
     (id) => currentMap[id]?.metadata?.sourceTrackItemId === trackItem.id && currentMap[id]?.metadata?.addedCaption
   );
   oldIds.forEach((id) => delete currentMap[id]);
-  const filteredTracks = currentTracks.filter((t) => t.id !== captionTrackId);
   const filteredIds = currentIds.filter((id) => !oldIds.includes(id));
 
   const newItems = transcript.segments
@@ -177,32 +187,41 @@ function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style
   newItems.forEach((item) => { currentMap[item.id] = item; });
   const newIds = [...filteredIds, ...newItems.map((i) => i.id)];
 
-  let insertAfter = filteredTracks.findIndex(
-    (t) => Array.isArray(t.items) && t.items.includes(trackItem.id)
-  );
-  if (insertAfter === -1) insertAfter = filteredTracks.length - 1;
-
-  const newTrack = {
-    id: captionTrackId,
-    type: "caption",
-    name: "Captions",
-    accepts: ["caption"],
-    items: newItems.map((i) => i.id),
-    magnetic: false,
-    static: false,
-    metadata: { captionTrack: true, sourceTrackItemId: trackItem.id }
-  };
+  // ALL captions share ONE caption track (single row). If a caption track already
+  // exists, merge this clip's captions into it (dropping any other caption tracks);
+  // otherwise create one right after this clip's track. Items keep sourceTrackItemId,
+  // so per-clip add/remove still works.
+  const capTracks = currentTracks.filter((t) => t?.type === "caption");
+  let nextTracks: any[];
+  if (capTracks.length) {
+    const mergedItemIds = [
+      ...capTracks.flatMap((t) => (Array.isArray(t.items) ? t.items : []).filter((id: string) => !oldIds.includes(id))),
+      ...newItems.map((i) => i.id),
+    ];
+    const sharedTrack = { ...capTracks[0], id: capTracks[0].id, type: "caption", items: mergedItemIds };
+    let placed = false;
+    nextTracks = [];
+    for (const t of currentTracks) {
+      if (t?.type === "caption") { if (!placed) { nextTracks.push(sharedTrack); placed = true; } }
+      else nextTracks.push(t);
+    }
+  } else {
+    let insertAfter = currentTracks.findIndex((t) => Array.isArray(t.items) && t.items.includes(trackItem.id));
+    if (insertAfter === -1) insertAfter = currentTracks.length - 1;
+    const newTrack = {
+      id: captionTrackId, type: "caption", name: "Captions", accepts: ["caption"],
+      items: newItems.map((i) => i.id), magnetic: false, static: false,
+      metadata: { captionTrack: true },
+    };
+    nextTracks = [
+      ...currentTracks.slice(0, insertAfter + 1),
+      newTrack,
+      ...currentTracks.slice(insertAfter + 1),
+    ];
+  }
 
   sm.updateState(
-    {
-      tracks: [
-        ...filteredTracks.slice(0, insertAfter + 1),
-        newTrack,
-        ...filteredTracks.slice(insertAfter + 1)
-      ],
-      trackItemIds: newIds,
-      trackItemsMap: currentMap
-    },
+    { tracks: nextTracks, trackItemIds: newIds, trackItemsMap: currentMap },
     { updateHistory: true }
   );
 }

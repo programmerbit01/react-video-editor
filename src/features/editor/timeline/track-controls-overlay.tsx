@@ -5,7 +5,9 @@ import useTrackVisibilityStore from "../store/use-track-visibility-store";
 
 // Must match sizesMap in timeline.tsx
 const ROW_H: Record<string, number> = {
-  caption: 32,
+  video: 50,
+  image: 50,
+  caption: 26,
   text: 32,
   audio: 36,
   linealAudioBars: 40,

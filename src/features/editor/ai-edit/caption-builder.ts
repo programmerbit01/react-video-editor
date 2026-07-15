@@ -114,7 +114,6 @@ export function addCaptions(
     (id) => currentMap[id]?.metadata?.sourceTrackItemId === trackItem.id && currentMap[id]?.metadata?.addedCaption
   );
   oldIds.forEach((id) => delete currentMap[id]);
-  const filteredTracks = currentTracks.filter((t: any) => t.id !== captionTrackId);
   const filteredIds = currentIds.filter((id: string) => !oldIds.includes(id));
 
   const newItems = transcript.segments
@@ -127,26 +126,35 @@ export function addCaptions(
   });
   const newIds = [...filteredIds, ...newItems.map((i) => i.id)];
 
-  let insertAfter = filteredTracks.findIndex((t: any) => Array.isArray(t.items) && t.items.includes(trackItem.id));
-  if (insertAfter === -1) insertAfter = filteredTracks.length - 1;
-
-  const newTrack = {
-    id: captionTrackId,
-    type: "caption",
-    name: "Captions",
-    accepts: ["caption"],
-    items: newItems.map((i) => i.id),
-    magnetic: false,
-    static: false,
-    metadata: { captionTrack: true, sourceTrackItemId: trackItem.id },
-  };
+  // ALL captions share ONE caption track (single row) — merge into the existing caption
+  // track if present, else create one after this clip's track.
+  const capTracks = currentTracks.filter((t: any) => t?.type === "caption");
+  let nextTracks: any[];
+  if (capTracks.length) {
+    const mergedItemIds = [
+      ...capTracks.flatMap((t: any) => (Array.isArray(t.items) ? t.items : []).filter((id: string) => !oldIds.includes(id))),
+      ...newItems.map((i) => i.id),
+    ];
+    const sharedTrack = { ...capTracks[0], type: "caption", items: mergedItemIds };
+    let placed = false;
+    nextTracks = [];
+    for (const t of currentTracks) {
+      if (t?.type === "caption") { if (!placed) { nextTracks.push(sharedTrack); placed = true; } }
+      else nextTracks.push(t);
+    }
+  } else {
+    let insertAfter = currentTracks.findIndex((t: any) => Array.isArray(t.items) && t.items.includes(trackItem.id));
+    if (insertAfter === -1) insertAfter = currentTracks.length - 1;
+    const newTrack = {
+      id: captionTrackId, type: "caption", name: "Captions", accepts: ["caption"],
+      items: newItems.map((i) => i.id), magnetic: false, static: false,
+      metadata: { captionTrack: true },
+    };
+    nextTracks = [...currentTracks.slice(0, insertAfter + 1), newTrack, ...currentTracks.slice(insertAfter + 1)];
+  }
 
   sm.updateState(
-    {
-      tracks: [...filteredTracks.slice(0, insertAfter + 1), newTrack, ...filteredTracks.slice(insertAfter + 1)],
-      trackItemIds: newIds,
-      trackItemsMap: currentMap,
-    },
+    { tracks: nextTracks, trackItemIds: newIds, trackItemsMap: currentMap },
     { updateHistory: true }
   );
   return newItems.map((i) => i.id);

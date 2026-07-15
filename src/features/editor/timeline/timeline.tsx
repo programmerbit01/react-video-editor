@@ -207,7 +207,10 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
         right: TIMELINE_OFFSET_CANVAS_RIGHT
       },
       sizesMap: {
-        caption: 32,
+        // taller video/image rows (bigger filmstrip), shorter caption row
+        video: 50,
+        image: 50,
+        caption: 26,
         text: 32,
         audio: 36,
         customTrack: 40,

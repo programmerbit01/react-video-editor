@@ -253,28 +253,19 @@ export default function Navbar({
       }
     }
 
-    // Re-anchor caption tracks next to their clip. A caption track's id is
-    // `captions-track--<clipId>` (and metadata.sourceTrackItemId), so on import we
-    // move each caption track to sit right after the track that contains its clip —
-    // fixes captions rendering rows away from the clip they belong to. Row order = the
-    // tracks-array order, so this deterministically restores adjacency. Load-time only.
-    if (Array.isArray(tracks) && tracks.length > 1) {
-      const clipTrackIndex = (clipId: string) =>
-        tracks.findIndex((t: any) => Array.isArray(t?.items) && t.items.includes(clipId));
-      const captionTracks = tracks.filter((t: any) => typeof t?.id === "string" && t.id.startsWith("captions-track--"));
-      let moved = false;
-      for (const capTrack of captionTracks) {
-        const clipId = String(capTrack.id).slice("captions-track--".length);
-        const clipIdx = clipTrackIndex(clipId);
-        if (clipIdx < 0) continue; // clip not found → leave in place
-        const curIdx = tracks.indexOf(capTrack);
-        if (curIdx === clipIdx + 1) continue; // already adjacent
-        tracks.splice(curIdx, 1); // remove
-        const insertAt = tracks.findIndex((t: any) => Array.isArray(t?.items) && t.items.includes(clipId)) + 1;
-        tracks.splice(insertAt, 0, capTrack);
-        moved = true;
+    // Merge ALL caption tracks into ONE row. Each clip's captions were created on its
+    // own `captions-track--<clipId>` track → multiple caption rows. Captions are
+    // time-positioned and don't overlap, so they all fit on a single track and each
+    // still sits (by time) under its clip. Items keep metadata.sourceTrackItemId, so
+    // per-clip add/remove still works. Load-time only.
+    if (Array.isArray(tracks)) {
+      const capTracks = tracks.filter((t: any) => t?.type === "caption");
+      if (capTracks.length > 1) {
+        const first = capTracks[0];
+        first.items = capTracks.flatMap((t: any) => (Array.isArray(t.items) ? t.items : []));
+        tracks = tracks.filter((t: any) => t === first || t?.type !== "caption");
+        (data as any).tracks = tracks;
       }
-      if (moved) (data as any).tracks = tracks;
     }
     return data;
   };
