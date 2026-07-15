@@ -140,12 +140,13 @@ async function getBundleUrl(): Promise<string> {
 const RENDER_TIMEOUT_MS = 120_000;
 
 // Concurrency = parallel headless-Chrome render workers; the biggest single-machine
-// speed lever. Default to (cores - 1), capped 4..16, overridable via env.
+// speed lever. AUTO = (cores - 2) so it scales with the box (a 32-core renders with 30,
+// not an artificial cap of 16). Floor 4. Override with REMOTION_CONCURRENCY.
 const RENDER_CONCURRENCY = (() => {
   const env = parseInt(process.env.REMOTION_CONCURRENCY || "", 10);
   if (Number.isFinite(env) && env > 0) return env;
   const cores = os.cpus()?.length || 8;
-  return Math.max(4, Math.min(cores - 1, 16));
+  return Math.max(4, cores - 2);
 })();
 
 // GPU GL backend for headless-Chrome rendering. AUTO: if an NVIDIA GPU is
@@ -267,6 +268,8 @@ async function renderViaNvenc(
   await mkdir(framesDir, { recursive: true });
 
   try {
+    mergeJob(jobId, { encoder: "h264_nvenc" }); // so the report shows NVENC live, not just at the end
+    logLine(jobId, "NVENC path: renderFrames → ffmpeg h264_nvenc");
     // 1) Render frames (image sequence) — with a stall watchdog + live fps.
     startStage(jobId, "Render frames", `0/${totalFrames}`);
     let lastFrames = 0, lastAt = Date.now(), tickF = 0, tickAt = Date.now(), inst = 0, lastPct = 0, stalled = false;
@@ -387,6 +390,9 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
     crf,
     export_quality: exportQuality,
     resolution: `${composition.width}x${composition.height}`,
+    // Best-guess encoder for the standard renderMedia path; the NVENC path overrides
+    // this to h264_nvenc at its start so the report shows what actually encoded.
+    encoder: os.platform() === "darwin" ? "videotoolbox" : "libx264",
   };
   console.log(
     `[render-remotion] ▶ START job=${jobId} | ${composition.width}x${composition.height}@${composition.fps}fps ` +

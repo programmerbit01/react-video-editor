@@ -161,6 +161,7 @@ export function renderStatsLine(j: RenderJob, phase: "live" | "done"): string {
   } else {
     if (j.resolution)  p.push(j.resolution);
     if (j.crf != null) p.push(`CRF ${j.crf}`);
+    if (j.encoder)     p.push(j.encoder);
     if (j.gpu)         p.push(`GPU ${j.gpu}`);
     if (j.cores)       p.push(`${j.cores} cores`);
     if (j.concurrency) p.push(`cc ${j.concurrency}`);
