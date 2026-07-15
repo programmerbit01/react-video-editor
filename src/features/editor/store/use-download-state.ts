@@ -161,14 +161,22 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         const jobInfo = await response.json();
         const jobId = jobInfo.render.id;
 
+        // A render can saturate the network while it downloads assets, so a single
+        // status poll can transiently "Failed to fetch" even though the server job is
+        // fine. Don't kill the whole export on ONE blip — only give up after several
+        // consecutive misses (~30s of no contact). The server job keeps running
+        // regardless; we're just reconnecting the progress feed.
+        let pollFails = 0;
+        const MAX_POLL_FAILS = 12;
         const checkStatus = async () => {
           try {
             const statusResponse = await fetch(`${apiBase}/${jobId}`, {
               headers: { "Content-Type": "application/json" },
             });
-            if (!statusResponse.ok) throw new Error("Failed to fetch export status.");
+            if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
 
             const statusInfo = await statusResponse.json();
+            pollFails = 0; // reached the server — reset the miss counter
             const r = statusInfo.render || {};
             const { status, progress, presigned_url: url, error, public_url: publicUrl } = r;
             set({
@@ -196,7 +204,13 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
               set({ exporting: false, error: error || "Export failed. Check server logs." });
             }
           } catch (pollErr) {
-            set({ exporting: false, error: String(pollErr) });
+            pollFails++;
+            if (pollFails >= MAX_POLL_FAILS) {
+              set({ exporting: false, error: `Lost contact with the render server after ${pollFails} tries (${String(pollErr)}). The render may still be running — reopen the export to check.` });
+            } else {
+              // transient network hiccup — keep polling, back off slightly
+              setTimeout(checkStatus, 3000);
+            }
           }
         };
 

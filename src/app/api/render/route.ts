@@ -10,6 +10,7 @@ import { Readable } from "stream";
 import os from "os";
 
 import { jobs } from "./jobs";
+import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
 
 const execFileAsync = promisify(execFile);
 
@@ -655,7 +656,7 @@ async function runExport(
   // via RENDER_CONCURRENCY; FF must too. 8 in flight keeps the pipe busy without
   // stampeding the origin.
   mergeJob(jobId, { status: "PROCESSING", progress: 5 });
-  let dlOk = 0, dlFail = 0, dlDone = 0;
+  let dlOk = 0, dlFail = 0, dlDone = 0, dlHit = 0;
   const DL_CONCURRENCY = Math.max(4, Math.min(8, totalCores || 8));
   const downloadOne = async (item: any, i: number): Promise<MediaEntry | null> => {
     // Unwrap legacy /api/proxy?url=… wrappers so we fetch the real asset directly
@@ -664,17 +665,30 @@ async function runExport(
     const rawSrc: string = item.details?.src || item.details?.url || "";
     const src = unwrapProxyMediaUrl(rawSrc);
     if (!src) { dlFail++; appendJobLog(jobId, `⬇ skip [${item.type}] no src on item ${item.id ?? i}`); return null; }
-    const rawExt = detectMediaExtension(src) || "mp4";
-    const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
-      "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
-    const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
+    const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
     try {
-      await fetchToFile(src, tmpFile);
+      let filePath: string;
+      if (/^https?:\/\//i.test(src)) {
+        // Reuse the SHARED asset cache the Remotion path fills (.asset-cache/). If the
+        // project was localized for an RE render the files are already on disk → instant
+        // HIT, no network at all. That's WHY RE "just works" and FF used to re-hammer the
+        // CDN. ensureCached dedups + downloads once on a miss; the outer pool caps how
+        // many misses fetch at once so we never stampede the origin.
+        const { key, hit } = await ensureCached(src);
+        filePath = cacheFilePath(key);
+        if (hit) dlHit++;
+      } else {
+        // Local/relative (/api/…, public paths) — not an R2 asset; fetch into tmp.
+        const rawExt = detectMediaExtension(src) || "mp4";
+        const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
+          "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
+        filePath = path.join(tmpDir, `media_${i}.${safeExt}`);
+        await fetchToFile(src, filePath);
+      }
       dlOk++;
-      const isImage = item.type === "image" || /\.(jpe?g|png|webp)$/i.test(tmpFile);
-      const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
-      const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
-      return { path: tmpFile, item, kind, isImage, hasAudio } as MediaEntry;
+      const isImage = item.type === "image" || /\.(jpe?g|png|webp)$/i.test(filePath);
+      const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(filePath));
+      return { path: filePath, item, kind, isImage, hasAudio } as MediaEntry;
     } catch (err) {
       // Surface the actual reason in the job log so a broken/expired/private URL
       // is visible in the export report instead of a silent "no media" failure.
@@ -702,7 +716,7 @@ async function runExport(
     }),
   );
   const entries: MediaEntry[] = entryResults.filter(Boolean) as MediaEntry[];
-  appendJobLog(jobId, `downloaded ${dlOk}/${allMedia.length} media (${dlFail} failed)`);
+  appendJobLog(jobId, `media ready ${dlOk}/${allMedia.length} (${dlHit} from cache, ${dlOk - dlHit} pulled, ${dlFail} failed)`);
 
   if (entries.length === 0) {
     const cur = jobs.get(jobId);
