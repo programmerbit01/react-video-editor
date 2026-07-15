@@ -226,20 +226,22 @@ minimal dormant shim — it only activates for the legacy Garage host
 ### 9.2 Localize prefetch + local asset cache
 Before the render, `localizeAssets()` (in `render-remotion/route.ts`) rewrites every
 remote asset src → a **local cache route** `/api/asset-cache/[key]` and warms the cache.
-The render then reads all media from localhost = no per-asset R2 stalls; **re-renders
-reuse the cache instantly** (`✓ cached`). Cache lives on the **render machine**
-(populated at render time). Store: `src/utils/asset-cache-store.ts` (`.asset-cache/`,
-LRU `ASSET_CACHE_MAX_GB` default 40, key by pathname so presigned `?X-Amz-…` doesn't
-defeat reuse; **in-flight dedup** so the warm + a cache-through never double-pull).
+The render reads media from localhost = no per-asset R2 stalls; **re-renders reuse the
+cache instantly** (`✓ cached`). Cache lives on the **render machine** (populated at render
+time — so a re-render on a DIFFERENT worker starts cold). Store:
+`src/utils/asset-cache-store.ts` (`.asset-cache/`, LRU `ASSET_CACHE_MAX_GB` **default 20**,
+key by pathname so presigned `?X-Amz-…` doesn't defeat reuse; **in-flight dedup** so the
+warm + a cache-through never double-pull; no TTL — evicts oldest only when over cap).
 
-**Download-all-first is the DEFAULT (safe).** Remotion renders frames in **parallel
-across the whole timeline**, so the render can request ANY asset at any moment — if it
-outruns the download on a slow uplink, a frame's `<Img>` hits the `delayRender` timeout
-and the whole render **FAILS** (`… was called but not cleared after Nms`). So we download
-everything first, then render. **Overlap** (render-while-downloading, total ≈
-`max(download,render)`) is **opt-in via `RENDER_LOCALIZE_OVERLAP=1`** — only safe on a
-fast/datacenter link. The `/api/asset-cache` cache-through route is a safety net either
-way. Toggles: `RENDER_LOCALIZE=0`, `RENDER_LOCALIZE_OVERLAP=1`, `RENDER_LOCALIZE_CONCURRENCY`.
+**OVERLAP is the DEFAULT** (render starts immediately, cache warms in the background).
+Remotion renders frames in **parallel across the whole timeline**, so a frame can request
+an asset that's still downloading — the `/api/asset-cache` cache-through route serves it
+from R2 on demand and the frame **WAITS** (up to `RENDER_ASSET_TIMEOUT_MS`, default **600s**)
+instead of failing `delayRender … not cleared after Nms`. So total ≈ `max(download, render)`
+with no up-front wait and no timeout fail. (Earlier a 120s timeout made overlap FAIL on a
+slow uplink — hence the long asset timeout.) Opt out to strict download-all-first with
+`RENDER_LOCALIZE_OVERLAP=0`. Toggles: `RENDER_LOCALIZE=0`, `RENDER_LOCALIZE_OVERLAP=0`,
+`RENDER_LOCALIZE_CONCURRENCY`, `RENDER_ASSET_TIMEOUT_MS`.
 
 ### 9.3 Observability (stages / logs / stall / fps)
 `render-remotion/route.ts` now writes per-stage timers (**Bundle → Localize → Prepare
@@ -293,3 +295,38 @@ bigger cost). Verify on the box (`NVENC auto-detect: available ✓` log).
 | `NVENC path failed — falling back…` | frame glob / ffmpeg / no nvenc — using libx264; safe |
 | Agent reports `R2 upload ok` not `R2 multipart ok` | server multipart endpoints unreachable (old vApp) — single-PUT fallback |
 | Some old-project asset fails to load (CORS) | it's on the legacy Garage host — set `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1` or migrate |
+
+---
+
+## 10. Editor fixes (2026-07-15, same pass)
+
+Beyond rendering, a sweep of editor/timeline bugs (from a 3-way code scan):
+
+**Timeline**
+- **Scatter on zoom** — `getZoomByIndex(-1)`→`undefined` scale → NaN item left/width →
+  items collapsed to the origin. Clamped `getZoomByIndex` + restored the (commented-out)
+  clamp in `getFitZoomLevel` (`utils/timeline.ts`).
+- **Captions on ONE row** — per-clip `captions-track--<clipId>` tracks are merged into a
+  single caption track (they're time-positioned so each still sits under its clip).
+  Handled in load (`patchDesignMetadata`), create (`applyCaption` + ai-edit `addCaptions`
+  reuse the shared track) and remove (drop only this clip's items; track only when empty).
+- **Captions follow their clip on move** — `hooks/use-caption-sync.ts`: captions carry
+  `metadata.relFrom/relTo` (offset from the clip's start); on any `trackItemsMap` change a
+  caption is shifted to `clipFrom + relFrom`, so moving a clip drags its captions. No
+  update loop (drift→0); `updateHistory:false`.
+- **Black thumbnails that stick** — `timeline/items/video.ts` skips undecoded
+  (`readyState<2`) and near-black frames BEFORE caching (they were persisted to IndexedDB
+  forever); nudges t=0 so a `seeked` fires; adds `img.onerror` so a bad blob can't hang the
+  filmstrip. **Black preview** — player `OffthreadVideo` src now goes through `resolveAssetUrl`.
+- **Click a clip → playhead + preview seek to it** (`editor.tsx`, on `activeIds` change).
+- **Row heights** — video/image 50px, caption 24px (`sizesMap` + `track-controls-overlay ROW_H`).
+
+**Uploads** — `utils/vapp-upload-client.ts` downscales images to WebP ≤1920px before the
+R2 PUT (`NEXT_PUBLIC_UPLOAD_IMG_MAX_DIM`). A 10MB PNG → ~0.4MB (huge PNGs were the real
+"render download is slow" cause). Studios have their own WebP step in `vapp_higgs`; that
+still lacks a downscale — a separate follow-up.
+
+**UI** — light-theme active sidebar tab was `text-white` (invisible) → theme-aware
+`text-foreground`; navbar dropdowns (Download etc.) raised to z-10000+ so they sit ABOVE
+the AI Edit / Script floating panels (z-9999); AI Edit settings popover closes on
+outside-click.
