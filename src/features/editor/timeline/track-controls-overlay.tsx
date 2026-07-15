@@ -7,7 +7,7 @@ import useTrackVisibilityStore from "../store/use-track-visibility-store";
 const ROW_H: Record<string, number> = {
   video: 50,
   image: 50,
-  caption: 26,
+  caption: 24,
   text: 32,
   audio: 36,
   linealAudioBars: 40,

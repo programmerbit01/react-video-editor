@@ -104,6 +104,10 @@ function buildCaptionItem(trackItem: ITrackItem, segment: any, segIdx: number, s
       addedCaption: true,
       // groupCaptionItems() in preset-picker and caption-words groups by sourceUrl
       sourceUrl: (trackItem as any)?.details?.src ?? "",
+      // offset from the clip's start → used by useCaptionSync to keep the caption glued
+      // to its clip when the clip is moved (shift caption by the same delta).
+      relFrom: displayFrom - clipDisplayFrom,
+      relTo: displayTo - clipDisplayFrom,
     },
     details: {
       text: String(segment.text || "").trim(),

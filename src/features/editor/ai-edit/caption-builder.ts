@@ -70,6 +70,9 @@ function buildCaptionItem(trackItem: any, segment: any, segIdx: number, style: C
       sourceTrackItemId: trackItem.id,
       addedCaption: true,
       sourceUrl: trackItem?.details?.src ?? "",
+      // offset from clip start → useCaptionSync keeps the caption glued to its clip.
+      relFrom: displayFrom - clipDisplayFrom,
+      relTo: displayTo - clipDisplayFrom,
     },
     details: {
       text: String(segment.text || "").trim(),

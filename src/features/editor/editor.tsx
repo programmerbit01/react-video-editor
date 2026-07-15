@@ -30,6 +30,7 @@ import useLayoutStore from "./store/use-layout-store";
 import ControlItemHorizontal from "./control-item-horizontal";
 import { design } from "./mock";
 import useTranscriptGuides from "./hooks/use-transcript-guides";
+import useCaptionSync from "./hooks/use-caption-sync";
 import { setStateManagerRef } from "./utils/state-manager-ref";
 import ScriptGuidePanel from "./control-item/script-guide-panel";
 import AiEditPanel from "./control-item/ai-edit-panel";
@@ -110,6 +111,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
 
   useTimelineEvents();
   useTranscriptGuides(stateManager);
+  useCaptionSync(stateManager);
   setStateManagerRef(stateManager);
 
   const { setCompactFonts, setFonts } = useDataState();
