@@ -150,17 +150,34 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             quality: exportQuality,
           },
         });
+        // Gzip the payload before uploading (browser-native, big projects only). A
+        // caption-heavy design is tens of MB of JSON and compresses ~85-90%, so a slow
+        // cloudflared-tunnel POST that used to take minutes drops to seconds. A CUSTOM
+        // header (not Content-Encoding) tells our server to inflate it, so CDNs/proxies
+        // in between don't try to auto-decompress. Falls back to plain JSON if unsupported.
+        let body: BodyInit = bodyStr;
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        let gzNote = "";
+        if (typeof CompressionStream !== "undefined" && bodyStr.length > 256 * 1024) {
+          try {
+            const stream = new Blob([bodyStr]).stream().pipeThrough(new CompressionStream("gzip"));
+            const blob = await new Response(stream).blob();
+            body = blob;
+            headers["X-Payload-Gzip"] = "1";
+            gzNote = ` → ${(blob.size / 1048576).toFixed(1)}MB gzipped`;
+          } catch { /* unsupported → send raw */ }
+        }
         const sizeMB = (bodyStr.length / 1048576).toFixed(1);
         set({
           report: {
             ...get().report,
-            log: [`⬆ uploading project (${sizeMB}MB) to ${base ? "remote render server" : "editor"}…`],
+            log: [`⬆ uploading project (${sizeMB}MB${gzNote}) to ${base ? "remote render server" : "editor"}…`],
           },
         });
         const response = await fetch(apiBase, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: bodyStr,
+          headers,
+          body,
         });
 
         if (!response.ok) {

@@ -8,6 +8,7 @@ import { mkdir, rm } from "fs/promises";
 import { jobs } from "./jobs";
 import { ensureCached, enforceCap, registerAsset } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
+import { readJsonBody } from "@/utils/request-body";
 
 const execFileAsync = promisify(execFile);
 
@@ -650,7 +651,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const { design, options } = body;
     if (!design) {
       return NextResponse.json({ message: "design required" }, { status: 400 });

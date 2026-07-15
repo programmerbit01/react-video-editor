@@ -12,6 +12,7 @@ import os from "os";
 import { jobs } from "./jobs";
 import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
+import { readJsonBody } from "@/utils/request-body";
 
 const execFileAsync = promisify(execFile);
 
@@ -161,7 +162,7 @@ async function registerRenderJob(payload: Record<string, unknown>) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const { design, options } = body;
     if (!design) return NextResponse.json({ message: "design required" }, { status: 400 });
 
