@@ -537,7 +537,13 @@ function buildKenBurnsFilter(
   const progress = `min(on\\,${motionFrames})/${motionFrames}`;
   const centerX = "iw/2-(iw/zoom/2)";
   const centerY = "ih/2-(ih/zoom/2)";
-  const scaledW = Math.max(outW, Math.round(outW * 1.25));
+  // Supersample the source well above the output before zoompan. zoompan rounds its crop
+  // origin to whole INPUT pixels each frame; at only ~1.25× (2400px) the sub-pixel drift
+  // rounds unevenly → the image visibly TREMBLES/shakes during the zoom or pan. Scaling to
+  // ~3× gives zoompan enough resolution for smooth motion (segment-per-clip keeps the RAM
+  // of the bigger frame bounded). Tunable via FF_KENBURNS_SUPERSAMPLE.
+  const superSample = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 3);
+  const scaledW = Math.max(outW, Math.round(outW * superSample));
 
   let z = `min(1+${zt.toFixed(4)}*${progress},${maxZoom})`;
   let x = centerX;
@@ -820,12 +826,12 @@ async function runExport(
   interface CaptionOverlay { path: string; fromS: number; toS: number; }
   const captionOverlays: CaptionOverlay[] = [];
 
-  // Each caption OVERLAY becomes one ffmpeg image input. Per-word highlight multiplies that
-  // by the word count, and a caption-heavy timeline (200+ items) then opens THOUSANDS of
-  // full-frame PNG decoders → tens of GB of RAM + "too many open files" crashes. So estimate
-  // the total up front: if it blows past a safe ceiling, fall back to ONE base PNG per
-  // caption (no per-word highlight) so the input count stays bounded and the render survives.
-  const MAX_CAPTION_INPUTS = Number(process.env.FF_MAX_CAPTION_INPUTS) || 150;
+  // Per-word highlight generates one PNG per word. With segment-per-clip rendering, each
+  // segment only overlays the FEW captions in its window (not all at once), so word highlight
+  // is affordable again — the old ceiling existed only because the monolithic graph opened
+  // one ffmpeg input per PNG. Keep a high safety cap so a truly absurd project (thousands of
+  // words) still falls back to base-only to bound PNG generation time/disk.
+  const MAX_CAPTION_INPUTS = Number(process.env.FF_MAX_CAPTION_INPUTS) || 4000;
   const estWordPngs = captionItems.reduce((n: number, it: any) => {
     const words = Array.isArray(it.details?.words) ? it.details.words.length : 0;
     const hl = words > 0 && String(it.details?.activeColor || "") && it.details?.activeColor !== it.details?.color;
