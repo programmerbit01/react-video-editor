@@ -9,7 +9,7 @@ import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import os from "os";
 
-import { jobs } from "./jobs";
+import { jobs, jobChildren } from "./jobs";
 import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
 import { readJsonBody } from "@/utils/request-body";
@@ -543,7 +543,7 @@ function buildKenBurnsFilter(
   // rounds unevenly → the image visibly TREMBLES/shakes during the zoom or pan. Scaling to
   // ~3× gives zoompan enough resolution for smooth motion (segment-per-clip keeps the RAM
   // of the bigger frame bounded). Tunable via FF_KENBURNS_SUPERSAMPLE.
-  const superSample = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 3);
+  const superSample = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2);
   const scaledW = Math.max(outW, Math.round(outW * superSample));
 
   let z = `min(1+${zt.toFixed(4)}*${progress},${maxZoom})`;
@@ -841,12 +841,22 @@ async function runExport(
   const captionBaseOnly = estWordPngs > MAX_CAPTION_INPUTS;
 
   if (captionItems.length) startStage(jobId, "Captions", `${captionItems.length} items${captionBaseOnly ? " · base-only (too many words for per-word highlight)" : " · word-highlight"}`);
-  const allWordOverlays = await Promise.all(
-    captionItems.map((item: any, i: number) =>
-      generateHighlightedCaptionOverlays(item, outW, outH, canvasW, tmpDir, i, captionBaseOnly)
-    )
-  );
-  for (const overlays of allWordOverlays) captionOverlays.push(...overlays);
+  // Generate caption PNGs through a BOUNDED pool, not one big Promise.all. Each word makes a
+  // full-frame 1920×1080 canvas (~8MB of NATIVE memory); word-highlight over 200+ captions =
+  // ~1800 canvases, and doing them all at once spiked RAM by ~14GB. 8 captions in flight keeps
+  // peak canvas memory to a few hundred MB. Tunable via FF_CAPTION_CONCURRENCY.
+  const CAP_CONC = Math.max(2, Number(process.env.FF_CAPTION_CONCURRENCY) || 8);
+  const allWordOverlays: { path: string; fromS: number; toS: number }[][] = new Array(captionItems.length);
+  let capCursor = 0, capDone = 0;
+  await Promise.all(Array.from({ length: Math.min(CAP_CONC, captionItems.length) }, async () => {
+    while (true) {
+      const i = capCursor++;
+      if (i >= captionItems.length) return;
+      allWordOverlays[i] = await generateHighlightedCaptionOverlays(captionItems[i], outW, outH, canvasW, tmpDir, i, captionBaseOnly);
+      if (++capDone % 40 === 0) updateStage(jobId, "Captions", { detail: `${capDone}/${captionItems.length}` });
+    }
+  }));
+  for (const overlays of allWordOverlays) if (overlays) captionOverlays.push(...overlays);
   if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays${captionBaseOnly ? " (base-only)" : ""}`);
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
@@ -922,32 +932,49 @@ async function runExport(
     }
     a.push("-filter_complex", fp.join(";"), "-map", `[${prev}]`, ...segVideoArgs,
       "-r", String(DEFAULT_FPS), "-pix_fmt", "yuv420p", "-an", "-t", dur.toFixed(3), segPath);
-    await execFileAsync("ffmpeg", a, { timeout: 900_000, maxBuffer: 32 * 1024 * 1024 });
+    // Track the child so a Cancel can SIGKILL it mid-render (not just stop the next wave).
+    let reg = jobChildren.get(jobId); if (!reg) { reg = new Set(); jobChildren.set(jobId, reg); }
+    await new Promise<void>((resolve, reject) => {
+      const child = execFile("ffmpeg", a, { timeout: 900_000, maxBuffer: 32 * 1024 * 1024 }, (err) => {
+        reg!.delete(child);
+        if (err) reject(err); else resolve();
+      });
+      reg!.add(child);
+    });
     return segPath;
   };
 
-  // Render segments with bounded concurrency (each is light → a few in parallel is fine).
-  startStage(jobId, "Render segments", `0/${segs.length}`);
-  // Each segment ffmpeg is now RAM-light (~300MB w/ -filter_threads 1), so use most of the
-  // box's cores — the old cap of 4 left an 8+ core render box idle (190 segments / 4 workers
-  // = ~48 slow waves). Tunable via FF_SEG_CONCURRENCY (bump higher if the GPU allows more
-  // parallel NVENC sessions).
+  // Render segments with bounded concurrency (each is RAM-light → a few in parallel is fine).
+  // FF_SEG_CONCURRENCY = how many ffmpeg run at once (RAM ∝ this; lower it if RAM is tight).
   const SEG_CONC = Math.max(2, Number(process.env.FF_SEG_CONCURRENCY) || Math.min(totalCores - 1 || 3, 8));
+  const nGap = segs.filter((s) => !s.entry).length;
+  startStage(jobId, "Render segments", `0/${segs.length} · ${SEG_CONC} ffmpeg parallel`);
+  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg · supersample ${Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2)}x`);
   const segPaths: string[] = new Array(segs.length);
   let segDone = 0, segCursor = 0; const encStartT = Date.now();
   try {
     await Promise.all(Array.from({ length: Math.min(SEG_CONC, segs.length) }, async () => {
       while (true) {
+        if (jobs.get(jobId)?.cancelled) return; // Cancel: stop claiming new segments
         const i = segCursor++;
         if (i >= segs.length) return;
         segPaths[i] = await renderSeg(segs[i], i);
         segDone++;
         const spd = segDone / Math.max(0.1, (Date.now() - encStartT) / 1000);
-        updateStage(jobId, "Render segments", { detail: `${segDone}/${segs.length} · ${spd.toFixed(1)} seg/s` });
+        updateStage(jobId, "Render segments", { detail: `${segDone}/${segs.length} · ${SEG_CONC} parallel · ${spd.toFixed(1)} seg/s` });
+        if (segDone % 25 === 0 || segDone === segs.length) {
+          const eta = spd > 0 ? Math.round((segs.length - segDone) / spd) : 0;
+          appendJobLog(jobId, `segments ${segDone}/${segs.length} · ${spd.toFixed(1)}/s · ~${eta}s left`);
+        }
         mergeJob(jobId, { status: "PROCESSING", progress: 55 + Math.round((segDone / segs.length) * 35) });
       }
     }));
   } catch (segErr: any) {
+    if (jobs.get(jobId)?.cancelled) {  // ffmpeg was SIGKILLed by a cancel → not a real failure
+      endStage(jobId, "Render segments", "failed", "cancelled");
+      appendJobLog(jobId, "✕ cancelled by user");
+      return;
+    }
     const msg = String(segErr?.stderr ? String(segErr.stderr).slice(-800) : segErr?.message || "segment render failed");
     endStage(jobId, "Render segments", "failed", msg.slice(0, 120));
     mergeJob(jobId, { status: "FAILED", progress: jobs.get(jobId)?.progress ?? 55, error: msg });
@@ -955,6 +982,7 @@ async function runExport(
     if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
     return;
   }
+  if (jobs.get(jobId)?.cancelled) { appendJobLog(jobId, "✕ cancelled by user"); return; }
   endStage(jobId, "Render segments", "done", `${segs.length} segments`);
 
   // Concat (no re-encode) → silent video; re-encode fallback if -c copy can't stitch them.

@@ -250,9 +250,20 @@ const DownloadProgressModal = () => {
                 <div>Closing the browser will not cancel the export.</div>
                 <div>You can minimize this and keep working.</div>
               </div>
-              <Button variant="outline" onClick={handleMinimize}>
-                Minimize
-              </Button>
+              <div className="flex items-center justify-center gap-2">
+                <Button variant="outline" onClick={handleMinimize}>
+                  Minimize
+                </Button>
+                {exporting && (
+                  <Button
+                    variant="outline"
+                    className="text-red-600 hover:text-red-700"
+                    onClick={() => actions.cancelExport()}
+                  >
+                    Cancel export
+                  </Button>
+                )}
+              </div>
             </>
           )}
         </div>

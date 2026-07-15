@@ -45,6 +45,8 @@ interface DownloadState {
   remoteUrl: string;
   displayProgressModal: boolean;
   minimizedProgressModal: boolean;
+  // POST target to cancel the running export (`${apiBase}/${jobId}/cancel`), or null.
+  cancelUrl?: string | null;
   actions: {
     setProjectId: (projectId: string) => void;
     setExporting: (exporting: boolean) => void;
@@ -60,6 +62,8 @@ interface DownloadState {
     startExport: (remoteBase?: string) => void;
     // Queue the render as a pull job on the vApp server; a free render agent claims it.
     startQueueExport: () => void;
+    // Cancel the currently-running export (kills the render's ffmpeg).
+    cancelExport: () => void;
     setDisplayProgressModal: (displayProgressModal: boolean) => void;
     setMinimizedProgressModal: (minimized: boolean) => void;
   };
@@ -94,6 +98,11 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
     setProgress: (progress) => set({ progress }),
     setState: (state) => set({ ...state }),
     setOutput: (output) => set({ output }),
+    cancelExport: async () => {
+      const url = get().cancelUrl;
+      set({ exporting: false, error: "Export cancelled.", cancelUrl: null });
+      if (url) { try { await fetch(url, { method: "POST" }); } catch { /* best-effort */ } }
+    },
     setDisplayProgressModal: (displayProgressModal) =>
       set({ displayProgressModal }),
     setMinimizedProgressModal: (minimizedProgressModal) =>
@@ -188,6 +197,8 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
 
         const jobInfo = await response.json();
         const jobId = jobInfo.render.id;
+        // Enable the Cancel button — POSTs to the render editor (over remoteBase if remote).
+        set({ cancelUrl: `${apiBase}/${jobId}/cancel` });
 
         // A render can saturate the network while it downloads assets, so a single
         // status poll can transiently "Failed to fetch" even though the server job is
