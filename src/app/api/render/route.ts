@@ -884,7 +884,10 @@ async function runExport(
   const renderSeg = async (seg: Seg, idx: number): Promise<string> => {
     const dur = Math.max(0.1, seg.toS - seg.fromS);
     const segPath = path.join(tmpDir, `seg_${String(idx).padStart(5, "0")}.mp4`);
-    const a: string[] = ["-y", "-hide_banner", "-nostdin", "-loglevel", "error"];
+    // Single-clip segments don't need slice-threaded filtering; capping the pools keeps each
+    // ffmpeg at ~10 threads instead of ~100 (per-process stack RAM ~800MB → ~80MB).
+    const a: string[] = ["-y", "-hide_banner", "-nostdin", "-loglevel", "error",
+      "-filter_threads", "1", "-filter_complex_threads", "1"];
     const fp: string[] = [];
     if (seg.entry && seg.entry.isImage) {
       a.push("-loop", "1", "-t", dur.toFixed(3), "-i", seg.entry.path);

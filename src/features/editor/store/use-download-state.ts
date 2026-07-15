@@ -136,20 +136,31 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         const basePathPrefix = base ? (process.env.NEXT_PUBLIC_BASE_PATH || "") : "";
         const apiBase = `${base}${basePathPrefix}${routePath}`;
 
+        // Serialize once so we can show the payload size — a caption-heavy project is a
+        // big JSON, and POSTing it to a REMOTE editor (often over a cloudflared tunnel) can
+        // take a while. Without this the modal sat at a blank 0% the whole upload.
+        const bodyStr = JSON.stringify({
+          design: designWithLook,
+          options: {
+            fps: 30,
+            maxDim,
+            mutedTrackIds,
+            hiddenTrackIds,
+            format: exportType,
+            quality: exportQuality,
+          },
+        });
+        const sizeMB = (bodyStr.length / 1048576).toFixed(1);
+        set({
+          report: {
+            ...get().report,
+            log: [`⬆ uploading project (${sizeMB}MB) to ${base ? "remote render server" : "editor"}…`],
+          },
+        });
         const response = await fetch(apiBase, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            design: designWithLook,
-            options: {
-              fps: 30,
-              maxDim,
-              mutedTrackIds,
-              hiddenTrackIds,
-              format: exportType,
-              quality: exportQuality,
-            },
-          }),
+          body: bodyStr,
         });
 
         if (!response.ok) {
