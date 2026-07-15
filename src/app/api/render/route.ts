@@ -792,7 +792,7 @@ async function runExport(
     Array.from({ length: Math.min(DL_CONCURRENCY, allMedia.length) }, async () => {
       while (true) {
         const i = cursor++;
-        if (i >= allMedia.length) return;
+        if (i >= allMedia.length || jobs.get(jobId)?.cancelled) return;
         entryResults[i] = await downloadOne(allMedia[i], i);
         dlDone++;
         updateStage(jobId, "Download", { detail: `${dlDone}/${allMedia.length} · ${dlHit} cached · ${dlFail} failed` });
@@ -851,7 +851,7 @@ async function runExport(
   await Promise.all(Array.from({ length: Math.min(CAP_CONC, captionItems.length) }, async () => {
     while (true) {
       const i = capCursor++;
-      if (i >= captionItems.length) return;
+      if (i >= captionItems.length || jobs.get(jobId)?.cancelled) return;
       allWordOverlays[i] = await generateHighlightedCaptionOverlays(captionItems[i], outW, outH, canvasW, tmpDir, i, captionBaseOnly);
       if (++capDone % 40 === 0) updateStage(jobId, "Captions", { detail: `${capDone}/${captionItems.length}` });
     }
@@ -860,6 +860,7 @@ async function runExport(
   if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays${captionBaseOnly ? " (base-only)" : ""}`);
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
+  if (jobs.get(jobId)?.cancelled) { appendJobLog(jobId, "✕ cancelled by user"); return; } // cancelled during download/captions
 
   // ─── Segment-per-clip render (bounded RAM) ────────────────────────────────
   // The OLD path built one giant filter_complex: ~one ffmpeg input per clip AND per caption
