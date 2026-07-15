@@ -648,38 +648,58 @@ async function runExport(
   }
   const allMedia = [...videoItems, ...audioItems];
 
-  // Download all media files in parallel — biggest speedup for multi-clip timelines
+  // Download media through a CONCURRENCY-CAPPED pool — NOT one big Promise.all.
+  // Firing 200+ simultaneous TLS handshakes at a CDN (R2/Cloudflare) makes cold
+  // connects time out en masse, so every file comes back "fetch failed" even though
+  // each URL is perfectly reachable one at a time. The Remotion path already batches
+  // via RENDER_CONCURRENCY; FF must too. 8 in flight keeps the pipe busy without
+  // stampeding the origin.
   mergeJob(jobId, { status: "PROCESSING", progress: 5 });
-  let dlOk = 0, dlFail = 0;
-  const entryResults = await Promise.all(
-    allMedia.map(async (item: any, i: number) => {
-      // Unwrap legacy /api/proxy?url=… wrappers so we fetch the real asset directly
-      // (the render-remotion path already does this; FF must too or it 404s on the
-      // proxy). rawSrc may be a full proxied URL or a bare relative one.
-      const rawSrc: string = item.details?.src || item.details?.url || "";
-      const src = unwrapProxyMediaUrl(rawSrc);
-      if (!src) { dlFail++; appendJobLog(jobId, `⬇ skip [${item.type}] no src on item ${item.id ?? i}`); return null; }
-      const rawExt = detectMediaExtension(src) || "mp4";
-      const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
-        "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
-      const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
-      try {
-        await fetchToFile(src, tmpFile);
-        dlOk++;
-        const isImage = item.type === "image" || /\.(jpe?g|png|webp)$/i.test(tmpFile);
-        const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
-        const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
-        return { path: tmpFile, item, kind, isImage, hasAudio } as MediaEntry;
-      } catch (err) {
-        // Surface the actual reason in the job log so a broken/expired/private URL
-        // is visible in the export report instead of a silent "no media" failure.
-        dlFail++;
-        const reason = String((err as any)?.message ?? err);
-        console.error(`[render] skipping ${src}: ${reason}`);
-        appendJobLog(jobId, `⬇ failed [${item.type}] ${src.slice(0, 160)} — ${reason.slice(0, 160)}`);
-        return null;
+  let dlOk = 0, dlFail = 0, dlDone = 0;
+  const DL_CONCURRENCY = Math.max(4, Math.min(8, totalCores || 8));
+  const downloadOne = async (item: any, i: number): Promise<MediaEntry | null> => {
+    // Unwrap legacy /api/proxy?url=… wrappers so we fetch the real asset directly
+    // (the render-remotion path already does this; FF must too or it 404s on the
+    // proxy). rawSrc may be a full proxied URL or a bare relative one.
+    const rawSrc: string = item.details?.src || item.details?.url || "";
+    const src = unwrapProxyMediaUrl(rawSrc);
+    if (!src) { dlFail++; appendJobLog(jobId, `⬇ skip [${item.type}] no src on item ${item.id ?? i}`); return null; }
+    const rawExt = detectMediaExtension(src) || "mp4";
+    const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
+      "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
+    const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
+    try {
+      await fetchToFile(src, tmpFile);
+      dlOk++;
+      const isImage = item.type === "image" || /\.(jpe?g|png|webp)$/i.test(tmpFile);
+      const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
+      const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
+      return { path: tmpFile, item, kind, isImage, hasAudio } as MediaEntry;
+    } catch (err) {
+      // Surface the actual reason in the job log so a broken/expired/private URL
+      // is visible in the export report instead of a silent "no media" failure.
+      dlFail++;
+      const reason = String((err as any)?.message ?? err);
+      console.error(`[render] skipping ${src}: ${reason}`);
+      appendJobLog(jobId, `⬇ failed [${item.type}] ${src.slice(0, 160)} — ${reason.slice(0, 160)}`);
+      return null;
+    }
+  };
+  // Fixed-size worker pool over a shared cursor.
+  const entryResults: (MediaEntry | null)[] = new Array(allMedia.length).fill(null);
+  let cursor = 0;
+  appendJobLog(jobId, `downloading ${allMedia.length} media (${DL_CONCURRENCY} at a time)`);
+  await Promise.all(
+    Array.from({ length: Math.min(DL_CONCURRENCY, allMedia.length) }, async () => {
+      while (true) {
+        const i = cursor++;
+        if (i >= allMedia.length) return;
+        entryResults[i] = await downloadOne(allMedia[i], i);
+        dlDone++;
+        // Nudge progress 5→45% across the download phase so the bar moves.
+        mergeJob(jobId, { status: "PROCESSING", progress: 5 + Math.round((dlDone / allMedia.length) * 40) });
       }
-    })
+    }),
   );
   const entries: MediaEntry[] = entryResults.filter(Boolean) as MediaEntry[];
   appendJobLog(jobId, `downloaded ${dlOk}/${allMedia.length} media (${dlFail} failed)`);
