@@ -928,7 +928,11 @@ async function runExport(
 
   // Render segments with bounded concurrency (each is light → a few in parallel is fine).
   startStage(jobId, "Render segments", `0/${segs.length}`);
-  const SEG_CONC = Math.max(2, Math.min(4, totalCores ? Math.floor(totalCores / 2) : 3));
+  // Each segment ffmpeg is now RAM-light (~300MB w/ -filter_threads 1), so use most of the
+  // box's cores — the old cap of 4 left an 8+ core render box idle (190 segments / 4 workers
+  // = ~48 slow waves). Tunable via FF_SEG_CONCURRENCY (bump higher if the GPU allows more
+  // parallel NVENC sessions).
+  const SEG_CONC = Math.max(2, Number(process.env.FF_SEG_CONCURRENCY) || Math.min(totalCores - 1 || 3, 8));
   const segPaths: string[] = new Array(segs.length);
   let segDone = 0, segCursor = 0; const encStartT = Date.now();
   try {
