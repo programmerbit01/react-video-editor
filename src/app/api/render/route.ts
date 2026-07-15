@@ -844,237 +844,164 @@ async function runExport(
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
 
-  // ─── Build FFmpeg filter_complex ─────────────────────────────────────────
-  startStage(jobId, "Filter graph");
-  // Cap filter threading. A 190-clip Ken Burns timeline builds ~800 filter nodes; with the
-  // default per-pipeline thread pool (= core count) ffmpeg spawned ~9,000 threads, and each
-  // thread's 8MB stack ALONE added up to ~65GB of RAM — the real FF "RAM explosion" once the
-  // caption-PNG blowup was fixed. Bounding the pools keeps the thread count (and its stack
-  // memory) flat; the trade is slower CPU filtering (NVENC still encodes on the GPU).
-  // Tunable via env for boxes with RAM headroom.
-  const FC_THREADS = process.env.FF_FILTER_COMPLEX_THREADS || "1";
-  const FILTER_THREADS = process.env.FF_FILTER_THREADS || "1";
-  const ffmpegArgs: string[] = ["-y", "-filter_threads", FILTER_THREADS, "-filter_complex_threads", FC_THREADS];
-
-  // Input 0: base black canvas
-  ffmpegArgs.push(
-    "-f", "lavfi",
-    "-i", `color=black:size=${outW}x${outH}:r=${DEFAULT_FPS}:d=${totalSec}`,
-  );
-
-  // Add all media inputs (inputs 1..N)
-  for (const entry of entries) {
-    if (entry.isImage) {
-      const clipDurS = Math.max(
-        0.1,
-        ((entry.item.display?.to ?? 0) - (entry.item.display?.from ?? 0)) / 1000,
-      );
-      ffmpegArgs.push("-loop", "1", "-t", String(clipDurS), "-i", entry.path);
-    } else {
-      ffmpegArgs.push("-i", entry.path);
-    }
-  }
-
-  // Caption PNG inputs (bounded by the base-only fallback above) — each loops full duration.
-  const captionInputStart = 1 + entries.length;
-  for (const cap of captionOverlays) {
-    ffmpegArgs.push("-loop", "1", "-framerate", "1", "-t", String(totalSec), "-i", cap.path);
-  }
-
-  const filterParts: string[] = [];
-
-  interface VideoOverlay { vLabel: string; from: number; to: number; }
-  const videoOverlays: VideoOverlay[] = [];
-  const audioLabels: string[] = [];
-
-  let inputIdx = 1; // 0 is the base canvas
-
-  for (const entry of entries) {
-    const item = entry.item;
-    const displayFromS = Math.max(0, Number(item.display?.from ?? 0) / 1000);
-    const displayToS   = Math.max(displayFromS + 0.1, Number(item.display?.to ?? 0) / 1000);
-    const trimFromRaw  = Math.max(0, Number(item.trim?.from ?? 0) / 1000);
-    const trimFromS    = Math.abs(trimFromRaw) < 1e-9 ? 0 : trimFromRaw;
-    const clipDurS     = displayToS - displayFromS;
-    const trimToS      = trimFromS + clipDurS;
-    const delayMs      = Math.round(displayFromS * 1000);
-
-    const trackId = itemTrackMap[item.id] ?? "";
-    const trackMuted = mutedSet.has(trackId);
-
-    if (entry.kind === "video") {
-      const fadeFilters = getFadeFilters(item, displayFromS, clipDurS);
-      if (entry.isImage) {
-        const kbFilter = buildKenBurnsFilter(item.details, clipDurS, outW, outH);
-        if (kbFilter) {
-          appendJobLog(
-            jobId,
-            `kenBurns ${item.id || inputIdx}: ${String(item.details?.kenBurns)} intensity=${Number(item.details?.kenBurnsIntensity ?? 8)} duration=${Number(item.details?.kenBurnsDuration ?? 100)}`,
-          );
-        } else {
-          appendJobLog(jobId, `static image ${item.id || inputIdx}: no kenBurns`);
-        }
-        filterParts.push(
-          `[${inputIdx}:v]${kbFilter ?? `scale=${outW}:${outH}`},setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB${fadeFilters}[v${inputIdx}]`,
-        );
-      } else {
-        filterParts.push(
-          `[${inputIdx}:v]trim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},setpts=PTS-STARTPTS+${fmtT(displayFromS)}/TB,scale=${outW}:${outH}${fadeFilters}[v${inputIdx}]`,
-        );
-      }
-      videoOverlays.push({ vLabel: `v${inputIdx}`, from: displayFromS, to: displayToS });
-
-      if (entry.hasAudio) {
-        const vol = trackMuted ? 0 : Math.max(0, Number(item.details?.volume ?? 100) / 100);
-        filterParts.push(
-          `[${inputIdx}:a]atrim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},` +
-          `asetpts=PTS-STARTPTS,` +
-          `volume=${vol},` +
-          `adelay=${delayMs}|${delayMs},` +
-          `aformat=channel_layouts=stereo:sample_rates=48000[va${inputIdx}]`,
-        );
-        audioLabels.push(`va${inputIdx}`);
-      }
-    } else {
-      // Audio-only track
-      const vol = trackMuted ? 0 : Math.max(0, Number(item.details?.volume ?? 100) / 100);
-      filterParts.push(
-        `[${inputIdx}:a]atrim=start=${fmtT(trimFromS)}:end=${fmtT(trimToS)},` +
-        `asetpts=PTS-STARTPTS,` +
-        `volume=${vol},` +
-        `adelay=${delayMs}|${delayMs},` +
-        `aformat=channel_layouts=stereo:sample_rates=48000[aa${inputIdx}]`,
-      );
-      audioLabels.push(`aa${inputIdx}`);
-    }
-
-    inputIdx++;
-  }
-
-  // Chain video overlays onto the base canvas
-  if (videoOverlays.length === 0) {
-    filterParts.push("[0:v]copy[vout]");
-  } else {
-    let prevLabel = "0:v";
-    for (let i = 0; i < videoOverlays.length; i++) {
-      const { vLabel, from, to } = videoOverlays[i];
-      const outLabel = i === videoOverlays.length - 1 ? "vout" : `ov${i}`;
-      filterParts.push(
-        `[${prevLabel}][${vLabel}]overlay=enable='between(t,${from},${to})'[${outLabel}]`,
-      );
-      prevLabel = outLabel;
-    }
-  }
-
-  // Chain caption overlays onto the video output, each shown only during its window.
-  let finalVideoLabel = "vout";
-  if (captionOverlays.length > 0) {
-    let prevLabel = "vout";
-    for (let i = 0; i < captionOverlays.length; i++) {
-      const { fromS, toS } = captionOverlays[i];
-      const capInputIdx = captionInputStart + i;
-      filterParts.push(
-        `[${capInputIdx}:v]scale=${outW}:${outH},format=rgba[capscaled${i}]`,
-      );
-      const isLast = i === captionOverlays.length - 1;
-      const outLabel = isLast ? "vcap" : `capov${i}`;
-      filterParts.push(
-        `[${prevLabel}][capscaled${i}]overlay=x=0:y=0:enable='between(t,${fromS},${toS})'[${outLabel}]`,
-      );
-      prevLabel = outLabel;
-    }
-    finalVideoLabel = "vcap";
-  }
-
-  // Mix all audio tracks
-  const hasAudio = audioLabels.length > 0;
-  if (hasAudio) {
-    if (audioLabels.length === 1) {
-      filterParts.push(`[${audioLabels[0]}]apad=whole_dur=${totalSec}[aout]`);
-    } else {
-      const joined = audioLabels.map((l) => `[${l}]`).join("");
-      filterParts.push(
-        `${joined}amix=inputs=${audioLabels.length}:duration=longest:normalize=0,` +
-        `apad=whole_dur=${totalSec}[aout]`,
-      );
-    }
-  }
-
-  // Big timelines (dozens of Ken Burns / caption zoompan nodes) build a filter graph
-  // that is tens/hundreds of KB. Passing it inline as a `-filter_complex` argv value
-  // blows past the OS argv size limit → `spawn E2BIG` and the whole export dies.
-  // Write the graph to a file and reference it with `-filter_complex_script` so argv
-  // stays tiny (just the input paths) no matter how many items are on the timeline.
-  const filterGraph = filterParts.join(";");
-  const filterScriptPath = path.join(tmpDir, "filtergraph.txt");
-  await writeFile(filterScriptPath, filterGraph, "utf8");
-  endStage(jobId, "Filter graph", "done", `${filterParts.length} nodes · ${(filterGraph.length / 1024).toFixed(1)}KB → script file`);
-  ffmpegArgs.push("-filter_complex_script", filterScriptPath);
-  ffmpegArgs.push("-map", `[${finalVideoLabel}]`);
-  if (hasAudio) ffmpegArgs.push("-map", "[aout]");
-
-  // Codec args — prefer NVENC if GPU is available, fallback to libx264
+  // ─── Segment-per-clip render (bounded RAM) ────────────────────────────────
+  // The OLD path built one giant filter_complex: ~one ffmpeg input per clip AND per caption
+  // (~400 inputs), which spawned thousands of threads whose 8MB stacks alone reached 60GB+
+  // of RAM → OOM. Instead render each visual clip as its OWN small ffmpeg (the clip + only
+  // the captions in its window), then concat with -c copy and mux audio once. Each process
+  // holds ~one frame, so RAM stays flat regardless of clip count. Per-segment caption count
+  // is tiny, so word-level highlight is affordable again.
+  const outputPath = path.join(exportsDir, `${jobId}.mp4`);
   const useNvenc = !platformPreset && await hasNvencGpu();
   const encoder = pickVideoEncoder(useNvenc, quality, preset, crf);
   const gpuLabel = platformPreset ? "preset" : useNvenc ? "nvenc" : "cpu";
   const hwAccel = platformPreset ? "preset" : useNvenc ? "gpu" : "cpu";
+  const segVideoArgs = platformPreset ? platformPreset.videoArgs : encoder.args;
   mergeJob(jobId, {
-    ...(jobs.get(jobId) ?? { status: "PROCESSING", progress: 60 }),
-    status: "PROCESSING",
-    progress: 60,
-    engine: "ffmpeg",
-    source: "editor-manual",
-    project_name: "User Export",
-    started_at: Math.floor(startedAt / 1000),
-    video_seconds: Math.round(totalSec),
-    gpu: gpuLabel,
-    hwAccel,
-    cores: totalCores,
+    status: "PROCESSING", progress: 55, engine: "ffmpeg", source: "editor-manual",
+    project_name: "User Export", started_at: Math.floor(startedAt / 1000),
+    video_seconds: Math.round(totalSec), gpu: gpuLabel, hwAccel, cores: totalCores,
     encoder: platformPreset ? "platform-preset" : encoder.label,
   });
-  appendJobLog(jobId, `encoder=${platformPreset ? "platform-preset" : encoder.label} gpu=${gpuLabel} cores=${totalCores}`);
-  if (platformPreset) {
-    ffmpegArgs.push(...platformPreset.videoArgs);
-    if (hasAudio) ffmpegArgs.push(...platformPreset.audioArgs);
-  } else {
-    ffmpegArgs.push(...encoder.args);
-    if (hasAudio) {
-      ffmpegArgs.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2");
-    }
+  appendJobLog(jobId, `encoder=${platformPreset ? "platform-preset" : encoder.label} gpu=${gpuLabel} · segment-per-clip`);
+
+  // Ordered, non-overlapping visual timeline: each clip a segment; gaps filled with black.
+  const visualEntries = entries.filter((e) => e.kind === "video")
+    .sort((a, b) => Number(a.item.display?.from ?? 0) - Number(b.item.display?.from ?? 0));
+  interface Seg { entry: MediaEntry | null; fromS: number; toS: number; }
+  const segs: Seg[] = [];
+  let segCur = 0;
+  for (const e of visualEntries) {
+    const dFrom = Math.max(0, Number(e.item.display?.from ?? 0) / 1000);
+    const dTo = Math.max(dFrom + 0.1, Number(e.item.display?.to ?? 0) / 1000);
+    const from = Math.max(segCur, dFrom);
+    if (from > segCur + 0.02) segs.push({ entry: null, fromS: segCur, toS: from });
+    if (dTo > from + 0.02) { segs.push({ entry: e, fromS: from, toS: dTo }); segCur = dTo; }
   }
+  if (totalSec > segCur + 0.02) segs.push({ entry: null, fromS: segCur, toS: totalSec });
+  if (segs.length === 0) segs.push({ entry: null, fromS: 0, toS: totalSec });
 
-  ffmpegArgs.push("-t", String(totalSec), "-movflags", "+faststart");
+  const renderSeg = async (seg: Seg, idx: number): Promise<string> => {
+    const dur = Math.max(0.1, seg.toS - seg.fromS);
+    const segPath = path.join(tmpDir, `seg_${String(idx).padStart(5, "0")}.mp4`);
+    const a: string[] = ["-y", "-hide_banner", "-nostdin", "-loglevel", "error"];
+    const fp: string[] = [];
+    if (seg.entry && seg.entry.isImage) {
+      a.push("-loop", "1", "-t", dur.toFixed(3), "-i", seg.entry.path);
+      const kb = buildKenBurnsFilter(seg.entry.item.details, dur, outW, outH);
+      fp.push(`[0:v]${kb ?? `scale=${outW}:${outH}`},setsar=1${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
+    } else if (seg.entry) {
+      const trimFrom = Math.max(0, Number(seg.entry.item.trim?.from ?? 0) / 1000);
+      a.push("-ss", trimFrom.toFixed(3), "-t", dur.toFixed(3), "-i", seg.entry.path);
+      fp.push(`[0:v]scale=${outW}:${outH},setsar=1,setpts=PTS-STARTPTS${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
+    } else {
+      a.push("-f", "lavfi", "-t", dur.toFixed(3), "-i", `color=black:s=${outW}x${outH}:r=${DEFAULT_FPS}`);
+      fp.push(`[0:v]setsar=1[v]`);
+    }
+    // Captions intersecting this window, overlaid with segment-relative timing (few per seg).
+    const caps = captionOverlays.filter((c) => c.toS > seg.fromS + 0.02 && c.fromS < seg.toS - 0.02);
+    let prev = "v", ii = 1;
+    for (let i = 0; i < caps.length; i++) {
+      a.push("-loop", "1", "-t", dur.toFixed(3), "-i", caps[i].path);
+      const rf = Math.max(0, caps[i].fromS - seg.fromS);
+      const rt = Math.min(dur, caps[i].toS - seg.fromS);
+      const o = i === caps.length - 1 ? "vo" : `vo${i}`;
+      fp.push(`[${ii}:v]scale=${outW}:${outH},format=rgba[c${i}]`);
+      fp.push(`[${prev}][c${i}]overlay=x=0:y=0:enable='between(t,${rf.toFixed(3)},${rt.toFixed(3)})'[${o}]`);
+      prev = o; ii++;
+    }
+    a.push("-filter_complex", fp.join(";"), "-map", `[${prev}]`, ...segVideoArgs,
+      "-r", String(DEFAULT_FPS), "-pix_fmt", "yuv420p", "-an", "-t", dur.toFixed(3), segPath);
+    await execFileAsync("ffmpeg", a, { timeout: 900_000, maxBuffer: 32 * 1024 * 1024 });
+    return segPath;
+  };
 
-  const outputPath = path.join(exportsDir, `${jobId}.mp4`);
-  ffmpegArgs.push(outputPath);
-
-  startStage(jobId, "Encode", `${platformPreset ? "platform-preset" : encoder.label} · ${totalSec.toFixed(1)}s @ ${outW}x${outH}`);
-  mergeJob(jobId, { status: "PROCESSING", progress: 60 });
-
-  let lastEncPct = 0;
+  // Render segments with bounded concurrency (each is light → a few in parallel is fine).
+  startStage(jobId, "Render segments", `0/${segs.length}`);
+  const SEG_CONC = Math.max(2, Math.min(4, totalCores ? Math.floor(totalCores / 2) : 3));
+  const segPaths: string[] = new Array(segs.length);
+  let segDone = 0, segCursor = 0; const encStartT = Date.now();
   try {
-    await runFfmpegProgress(ffmpegArgs, totalSec, ({ frame, fps, timeSec, speed, pct }) => {
-      // Live encode detail — frame/fps/time/speed, like Remotion's render-frames line.
-      const detail =
-        `${pct}% · ${timeSec.toFixed(1)}/${totalSec.toFixed(0)}s` +
-        (frame != null ? ` · frame ${frame}` : "") +
-        (fps != null ? ` · ${fps.toFixed(0)} fps` : "") +
-        (speed ? ` · ${speed}` : "");
-      updateStage(jobId, "Encode", { detail });
-      // Overall bar: encode occupies 60→95%.
-      mergeJob(jobId, { status: "PROCESSING", progress: 60 + Math.round((pct / 100) * 35) });
-      if (pct - lastEncPct >= 20) { lastEncPct = pct; appendJobLog(jobId, `encoding ${detail}`); }
-    });
-  } catch (ffErr: any) {
-    const cur = jobs.get(jobId);
-    const msg = String(ffErr?.message || "FFmpeg failed");
-    endStage(jobId, "Encode", "failed", msg.slice(0, 120));
-    mergeJob(jobId, { status: "FAILED", progress: cur?.progress ?? 60, error: msg });
+    await Promise.all(Array.from({ length: Math.min(SEG_CONC, segs.length) }, async () => {
+      while (true) {
+        const i = segCursor++;
+        if (i >= segs.length) return;
+        segPaths[i] = await renderSeg(segs[i], i);
+        segDone++;
+        const spd = segDone / Math.max(0.1, (Date.now() - encStartT) / 1000);
+        updateStage(jobId, "Render segments", { detail: `${segDone}/${segs.length} · ${spd.toFixed(1)} seg/s` });
+        mergeJob(jobId, { status: "PROCESSING", progress: 55 + Math.round((segDone / segs.length) * 35) });
+      }
+    }));
+  } catch (segErr: any) {
+    const msg = String(segErr?.stderr ? String(segErr.stderr).slice(-800) : segErr?.message || "segment render failed");
+    endStage(jobId, "Render segments", "failed", msg.slice(0, 120));
+    mergeJob(jobId, { status: "FAILED", progress: jobs.get(jobId)?.progress ?? 55, error: msg });
     appendJobLog(jobId, `FAILED: ${msg}`);
     if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
     return;
   }
-  endStage(jobId, "Encode", "done");
+  endStage(jobId, "Render segments", "done", `${segs.length} segments`);
+
+  // Concat (no re-encode) → silent video; re-encode fallback if -c copy can't stitch them.
+  startStage(jobId, "Concat + mux");
+  const concatList = path.join(tmpDir, "segments.concat");
+  await writeFile(concatList, segPaths.map((p) => `file '${p}'`).join("\n"), "utf8");
+  const silentPath = path.join(tmpDir, "silent.mp4");
+  try {
+    await execFileAsync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
+      "-i", concatList, "-c", "copy", "-an", silentPath], { timeout: 600_000, maxBuffer: 32 * 1024 * 1024 });
+  } catch {
+    await execFileAsync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
+      "-i", concatList, ...segVideoArgs, "-r", String(DEFAULT_FPS), "-pix_fmt", "yuv420p", "-an", silentPath],
+      { timeout: 1_800_000, maxBuffer: 32 * 1024 * 1024 });
+  }
+
+  // Mix all audio (audio items + video-embedded audio) in ONE light ffmpeg.
+  let audioMixPath: string | null = null;
+  const audioEntries = entries.filter((e) => e.kind === "audio" || (e.kind === "video" && e.hasAudio));
+  if (audioEntries.length) {
+    const aa: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
+    const af: string[] = []; const labels: string[] = [];
+    audioEntries.forEach((e, i) => {
+      const item = e.item;
+      const dFrom = Math.max(0, Number(item.display?.from ?? 0) / 1000);
+      const dTo = Math.max(dFrom + 0.1, Number(item.display?.to ?? 0) / 1000);
+      const trimFrom = Math.max(0, Number(item.trim?.from ?? 0) / 1000);
+      const trackId = itemTrackMap[item.id] ?? "";
+      const vol = mutedSet.has(trackId) ? 0 : Math.max(0, Number(item.details?.volume ?? 100) / 100);
+      const delayMs = Math.round(dFrom * 1000);
+      aa.push("-i", e.path);
+      af.push(`[${i}:a]atrim=start=${trimFrom.toFixed(3)}:end=${(trimFrom + (dTo - dFrom)).toFixed(3)},asetpts=PTS-STARTPTS,` +
+        `volume=${vol},adelay=${delayMs}|${delayMs},aformat=channel_layouts=stereo:sample_rates=48000[a${i}]`);
+      labels.push(`a${i}`);
+    });
+    af.push(labels.length === 1
+      ? `[${labels[0]}]apad=whole_dur=${totalSec}[aout]`
+      : `${labels.map((l) => `[${l}]`).join("")}amix=inputs=${labels.length}:duration=longest:normalize=0,apad=whole_dur=${totalSec}[aout]`);
+    audioMixPath = path.join(tmpDir, "audio.m4a");
+    aa.push("-filter_complex", af.join(";"), "-map", "[aout]", "-c:a", "aac", "-b:a", "192k",
+      "-ar", "48000", "-ac", "2", "-t", totalSec.toFixed(3), audioMixPath);
+    try { await execFileAsync("ffmpeg", aa, { timeout: 600_000, maxBuffer: 32 * 1024 * 1024 }); }
+    catch { audioMixPath = null; } // audio mix failed → ship silent rather than fail the export
+  }
+
+  // Final mux: silent video (stream-copy) + audio.
+  const muxArgs = ["-y", "-hide_banner", "-loglevel", "error", "-i", silentPath];
+  if (audioMixPath) muxArgs.push("-i", audioMixPath);
+  muxArgs.push("-c:v", "copy", ...(audioMixPath ? ["-c:a", "aac", "-b:a", "192k"] : ["-an"]),
+    "-movflags", "+faststart", "-t", totalSec.toFixed(3), outputPath);
+  try {
+    await execFileAsync("ffmpeg", muxArgs, { timeout: 600_000, maxBuffer: 32 * 1024 * 1024 });
+  } catch (muxErr: any) {
+    const msg = String(muxErr?.message || "mux failed");
+    endStage(jobId, "Concat + mux", "failed", msg.slice(0, 120));
+    mergeJob(jobId, { status: "FAILED", progress: 90, error: msg });
+    appendJobLog(jobId, `FAILED: ${msg}`);
+    if (!skipCallback) notifyRenderCallback({ job_id: jobId, status: "FAILED", error: msg });
+    return;
+  }
+  endStage(jobId, "Concat + mux", "done", `${segs.length} segments${audioMixPath ? " + audio" : ""}`);
 
   const renderSecs = Math.max(0.001, (Date.now() - startedAt) / 1000);
   const speedX = totalSec / renderSecs;
