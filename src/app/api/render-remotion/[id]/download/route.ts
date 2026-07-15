@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import path from "path";
 import { readFile } from "fs/promises";
 import { jobs } from "../../jobs";
+import { publicPath } from "@/utils/server-paths";
 
 export async function GET(
   _request: NextRequest,
@@ -13,12 +13,7 @@ export async function GET(
     return NextResponse.json({ message: "render not ready" }, { status: 404 });
   }
 
-  const outputPath = path.join(
-    process.cwd(),
-    "public",
-    "exports",
-    `${id}.mp4`
-  );
+  const outputPath = publicPath("exports", `${id}.mp4`);
   try {
     const buf = await readFile(outputPath);
     return new NextResponse(buf, {

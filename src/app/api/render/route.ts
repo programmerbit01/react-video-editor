@@ -11,6 +11,7 @@ import os from "os";
 
 import { jobs } from "./jobs";
 import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
+import { publicPath } from "@/utils/server-paths";
 
 const execFileAsync = promisify(execFile);
 
@@ -213,7 +214,7 @@ export async function POST(request: Request) {
     .finally(() => {
       // Always remove the scratch frame dir — on success AND on failure/abort — so
       // public/exports never accumulates leftover tmp_<jobId> frame folders again.
-      rm(path.join(process.cwd(), "public", "exports", `tmp_${jobId}`), {
+      rm(publicPath("exports", `tmp_${jobId}`), {
         recursive: true,
         force: true,
       }).catch(() => {});
@@ -271,11 +272,7 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
   }
 
   const localPath = sourceUrl.startsWith("/")
-    ? path.join(
-        process.cwd(),
-        "public",
-        sourceUrl.startsWith("/editor/") ? sourceUrl.replace(/^\/editor/, "") : sourceUrl
-      )
+    ? publicPath(sourceUrl.startsWith("/editor/") ? sourceUrl.replace(/^\/editor/, "") : sourceUrl)
     : sourceUrl;
   const buf = await readFile(localPath);
   await writeFile(dest, buf);
@@ -640,7 +637,7 @@ async function runExport(
   skipCallback = false,
 ) {
   const startedAt = Date.now();
-  const exportsDir = path.join(process.cwd(), "public", "exports");
+  const exportsDir = publicPath("exports");
   const tmpDir = path.join(exportsDir, `tmp_${jobId}`);
   await mkdir(exportsDir, { recursive: true });
   await mkdir(tmpDir, { recursive: true });

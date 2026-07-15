@@ -7,6 +7,7 @@ import { promisify } from "util";
 import { mkdir, rm } from "fs/promises";
 import { jobs } from "./jobs";
 import { ensureCached, enforceCap, registerAsset } from "@/utils/asset-cache-store";
+import { publicPath } from "@/utils/server-paths";
 
 const execFileAsync = promisify(execFile);
 
@@ -411,7 +412,7 @@ async function renderViaNvenc(
 async function runRemotionExport(jobId: string, design: any, options: any) {
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
-  const exportsDir = path.join(process.cwd(), "public", "exports");
+  const exportsDir = publicPath("exports");
   await mkdir(exportsDir, { recursive: true });
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
 

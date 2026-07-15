@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import path from "path";
 import { readFile } from "fs/promises";
 import { jobs } from "../../jobs";
+import { publicPath } from "@/utils/server-paths";
 
 export async function GET(
   request: NextRequest,
@@ -15,7 +15,7 @@ export async function GET(
 
   const isJson = (job as any).url?.endsWith(".json");
   const ext = isJson ? "json" : "mp4";
-  const outputPath = path.join(process.cwd(), "public", "exports", `${id}.${ext}`);
+  const outputPath = publicPath("exports", `${id}.${ext}`);
   try {
     const buf = await readFile(outputPath);
     return new NextResponse(buf, {
