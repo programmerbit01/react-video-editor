@@ -650,31 +650,47 @@ async function runExport(
 
   // Download all media files in parallel — biggest speedup for multi-clip timelines
   mergeJob(jobId, { status: "PROCESSING", progress: 5 });
+  let dlOk = 0, dlFail = 0;
   const entryResults = await Promise.all(
     allMedia.map(async (item: any, i: number) => {
-      const src: string = item.details?.src || item.details?.url || "";
-      if (!src) return null;
+      // Unwrap legacy /api/proxy?url=… wrappers so we fetch the real asset directly
+      // (the render-remotion path already does this; FF must too or it 404s on the
+      // proxy). rawSrc may be a full proxied URL or a bare relative one.
+      const rawSrc: string = item.details?.src || item.details?.url || "";
+      const src = unwrapProxyMediaUrl(rawSrc);
+      if (!src) { dlFail++; appendJobLog(jobId, `⬇ skip [${item.type}] no src on item ${item.id ?? i}`); return null; }
       const rawExt = detectMediaExtension(src) || "mp4";
       const safeExt = ["mp4", "mov", "webm", "mp3", "wav", "aac", "ogg", "m4a",
         "jpg", "jpeg", "png", "webp"].includes(rawExt) ? rawExt : "mp4";
       const tmpFile = path.join(tmpDir, `media_${i}.${safeExt}`);
       try {
         await fetchToFile(src, tmpFile);
+        dlOk++;
         const isImage = item.type === "image" || /\.(jpe?g|png|webp)$/i.test(tmpFile);
         const kind: "video" | "audio" = item.type === "audio" ? "audio" : "video";
         const hasAudio = kind === "audio" ? true : (!isImage && await hasAudioStream(tmpFile));
         return { path: tmpFile, item, kind, isImage, hasAudio } as MediaEntry;
       } catch (err) {
-        console.error(`[render] skipping ${src}: ${err}`);
+        // Surface the actual reason in the job log so a broken/expired/private URL
+        // is visible in the export report instead of a silent "no media" failure.
+        dlFail++;
+        const reason = String((err as any)?.message ?? err);
+        console.error(`[render] skipping ${src}: ${reason}`);
+        appendJobLog(jobId, `⬇ failed [${item.type}] ${src.slice(0, 160)} — ${reason.slice(0, 160)}`);
         return null;
       }
     })
   );
   const entries: MediaEntry[] = entryResults.filter(Boolean) as MediaEntry[];
+  appendJobLog(jobId, `downloaded ${dlOk}/${allMedia.length} media (${dlFail} failed)`);
 
   if (entries.length === 0) {
     const cur = jobs.get(jobId);
-    mergeJob(jobId, { status: "FAILED", progress: cur?.progress ?? 0, error: "Could not download any media files" });
+    mergeJob(jobId, {
+      status: "FAILED",
+      progress: cur?.progress ?? 0,
+      error: `Could not download any media files (${dlFail}/${allMedia.length} failed — see log for URLs/reasons)`,
+    });
     return;
   }
 
@@ -850,7 +866,16 @@ async function runExport(
     }
   }
 
-  ffmpegArgs.push("-filter_complex", filterParts.join(";"));
+  // Big timelines (dozens of Ken Burns / caption zoompan nodes) build a filter graph
+  // that is tens/hundreds of KB. Passing it inline as a `-filter_complex` argv value
+  // blows past the OS argv size limit → `spawn E2BIG` and the whole export dies.
+  // Write the graph to a file and reference it with `-filter_complex_script` so argv
+  // stays tiny (just the input paths) no matter how many items are on the timeline.
+  const filterGraph = filterParts.join(";");
+  const filterScriptPath = path.join(tmpDir, "filtergraph.txt");
+  await writeFile(filterScriptPath, filterGraph, "utf8");
+  appendJobLog(jobId, `filter graph: ${filterParts.length} nodes, ${(filterGraph.length / 1024).toFixed(1)}KB → script file (avoids argv limit)`);
+  ffmpegArgs.push("-filter_complex_script", filterScriptPath);
   ffmpegArgs.push("-map", `[${finalVideoLabel}]`);
   if (hasAudio) ffmpegArgs.push("-map", "[aout]");
 

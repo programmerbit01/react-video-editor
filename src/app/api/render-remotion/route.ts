@@ -266,6 +266,44 @@ async function localizeAssets(jobId: string, design: any, serverOrigin: string):
   return d;
 }
 
+// Strip a design down to just the sound-bearing items (audio + video). The audio
+// WAV pass in the NVENC path re-evaluates the WHOLE composition otherwise — on a
+// big timeline that means headless Chrome loading every image/text/caption (190+
+// items) again just to emit silence for them, which stalls for minutes. Audio only
+// comes from <Audio> (audio items) and <Video>/<OffthreadVideo> (video items), so
+// dropping everything else yields identical audio in a fraction of the time.
+// Duration/size are preserved so the WAV spans the full timeline and stays in sync.
+function audioOnlyDesign(design: any): any {
+  try {
+    const map = design?.trackItemsMap ?? {};
+    const keep = (t: string) => t === "audio" || t === "video";
+    const audioIds = new Set(
+      Object.keys(map).filter((id) => keep(String(map[id]?.type))),
+    );
+    if (audioIds.size === 0) return design; // nothing to trim; render as-is
+    const trackItemsMap: Record<string, any> = {};
+    for (const id of audioIds) trackItemsMap[id] = map[id];
+    const tracks = (design?.tracks ?? [])
+      .map((t: any) => ({
+        ...t,
+        items: (t?.items ?? []).filter((id: string) => audioIds.has(id)),
+      }))
+      .filter((t: any) => (t.items ?? []).length > 0);
+    return {
+      ...design,
+      trackItemsMap,
+      trackItemIds: (design?.trackItemIds ?? []).filter((id: string) => audioIds.has(id)),
+      tracks,
+      // Visuals only — irrelevant to audio and would reference dropped items.
+      transitionsMap: {},
+      transitionIds: [],
+      structure: [],
+    };
+  } catch {
+    return design;
+  }
+}
+
 // NVENC render: Remotion renderFrames → JPEG sequence (all animations) + audio-only
 // WAV, then the SYSTEM ffmpeg encodes with h264_nvenc. Writes the final mp4 to
 // outputPath. Throws on any failure so the caller falls back to renderMedia.
@@ -320,11 +358,25 @@ async function renderViaNvenc(
     } finally { clearInterval(watch); }
     endStage(jobId, "Render frames", "done", `${totalFrames}/${totalFrames}`);
 
-    // 2) Audio-only WAV (fast — no video encode).
+    // 2) Audio-only WAV (fast — no video encode, and no visual items to re-load).
+    // Feed renderMedia a trimmed design (audio + video only) so it doesn't stall
+    // re-evaluating the full image/caption timeline just to mix the soundtrack.
+    // If the timeline has no sound-bearing items at all, skip the pass entirely —
+    // otherwise the WAV render would hang re-evaluating every visual for silence.
     startStage(jobId, "Audio");
     mergeJob(jobId, { status: "PROCESSING", progress: 84 });
-    await renderMedia({ composition, serveUrl, inputProps, codec: "wav" as any, outputLocation: audioPath, timeoutInMilliseconds: RENDER_ASSET_TIMEOUT_MS });
-    endStage(jobId, "Audio", "done");
+    const audioDesign = audioOnlyDesign(inputProps.design);
+    const soundItems = Object.values(audioDesign?.trackItemsMap ?? {}).filter(
+      (it: any) => it?.type === "audio" || it?.type === "video",
+    );
+    const hasAudio = soundItems.length > 0;
+    if (hasAudio) {
+      logLine(jobId, `Audio pass: ${soundItems.length} sound item(s) (visuals stripped)`);
+      await renderMedia({ composition, serveUrl, inputProps: { ...inputProps, design: audioDesign }, codec: "wav" as any, outputLocation: audioPath, timeoutInMilliseconds: RENDER_ASSET_TIMEOUT_MS });
+      endStage(jobId, "Audio", "done");
+    } else {
+      endStage(jobId, "Audio", "done", "no audio — skipped");
+    }
 
     // 3) NVENC encode: JPEG sequence (glob-sorted) + audio → mp4.
     startStage(jobId, "Encode (NVENC)");
@@ -333,9 +385,9 @@ async function renderViaNvenc(
       "-y", "-hide_banner", "-nostats", "-loglevel", "warning",
       "-framerate", String(composition.fps),
       "-pattern_type", "glob", "-i", path.join(framesDir, "element-*.jpeg"),
-      "-i", audioPath,
+      ...(hasAudio ? ["-i", audioPath] : []),
       "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", String(crf), "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "192k",
+      ...(hasAudio ? ["-c:a", "aac", "-b:a", "192k"] : ["-an"]),
       "-shortest", outputPath,
     ];
     await execFileAsync("ffmpeg", args, { timeout: 3_600_000, maxBuffer: 64 * 1024 * 1024 });

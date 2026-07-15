@@ -330,3 +330,40 @@ still lacks a downscale — a separate follow-up.
 `text-foreground`; navbar dropdowns (Download etc.) raised to z-10000+ so they sit ABOVE
 the AI Edit / Script floating panels (z-9999); AI Edit settings popover closes on
 outside-click.
+
+---
+
+## 11. Render engine fixes (2026-07-15, pass 2)
+
+Three concrete render failures, one per engine path:
+
+**RE (Remotion) NVENC — audio pass hang** (`api/render-remotion/route.ts`)
+The NVENC path renders JPEG frames, then a *separate* `renderMedia({ codec: "wav" })`
+pass to extract the soundtrack, then muxes both with `h264_nvenc`. That audio pass
+re-evaluates the WHOLE composition — on a big timeline (190+ images/captions) headless
+Chrome re-loads every visual just to emit silence for it, stalling for minutes (seen
+stuck at 84%). Fix: `audioOnlyDesign()` trims the design to just the sound-bearing items
+(`audio` + `video`; visuals/transitions dropped, duration/size preserved) and feeds THAT
+to the WAV pass — identical audio, a fraction of the work. If the timeline has no sound
+at all, the pass is skipped and ffmpeg encodes with `-an`. **NVENC itself is unchanged.**
+
+**FF (ffmpeg) — `spawn E2BIG` on big timelines** (`api/render/route.ts`)
+A timeline with dozens of Ken Burns / caption `zoompan` nodes builds a `filter_complex`
+graph of tens/hundreds of KB. Passed inline as one argv value it exceeds the OS limit
+(Linux `MAX_ARG_STRLEN` 128KB per arg; macOS `ARG_MAX` 256KB total) → `spawn E2BIG`, the
+whole export crashes before ffmpeg even starts. Fix: write the graph to `filtergraph.txt`
+in the job tmp dir and reference it with `-filter_complex_script` — argv stays tiny
+regardless of item count. (`-filter_complex_script` verified on ffmpeg 8.1.1.)
+
+**FF — silent download failures** (`api/render/route.ts`)
+When media couldn't be fetched, FF logged only `Could not download any media files` with
+no clue why. Now each failed download logs its URL + reason to the job log
+(`⬇ failed [video] <url> — HTTP 403`), plus a `downloaded X/Y (Z failed)` summary, and
+the final error names the count. Srcs are also run through `unwrapProxyMediaUrl` before
+fetch (the RE path already did this) so legacy `/api/proxy?url=…` wrappers resolve to the
+real asset instead of 404-ing. A dead/expired/private source URL is now visible in the
+export report instead of a mystery failure.
+
+> Deploy: these are editor-source changes. The machine that actually renders (NVENC runs
+> only on the GPU box) needs `git pull → npm run build → restart` to pick them up — a bare
+> `next start` restart does not recompile source.
