@@ -195,24 +195,47 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         // consecutive misses (~30s of no contact). The server job keeps running
         // regardless; we're just reconnecting the progress feed.
         let pollFails = 0;
+        let notFound = 0;
         const MAX_POLL_FAILS = 12;
+        // On a REMOTE export, polling the render editor DIRECTLY goes over the cloudflared
+        // tunnel → slow, laggy updates. Instead poll the LOCAL vApp render registry
+        // (/api/render-jobs → /vapp/renders): the vApp polls the editor SERVER-SIDE (fast,
+        // same host) and we read it locally — exactly what the Exports widget does, so the
+        // modal and widget now agree and neither waits on the tunnel. Local exports keep the
+        // direct poll (already fast + it carries the full stage breakdown).
+        const useRegistry = !!base;
+        const registryUrl = `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/api/render-jobs`;
         const checkStatus = async () => {
           try {
-            const statusResponse = await fetch(`${apiBase}/${jobId}`, {
-              headers: { "Content-Type": "application/json" },
-            });
-            if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
-
-            const statusInfo = await statusResponse.json();
+            let r: any;
+            if (useRegistry) {
+              const res = await fetch(registryUrl, { cache: "no-store" });
+              if (!res.ok) throw new Error(`registry HTTP ${res.status}`);
+              const data = await res.json();
+              const job = (data.jobs || []).find((j: any) => String(j.job_id) === String(jobId));
+              if (!job) {
+                // Registration hasn't propagated yet — keep waiting (not a hard failure).
+                if (++notFound > 24) throw new Error("render not found in registry");
+                setTimeout(checkStatus, 2500);
+                return;
+              }
+              notFound = 0;
+              r = { ...job, presigned_url: undefined, public_url: job.video_url };
+            } else {
+              const statusResponse = await fetch(`${apiBase}/${jobId}`, {
+                headers: { "Content-Type": "application/json" },
+              });
+              if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
+              r = (await statusResponse.json()).render || {};
+            }
             pollFails = 0; // reached the server — reset the miss counter
-            const r = statusInfo.render || {};
             const { status, progress, presigned_url: url, error, public_url: publicUrl } = r;
             set({
               progress,
               metrics: pickMetrics(r) ?? get().metrics,
               report: {
                 stages: r.stages ?? get().report?.stages,
-                log: r.log ?? get().report?.log,
+                log: r.log ?? r.logs ?? get().report?.log,
                 stalled: r.stalled,
                 stall_reason: r.stall_reason,
                 rendered_frames: r.rendered_frames,
@@ -221,10 +244,11 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
             });
 
             if (status === "COMPLETED") {
-              // Remote render → the download endpoint lives on the remote machine (under its basePath).
-              const finalUrl = base && typeof url === "string" && url.startsWith("/")
-                ? `${base}${basePathPrefix}${url}`
-                : url;
+              // Registry gives the R2 public url; direct remote gives a basePath-relative url.
+              const finalUrl = useRegistry
+                ? (publicUrl || url)
+                : (base && typeof url === "string" && url.startsWith("/") ? `${base}${basePathPrefix}${url}` : url);
+              if (useRegistry && !finalUrl) { setTimeout(checkStatus, 2000); return; } // R2 upload still finishing
               set({ exporting: false, output: { url: finalUrl, publicUrl, type: get().exportType } });
             } else if (status === "PROCESSING" || status === "PENDING") {
               setTimeout(checkStatus, 2500);
