@@ -328,6 +328,12 @@ async function hasAudioStream(inputPath: string): Promise<boolean> {
  * Render caption overlays with per-word karaoke highlighting.
  * Returns one "base" overlay (full caption, no highlight) plus one overlay per word
  * (full caption with that word highlighted), each enabled only during that word's time window.
+ *
+ * Each PNG is cropped to a tight text BAND (not a full 1920×1080 canvas) and returned with the
+ * {x,y} at which it must be overlaid. Full-frame caption PNGs were the export's #1 cost: a dense
+ * caption becomes N chained overlays each compositing the whole 1080p plane (measured 25s + 5.5GB
+ * for a 30-word segment). The visible text is only a ~2-3 line band near `top`, so we render just
+ * that band → identical pixels, ~7× less overlay work + RAM.
  */
 async function generateHighlightedCaptionOverlays(
   captionItem: any,
@@ -337,7 +343,7 @@ async function generateHighlightedCaptionOverlays(
   tmpDir: string,
   capIdx: number,
   baseOnly: boolean = false,
-): Promise<{ path: string; fromS: number; toS: number }[]> {
+): Promise<{ path: string; fromS: number; toS: number; x: number; y: number }[]> {
   const { createCanvas } = await import("@napi-rs/canvas");
 
   const words: any[] = Array.isArray(captionItem.details?.words) ? captionItem.details.words : [];
@@ -356,37 +362,56 @@ async function generateHighlightedCaptionOverlays(
   const toS = Number(captionItem.display?.to || 0) / 1000;
   const hasWordHighlight = words.length > 0 && activeColor !== color;
 
-  const drawCaption = async (activeWordIdx: number | null, outPath: string) => {
-    const canvas = createCanvas(outW, outH);
-    const ctx = canvas.getContext("2d");
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    ctx.textBaseline = "alphabetic";
+  // ── Layout ONCE (identical for base + every word variant) ────────────────────
+  // Only the highlighted word's COLOUR changes between variants, never the geometry,
+  // so wrap + word positions are computed a single time and reused for all PNGs.
+  const fontSpec = `bold ${fontSize}px sans-serif`;
+  const measure = createCanvas(8, 8).getContext("2d");
+  measure.font = fontSpec;
+  const wordTokens = words.length > 0 ? words.map((w: any) => String(w.word || "")) : text.split(/\s+/);
+  const wordWidths = wordTokens.map((wt: string) => measure.measureText(wt).width);
+  const spaceW = measure.measureText(" ").width;
 
-    const wordTokens = words.length > 0
-      ? words.map((w: any) => String(w.word || ""))
-      : text.split(/\s+/);
-    const wordWidths = wordTokens.map((wt: string) => ctx.measureText(wt).width);
-    const spaceW = ctx.measureText(" ").width;
-
-    // Word-wrap into lines tracking global word indices
-    const maxLineW = outW * 0.85;
-    const lines: { tokens: string[]; widths: number[]; indices: number[] }[] = [];
-    let cur: { tokens: string[]; widths: number[]; indices: number[]; w: number } =
-      { tokens: [], widths: [], indices: [], w: 0 };
-    for (let i = 0; i < wordTokens.length; i++) {
-      const addW = cur.tokens.length > 0 ? spaceW + wordWidths[i] : wordWidths[i];
-      if (cur.tokens.length > 0 && cur.w + addW > maxLineW) {
-        lines.push({ tokens: cur.tokens, widths: cur.widths, indices: cur.indices });
-        cur = { tokens: [wordTokens[i]], widths: [wordWidths[i]], indices: [i], w: wordWidths[i] };
-      } else {
-        cur.tokens.push(wordTokens[i]); cur.widths.push(wordWidths[i]);
-        cur.indices.push(i); cur.w += addW;
-      }
+  const maxLineW = outW * 0.85;
+  const lines: { tokens: string[]; widths: number[]; indices: number[] }[] = [];
+  let cur: { tokens: string[]; widths: number[]; indices: number[]; w: number } =
+    { tokens: [], widths: [], indices: [], w: 0 };
+  for (let i = 0; i < wordTokens.length; i++) {
+    const addW = cur.tokens.length > 0 ? spaceW + wordWidths[i] : wordWidths[i];
+    if (cur.tokens.length > 0 && cur.w + addW > maxLineW) {
+      lines.push({ tokens: cur.tokens, widths: cur.widths, indices: cur.indices });
+      cur = { tokens: [wordTokens[i]], widths: [wordWidths[i]], indices: [i], w: wordWidths[i] };
+    } else {
+      cur.tokens.push(wordTokens[i]); cur.widths.push(wordWidths[i]);
+      cur.indices.push(i); cur.w += addW;
     }
-    if (cur.tokens.length) lines.push({ tokens: cur.tokens, widths: cur.widths, indices: cur.indices });
+  }
+  if (cur.tokens.length) lines.push({ tokens: cur.tokens, widths: cur.widths, indices: cur.indices });
 
-    const lineH = fontSize * 1.35;
-    const startY = Math.round(topFrac * outH);
+  const lineH = fontSize * 1.35;
+  const startY = Math.round(topFrac * outH);
+  const pad = Math.max(2, Math.round(fontSize * 0.12));
+
+  // ── Crop to a tight caption BAND [bandTop, bandTop+bandH) instead of full-frame ──
+  // Generous margin covers the shadow (blur 8 + offset 2), the active-word fill rect
+  // (extends fontSize+pad above the baseline) and descenders, so text never clips.
+  // A caption that genuinely fills the screen just clamps back to full-frame.
+  const margin = Math.ceil(fontSize * 0.5) + 14;
+  let bandTop = Math.max(0, Math.floor(startY + lineH - fontSize - pad - margin));
+  let bandBottom = Math.min(outH, Math.ceil(startY + lines.length * lineH + pad + margin));
+  if (bandBottom <= bandTop) bandBottom = Math.min(outH, bandTop + fontSize + margin);
+  let bandH = bandBottom - bandTop;
+  if (bandH % 2 !== 0) {
+    if (bandBottom < outH) bandH++;
+    else { bandTop = Math.max(0, bandTop - 1); bandH = bandBottom - bandTop; }
+  }
+
+  const drawCaption = async (activeWordIdx: number | null, outPath: string) => {
+    const canvas = createCanvas(outW, bandH);
+    const ctx = canvas.getContext("2d");
+    ctx.translate(0, -bandTop); // draw in full-frame coords; canvas only spans the band
+    ctx.font = fontSpec;
+    ctx.textBaseline = "alphabetic";
 
     for (let li = 0; li < lines.length; li++) {
       const { tokens, widths, indices } = lines[li];
@@ -408,7 +433,6 @@ async function generateHighlightedCaptionOverlays(
             ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
             ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
             ctx.fillStyle = activeFillColor;
-            const pad = Math.max(2, Math.round(fontSize * 0.12));
             ctx.fillRect(x - pad, y - fontSize - pad, wW + pad * 2, fontSize + pad * 2 + 2);
             ctx.restore();
           }
@@ -432,17 +456,17 @@ async function generateHighlightedCaptionOverlays(
     await writeFile(outPath, await canvas.encode("png"));
   };
 
-  const overlays: { path: string; fromS: number; toS: number }[] = [];
+  const overlays: { path: string; fromS: number; toS: number; x: number; y: number }[] = [];
 
   // Base overlay — full caption in normal color, covers the whole caption window.
   const basePath = path.join(tmpDir, `cap_${capIdx}_base.png`);
   await drawCaption(null, basePath);
-  overlays.push({ path: basePath, fromS, toS });
+  overlays.push({ path: basePath, fromS, toS, x: 0, y: bandTop });
 
   // Per-word highlighted overlays (parallel) — SKIPPED in baseOnly mode. Each word adds one
   // ffmpeg image input downstream, so on a caption-heavy timeline the caller switches to
-  // baseOnly to keep the total input count sane (thousands of full-frame PNG inputs
-  // otherwise exhaust RAM + file descriptors and crash ffmpeg).
+  // baseOnly to keep the total input count sane (thousands of PNG inputs otherwise exhaust
+  // file descriptors and crash ffmpeg).
   if (hasWordHighlight && !baseOnly) {
     const firstWordMs = Number(words[0]?.start ?? 0);
     const offsetMs = (captionItem.display?.from ?? 0) - firstWordMs;
@@ -452,7 +476,7 @@ async function generateHighlightedCaptionOverlays(
       if (wToS <= wFromS + 0.01) return null;
       const wPath = path.join(tmpDir, `cap_${capIdx}_w${wi}.png`);
       await drawCaption(wi, wPath);
-      return { path: wPath, fromS: wFromS, toS: wToS };
+      return { path: wPath, fromS: wFromS, toS: wToS, x: 0, y: bandTop };
     });
     const results = await Promise.all(wordTasks);
     for (const r of results) { if (r) overlays.push(r); }
@@ -834,7 +858,7 @@ async function runExport(
     )
     .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
 
-  interface CaptionOverlay { path: string; fromS: number; toS: number; }
+  interface CaptionOverlay { path: string; fromS: number; toS: number; x: number; y: number; }
   const captionOverlays: CaptionOverlay[] = [];
 
   // Per-word highlight generates one PNG per word. With segment-per-clip rendering, each
@@ -856,7 +880,7 @@ async function runExport(
   // ~1800 canvases, and doing them all at once spiked RAM by ~14GB. 8 captions in flight keeps
   // peak canvas memory to a few hundred MB. Tunable via FF_CAPTION_CONCURRENCY.
   const CAP_CONC = Math.max(2, Number(process.env.FF_CAPTION_CONCURRENCY) || 8);
-  const allWordOverlays: { path: string; fromS: number; toS: number }[][] = new Array(captionItems.length);
+  const allWordOverlays: { path: string; fromS: number; toS: number; x: number; y: number }[][] = new Array(captionItems.length);
   let capCursor = 0, capDone = 0;
   await Promise.all(Array.from({ length: Math.min(CAP_CONC, captionItems.length) }, async () => {
     while (true) {
@@ -927,9 +951,12 @@ async function runExport(
     const dur = Math.max(0.1, seg.toS - seg.fromS);
     const segPath = path.join(tmpDir, `seg_${String(idx).padStart(5, "0")}.mp4`);
     // Single-clip segments don't need slice-threaded filtering; capping the pools keeps each
-    // ffmpeg at ~10 threads instead of ~100 (per-process stack RAM ~800MB → ~80MB).
+    // ffmpeg at ~10 threads instead of ~100 (per-process stack RAM ~800MB → ~80MB). Default 1
+    // (RAM-safest, avoids CPU oversubscription at high SEG_CONC). Now that caption overlays are
+    // band-cropped (cheap), a box with spare cores can raise these for extra per-segment speed.
     const a: string[] = ["-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-      "-filter_threads", "1", "-filter_complex_threads", "1"];
+      "-filter_threads", process.env.FF_FILTER_THREADS || "1",
+      "-filter_complex_threads", process.env.FF_FILTER_COMPLEX_THREADS || "1"];
     const fp: string[] = [];
     if (seg.entry && seg.entry.isImage) {
       a.push("-loop", "1", "-t", dur.toFixed(3), "-i", seg.entry.path);
@@ -951,8 +978,11 @@ async function runExport(
       const rf = Math.max(0, caps[i].fromS - seg.fromS);
       const rt = Math.min(dur, caps[i].toS - seg.fromS);
       const o = i === caps.length - 1 ? "vo" : `vo${i}`;
-      fp.push(`[${ii}:v]scale=${outW}:${outH},format=rgba[c${i}]`);
-      fp.push(`[${prev}][c${i}]overlay=x=0:y=0:enable='between(t,${rf.toFixed(3)},${rt.toFixed(3)})'[${o}]`);
+      // Caption PNGs are pre-rendered at output width and cropped to their text band, so they
+      // overlay directly at (x,y) — NO per-overlay full-frame scale. This is the export's single
+      // biggest win: a dense caption dropped from ~25s+5.5GB to ~3.7s+2.4GB per segment.
+      fp.push(`[${ii}:v]format=rgba[c${i}]`);
+      fp.push(`[${prev}][c${i}]overlay=x=${caps[i].x ?? 0}:y=${caps[i].y ?? 0}:enable='between(t,${rf.toFixed(3)},${rt.toFixed(3)})'[${o}]`);
       prev = o; ii++;
     }
     a.push("-filter_complex", fp.join(";"), "-map", `[${prev}]`, ...segVideoArgs,
