@@ -1,12 +1,12 @@
 /**
  * Caption GENERATION — transcribe media, build caption items, apply/remove them.
+ * This is THE standard; see CAPTIONS.md before adding a second one.
  *
- * Split out of control-item/captions-panel.tsx so the left Captions menu can own the whole
- * flow. Creating captions is all this file does; every bit of restyling belongs to
- * BasicCaption (Preset / Words / Style / Colors / Motion / Effects + "Apply style to all").
- * The panel that used to live here carried a second, weaker style UI whose every change re-ran
- * applyCaption — which rebuilds the items from scratch and so silently wiped whatever
- * BasicCaption had set.
+ * Creating captions is all this file does. Every bit of restyling belongs to BasicCaption
+ * (Preset / Words / Style / Colors / Motion / Effects + "Apply style to all"). The panel this
+ * was split out of carried a second, weaker style UI whose every change re-ran applyCaption —
+ * which rebuilds the items from scratch and so silently wiped whatever BasicCaption had set.
+ * That is why styling and creation are separated here, and why they must stay separated.
  */
 import { ITrackItem } from "@designcombo/types";
 import useCaptionTranscribeStore, { TranscriptResult } from "./transcribe-store";

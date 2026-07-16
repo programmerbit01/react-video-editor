@@ -85,7 +85,7 @@ The LLM returns **only** a fenced JSON block. The envelope never changes — onl
 | `regenerate` | AI image edit (img2img) | vApp job → `EDIT_OBJECT details.src` |
 | `search` | stock (Pexels) image/video | `/api/pexels` → add |
 | `arrange` | sequence to build a video: `itemIds`+`totalMs` (equal), `items:[{itemId,fromMs,toMs}]` (smart), or `target:"all"` (all visual items after generation) | `stateManager.updateState` (display timing) |
-| `captions` | word‑synced caption track under the selected audio (transcribes first if there's no transcript yet) | `caption-builder.ts` → `stateManager.updateState` (new Captions track) |
+| `captions` | word‑synced caption track under the selected audio (transcribes first if there's no transcript yet) | `captions/builder.ts` → `stateManager.updateState` (new Captions track) |
 
 **Zoom is Ken Burns.** The Remotion player ignores a static `details.transform`; it
 computes zoom/pan per frame from `details.kenBurns` (`zoomIn`/`zoomOut`/`panLeft`…).
@@ -123,12 +123,12 @@ chat stays free — the user can keep prompting. An `arrange` op in the same mes
 **Editor** (`src/features/editor/`)
 - `ai-edit/operations.ts` — ops schema, `applyOperations`, `add*`/`replaceMedia`/`setSelection`,
   `captureSnapshot`/`revertSnapshot`, `projectContext`/`narrationTimeline`, `CAPABILITIES`, `OPS_SYSTEM_PROMPT`.
-- `ai-edit/caption-builder.ts` — builds a word‑synced **Captions** track from a transcript (same logic as the Captions tab); powers the `captions` op.
+- `captions/builder.ts` — builds a word‑synced **Captions** track from a transcript; powers the `captions` op. A known duplicate of `captions/generate.ts`, which is the standard — see [CAPTIONS.md](CAPTIONS.md) before touching either.
 - `store/use-ai-edit-store.ts` — panel + chat + history + settings state (persisted prefs/pos).
 - `control-item/ai-edit-panel.tsx` — the panel: streaming chat, chips, inline apply/revert,
   Features popover, background generation, transcribe + script‑sync.
-- `control-item/captions-panel.tsx` — built‑in Captions (word/segment highlight).
-- `store/use-caption-transcribe-store.ts` — per‑audio transcript cache (persisted → survives refresh).
+- `captions/panel.tsx` — the one and only Captions UI (left menu). See [CAPTIONS.md](CAPTIONS.md).
+- `captions/transcribe-store.ts` — per‑audio transcript cache (persisted → survives refresh).
 
 **Editor API** (`src/app/api/`) — `ai-edit/route.ts`, `ai-generate/route.ts`,
 `transcribe/route.ts`, `transcribe/[id]/route.ts`.

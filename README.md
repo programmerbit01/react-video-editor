@@ -27,7 +27,12 @@ Video Editor application using React and TypeScript.
 - 🔀 Multi-track Support: Edit multiple video and audio tracks simultaneously.
 - 📤 Export Options: Save videos in various resolutions and formats.
 - 👀 Real-time Preview: See immediate previews of edits.
+- 💬 Captions: word‑synced captions from a transcript, generated and styled in one panel — see [CAPTIONS.md](CAPTIONS.md).
 - ✦ AI Edit: turn natural‑language prompts into timeline edits + generated/stock media + script‑synced captions — see [AI_EDIT.md](AI_EDIT.md).
+
+> **Working on captions?** Read [CAPTIONS.md](CAPTIONS.md) first. Captions had three UIs and three
+> builders; the copies disagreeing with each other caused every caption bug we've chased. That doc
+> is the standard, and it exists to stop a fourth from appearing.
 
 ## 🚀 See It in Action
 

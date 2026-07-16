@@ -1,9 +1,16 @@
-// Word-synced caption builder — the SAME logic the built-in Captions tab uses
-// (captions-panel.tsx), extracted so the AI Edit panel can add captions from a prompt.
-// Given an audio track item + its transcript (segments with word timestamps), it lays a
-// "Captions" track under the audio, timed to the words. Returns the created item ids.
+// Word-synced caption builder for the AI Edit panel: given an audio track item + its transcript
+// (segments with word timestamps), it lays a "Captions" track under the audio, timed to the
+// words, and returns the created item ids.
+//
+// KNOWN DUPLICATE — do not add a fourth. This is generate.ts's applyCaption under a second name,
+// and the two disagree on exactly one field: captions born here highlight words, captions born
+// there don't. generate.ts is the standard (see CAPTIONS.md); this collapses into it once
+// applyCaption returns the ids ai-edit-panel.tsx needs for its undo snapshot.
 
 import { getStateManagerRef } from "../utils/state-manager-ref";
+// One prefix, one owner. Re-declaring the literal here is how the two paths drift apart and
+// silently stop finding each other's caption tracks.
+import { CAPTION_TRACK_PREFIX } from "./generate";
 
 export interface CaptionStyle {
   fontSize: number;
@@ -26,7 +33,6 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
 };
 
 const POSITION_TOP: Record<string, string> = { top: "10%", center: "45%", bottom: "80%" };
-const CAPTION_TRACK_PREFIX = "captions-track--";
 
 function buildWords(segment: any, overlapStart: number, overlapEnd: number) {
   if (!segment.words?.length) {
