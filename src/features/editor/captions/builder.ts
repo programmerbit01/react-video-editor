@@ -8,9 +8,10 @@
 // applyCaption returns the ids ai-edit-panel.tsx needs for its undo snapshot.
 
 import { getStateManagerRef } from "../utils/state-manager-ref";
-// One prefix, one owner. Re-declaring the literal here is how the two paths drift apart and
-// silently stop finding each other's caption tracks.
-import { CAPTION_TRACK_PREFIX } from "./generate";
+// One prefix, one owner, one word-builder. Keeping private copies here is how the two paths
+// drift apart — it is why AI Edit's captions kept Whisper's leading spaces long after the
+// Captions panel stopped, and why they silently stop finding each other's caption tracks.
+import { CAPTION_TRACK_PREFIX, buildWords } from "./generate";
 
 export interface CaptionStyle {
   fontSize: number;
@@ -33,21 +34,6 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
 };
 
 const POSITION_TOP: Record<string, string> = { top: "10%", center: "45%", bottom: "80%" };
-
-function buildWords(segment: any, overlapStart: number, overlapEnd: number) {
-  if (!segment.words?.length) {
-    return [{ word: segment.text, start: segment.start * 1000, end: segment.end * 1000, confidence: 1 }];
-  }
-  const filtered = segment.words.filter(
-    (w: any) => Number(w.start) >= overlapStart - 0.05 && Number(w.end) <= overlapEnd + 0.05
-  );
-  return (filtered.length ? filtered : segment.words).map((w: any) => ({
-    word: w.word,
-    start: w.start * 1000,
-    end: w.end * 1000,
-    confidence: 1,
-  }));
-}
 
 function buildCaptionItem(trackItem: any, segment: any, segIdx: number, style: CaptionStyle) {
   const trimFrom = Number(trackItem?.trim?.from || 0) / 1000;

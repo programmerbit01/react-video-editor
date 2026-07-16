@@ -69,15 +69,29 @@ function normalizeTranscriptResult(input: any, fallbackDuration: number): Transc
   return { text, language, segment_count: Number(input?.segment_count || segments.length || 0), segments };
 }
 
-function buildWords(segment: any, overlapStart: number, overlapEnd: number) {
+/**
+ * Transcript words → caption words. Both caption builders come through here.
+ *
+ * Every word is trimmed, because this is the one place a transcript word becomes a caption word.
+ * Whisper returns its tokens with a leading space — " Love", " is", " a" — which is how you
+ * rejoin them into a sentence, not part of the word. The caption renderer draws each word on its
+ * own, so an untrimmed token puts a space in front of every word and a visible indent before the
+ * first one. Trimming lived in normalizeTranscriptResult, which only cleaned the transcripts that
+ * came through transcribeMedia; anything arriving from metadata.transcriptData or the MCP skipped
+ * it and kept the spaces.
+ */
+export function buildWords(segment: any, overlapStart: number, overlapEnd: number) {
+  const word = (w: any) => String(w ?? "").trim();
   if (!segment.words?.length) {
-    return [{ word: segment.text, start: segment.start * 1000, end: segment.end * 1000, confidence: 1 }];
+    return [
+      { word: word(segment.text), start: segment.start * 1000, end: segment.end * 1000, confidence: 1 }
+    ];
   }
   const filtered = segment.words.filter(
     (w: any) => Number(w.start) >= overlapStart - 0.05 && Number(w.end) <= overlapEnd + 0.05
   );
   return (filtered.length ? filtered : segment.words).map((w: any) => ({
-    word: w.word,
+    word: word(w.word),
     start: w.start * 1000,
     end: w.end * 1000,
     confidence: 1
