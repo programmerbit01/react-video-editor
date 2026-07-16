@@ -863,7 +863,11 @@ async function runExport(
       const i = capCursor++;
       if (i >= captionItems.length || jobs.get(jobId)?.cancelled) return;
       allWordOverlays[i] = await generateHighlightedCaptionOverlays(captionItems[i], outW, outH, canvasW, tmpDir, i, captionBaseOnly);
-      if (++capDone % 40 === 0) updateStage(jobId, "Captions", { detail: `${capDone}/${captionItems.length}` });
+      capDone++;
+      // Step the bar 5→45% across caption generation so it isn't frozen at ~0% for the ~30s
+      // this takes on a big timeline.
+      updateStage(jobId, "Captions", { detail: `${capDone}/${captionItems.length}` });
+      mergeJob(jobId, { status: "PROCESSING", progress: 5 + Math.round((capDone / captionItems.length) * 40) });
     }
   }));
   for (const overlays of allWordOverlays) if (overlays) captionOverlays.push(...overlays);
@@ -881,11 +885,20 @@ async function runExport(
   // holds ~one frame, so RAM stays flat regardless of clip count. Per-segment caption count
   // is tiny, so word-level highlight is affordable again.
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
-  const useNvenc = !platformPreset && await hasNvencGpu();
+  const nvencAvail = !platformPreset && await hasNvencGpu();
+  // For SEGMENTS, default to libx264 even when NVENC is available: each segment is a tiny clip,
+  // and NVENC pays a ~1-2s GPU-session INIT per process (×190 = minutes) AND holds ~2.5GB per
+  // segment vs ~0.8GB for libx264 — measured. So NVENC makes many-short-segments both slower
+  // AND heavier. Opt back into GPU with FF_SEG_ENCODER=nvenc. Concat/mux stay stream-copy.
+  const useNvenc = nvencAvail && process.env.FF_SEG_ENCODER === "nvenc";
   const encoder = pickVideoEncoder(useNvenc, quality, preset, crf);
-  const gpuLabel = platformPreset ? "preset" : useNvenc ? "nvenc" : "cpu";
+  const gpuLabel = platformPreset ? "preset" : useNvenc ? "nvenc" : "cpu (libx264, per-segment)";
   const hwAccel = platformPreset ? "preset" : useNvenc ? "gpu" : "cpu";
-  const segVideoArgs = platformPreset ? platformPreset.videoArgs : encoder.args;
+  const segVideoArgs = platformPreset
+    ? platformPreset.videoArgs
+    : useNvenc
+      ? encoder.args
+      : ["-c:v", "libx264", "-preset", process.env.FF_SEG_PRESET || "veryfast", "-crf", String(crf)];
   mergeJob(jobId, {
     status: "PROCESSING", progress: 55, engine: "ffmpeg", source: "editor-manual",
     project_name: "User Export", started_at: Math.floor(startedAt / 1000),
