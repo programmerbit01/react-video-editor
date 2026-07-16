@@ -98,7 +98,9 @@ export const Captions = () => {
   const transcript = getTrackTranscript(source, resultsByMedia) ?? undefined;
   const isGenerating = src ? !!generatingByMedia[src] : false;
   const error = src ? errorByMedia[src] : undefined;
-  const appliedCount = source ? captionCountFor(tracks as any[], source.id) : 0;
+  const appliedCount = source
+    ? captionCountFor(trackItemsMap as Record<string, any>, source.id)
+    : 0;
 
   const captionTracks = (tracks as any[]).filter(
     (t) => t.metadata?.captionTrack || t.type === "caption"

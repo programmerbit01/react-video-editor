@@ -241,10 +241,20 @@ function applyCaption(trackItem: ITrackItem, transcript: TranscriptResult, style
 
 export { applyCaption, removeCaption, DEFAULT_STYLE, CAPTION_TRACK_PREFIX };
 
-/** Caption items currently attached to `mediaId`. */
-export function captionCountFor(tracks: any[], mediaId: string): number {
-  const track = (tracks || []).find((t) => t?.id === `${CAPTION_TRACK_PREFIX}${mediaId}`);
-  return track?.items?.length ?? 0;
+/**
+ * Caption items currently attached to `mediaId`.
+ *
+ * Counted by OWNER, the same way removeCaption finds them — not by track. Every caption in a
+ * project shares ONE caption track, so the track is named after whichever clip happened to
+ * create it first; looking up `captions-track--<mediaId>` therefore found nothing for every
+ * other clip, the count came back 0 with captions plainly on screen, and the panel offered
+ * "Apply Captions" forever and never "Remove". Two answers to "does this clip have captions",
+ * and the wrong one was wired to the button.
+ */
+export function captionCountFor(trackItemsMap: Record<string, any>, mediaId: string): number {
+  return Object.values(trackItemsMap || {}).filter(
+    (i: any) => i?.metadata?.sourceTrackItemId === mediaId && i?.metadata?.addedCaption
+  ).length;
 }
 
 /**
