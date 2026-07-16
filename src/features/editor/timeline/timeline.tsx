@@ -28,6 +28,7 @@ import {
   TIMELINE_OFFSET_CANVAS_RIGHT
 } from "../constants/constants";
 import PreviewTrackItem from "./items/preview-drag-item";
+import { ITEM_TYPE_NAMES, ItemType, timelineClassKey } from "../item-types";
 import { useTimelineOffsetX } from "../hooks/use-timeline-offset";
 import { useStateManagerEvents } from "../hooks/use-state-manager-events";
 import { useResizbleTimeline } from "../hooks/use-resizable-timeline";
@@ -43,35 +44,51 @@ import TrackControlsOverlay from "./track-controls-overlay";
 import { AnimationOverlayStore } from "../utils/animation-overlay-store";
 
 
-// The KEY is the lookup name — registerItems does setClass(value, key), and the timeline asks
-// for getClass(<capitalised item.type>). Anything the player can render must appear here or
-// adding it throws "No class registered for X" straight out of Timeline.addTrackItem, uncaught.
+/**
+ * How every item type is drawn on the timeline.
+ *
+ * Record<ItemType, …> is the point: this table cannot compile with a hole in it, so a type added
+ * to ITEM_TYPES has to be given a class here before the build passes. The alternative — a
+ * hand-kept list — is what threw "No class registered for X" and killed the editor on load, and
+ * it did it twice: once for the charts, and again for progressBar/progressFrame, which were
+ * missed while fixing the charts precisely because nothing was checking.
+ *
+ * Graphic is a plain labelled bar, and it is the honest default: a chart or an overlay has no
+ * waveform to draw and no filmstrip to sample.
+ */
+const TIMELINE_ITEM_CLASSES: Record<ItemType, any> = {
+  video: Video,
+  image: Image,
+  audio: Audio,
+  caption: Caption,
+  text: Text,
+
+  linealAudioBars: LinealAudioBars,
+  radialAudioBars: RadialAudioBars,
+  waveAudioBars: WaveAudioBars,
+  hillAudioBars: HillAudioBars,
+
+  shape: Graphic,
+  illustration: Graphic,
+  lottie: Graphic,
+  barchart: Graphic,
+  linechart: Graphic,
+  statcard: Graphic,
+  bulletlist: Graphic,
+  progressBar: Graphic,
+  progressFrame: Graphic
+};
+
+// registerItems does setClass(value, key), and the timeline looks a class up by the capitalised
+// item type. Helper/Track/PreviewTrackItem are the timeline's own furniture, not item types, so
+// they are named here directly; everything else comes from the one registry.
 CanvasTimeline.registerItems({
-  Text,
-  Image,
-  Audio,
-  Video,
-  Caption,
   Helper,
   Track,
   PreviewTrackItem,
-  LinealAudioBars,
-  RadialAudioBars,
-  WaveAudioBars,
-  HillAudioBars,
-  // Data-graphic overlays. The player has rendered these all along (see the SequenceItem
-  // registry) and the AI generator emits them — 14 such items across the live projects — but
-  // the timeline had no class for any, so they crashed the editor on load. One labelled bar
-  // serves them all: there's no waveform or filmstrip to draw.
-  Barchart: Graphic,
-  Linechart: Graphic,
-  Statcard: Graphic,
-  Bulletlist: Graphic,
-  Lottie: Graphic,
-  // Not in any project today, but the player renders them and the UI can add them — which
-  // would crash the editor the same way. Registered so that can't happen.
-  Shape: Graphic,
-  Illustration: Graphic
+  ...Object.fromEntries(
+    ITEM_TYPE_NAMES.map((type) => [timelineClassKey(type), TIMELINE_ITEM_CLASSES[type]])
+  )
 });
 
 const EMPTY_SIZE = { width: 0, height: 0 };
@@ -237,23 +254,11 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
         waveAudioBars: 40,
         hillAudioBars: 40
       },
-      itemTypes: [
-        "text",
-        "image",
-        "audio",
-        "video",
-        "caption",
-        "helper",
-        "track",
-        "composition",
-        "template",
-        "linealAudioBars",
-        "radialAudioBars",
-        "progressFrame",
-        "progressBar",
-        "waveAudioBars",
-        "hillAudioBars"
-      ],
+      // Every item type, plus the timeline's own furniture. Hand-written, this list was missing
+      // barchart, linechart, statcard, bulletlist, lottie, shape and illustration — all of which
+      // the player renders and the AI generator emits — while declaring `composition` and
+      // `template`, which nothing renders at all.
+      itemTypes: [...ITEM_TYPE_NAMES, "helper", "track"],
       acceptsMap: {
         text: ["text", "caption"],
         image: ["image", "video"],
