@@ -5,7 +5,7 @@ import { PLAYER_SEEK } from "../constants/events";
 import useScriptGuideStore, { ScriptSegment, FontSizeKey, FONT_SIZE_MAP } from "../store/use-script-guide-store";
 import useStore from "../store/use-store";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";
-import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import useCaptionTranscribeStore from "../captions/transcribe-store";
 import useUploadStore from "../store/use-upload-store";
 import { getTrackTranscript } from "./transcript-panel";
 

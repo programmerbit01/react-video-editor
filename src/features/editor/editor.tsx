@@ -30,7 +30,8 @@ import useLayoutStore from "./store/use-layout-store";
 import ControlItemHorizontal from "./control-item-horizontal";
 import { design } from "./mock";
 import useTranscriptGuides from "./hooks/use-transcript-guides";
-import useCaptionSync from "./hooks/use-caption-sync";
+import useCaptionSync from "./captions/use-caption-sync";
+import useCaptionTranscribeStore from "./captions/transcribe-store";
 import { setStateManagerRef } from "./utils/state-manager-ref";
 import ScriptGuidePanel from "./control-item/script-guide-panel";
 import AiEditPanel from "./control-item/ai-edit-panel";
@@ -99,6 +100,8 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
   const { timeline, playerRef, fps } = useStore();
   const { activeIds, trackItemsMap, transitionsMap } = useStore();
   const lastSeekedIdRef = useRef<string | null>(null);
+  // What we last wrote into the SHARED layout.trackItem slot, so we only ever clear our own.
+  const lastSelectedIdRef = useRef<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [trackItem, setTrackItem] = useState<ITrackItem | null>(null);
   const {
@@ -172,9 +175,17 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
       const trackItem = trackItemsMap[id];
       if (trackItem) {
         setTrackItem(trackItem);
+        lastSelectedIdRef.current = id;
         setLayoutTrackItem(trackItem);
+        // Remember the media you clicked, so the Captions panel opens on it. It has to happen
+        // HERE: opening any menu runs clearActiveSelection (menu-list.tsx), so by the time that
+        // panel mounts activeIds is already empty and the click it should react to is gone.
+        const t = (trackItem as any).type;
+        if ((t === "audio" || t === "video") && (trackItem as any).details?.src) {
+          useCaptionTranscribeStore.getState().setLastSource(id);
+        }
         // Caption items → open global Captions tab instead of right sidebar
-        if ((trackItem as any).type === "caption") {
+        if (t === "caption") {
           setActiveMenuItem("captions");
         }
         // Clicking a clip should jump the playhead + preview to it. Seek only when the
@@ -190,7 +201,15 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
       } else console.log(transitionsMap[id]);
     } else {
       setTrackItem(null);
-      setLayoutTrackItem(null);
+      // Release the shared layout slot only if we still hold it. control-item.tsx and the left
+      // Captions menu write the same field and FloatingControl renders nothing while it's
+      // empty, so an unconditional null here closed their pickers — and because trackItemsMap
+      // is a dependency, it fired on every edit, including the preset apply made from inside
+      // one of those pickers.
+      if (useLayoutStore.getState().trackItem?.id === lastSelectedIdRef.current) {
+        setLayoutTrackItem(null);
+      }
+      lastSelectedIdRef.current = null;
       lastSeekedIdRef.current = null;
     }
   }, [activeIds, trackItemsMap]);

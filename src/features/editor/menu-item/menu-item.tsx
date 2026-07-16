@@ -5,7 +5,7 @@ import { Audios } from "./audios";
 import { Elements } from "./elements";
 import { Images } from "./images";
 import { Videos } from "./videos";
-import { Captions } from "./captions";
+import { Captions } from "../captions/panel";
 import { VoiceOver } from "./voice-over";
 import { useIsLargeScreen } from "@/hooks/use-media-query";
 import { Uploads } from "./uploads";

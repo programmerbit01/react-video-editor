@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import {
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverTrigger
 } from "@/components/ui/popover";
@@ -12,10 +13,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import useLayoutStore from "../../store/use-layout-store";
 import { ICaption, ITrackItem } from "@designcombo/types";
 import useStore from "../../store/use-store";
-import { groupCaptionItems } from "../floating-controls/caption-preset-picker";
+import { groupCaptionItems } from "../presets";
 import { dispatch } from "@designcombo/events";
-import { ADD_ITEMS, EDIT_OBJECT, LAYER_DELETE } from "@designcombo/state";
+import { EDIT_OBJECT } from "@designcombo/state";
 import { generateId } from "@designcombo/timeline";
+import { getStateManagerRef } from "../../utils/state-manager-ref";
 import { debounce } from "lodash";
 
 export function regroupCaptions(
@@ -315,9 +317,11 @@ const CaptionWords = ({
   useEffect(() => {
     const groupedCaptions = groupCaptionItems(trackItemsMap);
 
-    const currentGroupItems = groupedCaptions[trackItem.metadata.sourceUrl];
-    const captionItemIds = currentGroupItems?.map((item) => item.id);
-    setCaptionItemIds(captionItemIds);
+    // Optional-chain `metadata` — see the same guard in preset-caption.tsx. An unguarded read
+    // threw on any caption our AI generator wrote (metadata:null) and, with no ErrorBoundary
+    // above it, took the whole editor down rather than just this panel.
+    const currentGroupItems = groupedCaptions[trackItem?.metadata?.sourceUrl] ?? [];
+    setCaptionItemIds(currentGroupItems.map((item) => item.id));
     setCaptionsData(currentGroupItems);
   }, [trackItemsMap, trackItem]);
 
@@ -338,40 +342,83 @@ const CaptionWords = ({
     };
   }, []);
 
-  const onChange = ({ type, value }: { type: string; value: any }) => {
-    let newData: any[] | undefined;
-    setData({ ...data, [type]: value });
-    if (type === "linesPerCaption") {
-      newData = regroupCaptions(captionsData, value);
-    } else if (type === "wordsPerLine") {
-      newData = transformCaptions(captionsData, value);
-    } else if (type === "showObject") {
-      newData = captionsData?.map((item) => ({
-        ...item,
-        details: { ...item.details, showObject: value }
-      }));
+  /**
+   * Swap a caption group's items for re-cut ones, keeping the track they live on.
+   *
+   * Re-segmenting genuinely produces new items, so the old ones do have to go — but they belong
+   * on the SAME row. This used to LAYER_DELETE + ADD_ITEMS under a fresh `generateId()` track,
+   * which stranded the caption row and appended a new one above the clips it belonged under.
+   */
+  const replaceCaptionItems = (oldItems: any[], newItems: any[]) => {
+    const sm = getStateManagerRef();
+    if (!sm || !newItems.length) return;
+    const state = sm.getState();
+    const oldIds = new Set<string>(oldItems.map((item: any) => item.id));
+
+    const trackItemsMap = { ...(state?.trackItemsMap || {}) };
+    oldIds.forEach((id) => delete trackItemsMap[id]);
+    newItems.forEach((item: any) => {
+      trackItemsMap[item.id] = item;
+    });
+
+    const trackItemIds = [
+      ...(Array.isArray(state?.trackItemIds) ? state.trackItemIds : []).filter(
+        (id: string) => !oldIds.has(id)
+      ),
+      ...newItems.map((item: any) => item.id)
+    ];
+
+    let seated = false;
+    const tracks = (Array.isArray(state?.tracks) ? state.tracks : []).map((t: any) => {
+      if (t?.type !== "caption") return t;
+      const list: string[] = Array.isArray(t.items) ? t.items : [];
+      const kept = list.filter((id: string) => !oldIds.has(id));
+      if (!list.some((id: string) => oldIds.has(id))) return { ...t, items: kept };
+      seated = true;
+      return { ...t, items: [...kept, ...newItems.map((item: any) => item.id)] };
+    });
+    // Nothing owned them — land on the first caption row rather than mint one (minting is what
+    // made the row jump). If there's no caption track at all, do nothing: silently relocating
+    // the user's captions is worse than the dropdown appearing to no-op.
+    if (!seated) {
+      const idx = tracks.findIndex((t: any) => t?.type === "caption");
+      if (idx < 0) return;
+      tracks[idx] = {
+        ...tracks[idx],
+        items: [
+          ...(Array.isArray(tracks[idx].items) ? tracks[idx].items : []),
+          ...newItems.map((item: any) => item.id)
+        ]
+      };
     }
 
-    // Only restructure if we have both the old data to delete and new data to add
-    if (!captionsData?.length || !newData?.length) return;
+    sm.updateState({ tracks, trackItemIds, trackItemsMap }, { updateHistory: true });
+  };
 
-    dispatch(LAYER_DELETE, {
-      payload: {
-        trackItemIds: captionsData.map((t) => t.id)
-      }
-    });
-    dispatch(ADD_ITEMS, {
-      payload: {
-        trackItems: newData,
-        tracks: [
-          {
-            id: generateId(),
-            items: newData.map((item) => item.id),
-            type: "caption"
-          }
-        ]
-      }
-    });
+  const onChange = ({ type, value }: { type: string; value: any }) => {
+    setData({ ...data, [type]: value });
+    if (!captionsData?.length) return;
+
+    // "Words in line" just flips a flag the renderer reads — it never re-cuts anything, so it
+    // has no business deleting and re-adding items (which is what moved the row).
+    if (type === "showObject") {
+      const payload = captionsData.reduce(
+        (acc, item) => ({ ...acc, [item.id]: { details: { showObject: value } } }),
+        {}
+      );
+      dispatch(EDIT_OBJECT, { payload });
+      return;
+    }
+
+    // These two DO re-cut the captions into different items — but onto the same track.
+    const newData =
+      type === "linesPerCaption"
+        ? regroupCaptions(captionsData, value)
+        : type === "wordsPerLine"
+          ? transformCaptions(captionsData, value)
+          : undefined;
+    if (!newData?.length) return;
+    replaceCaptionItems(captionsData, newData);
   };
 
   const handleSetPosition = useCallback(
@@ -512,17 +559,19 @@ const CaptionWords = ({
 
             <PopoverContent className="z-[300] w-32 p-0">
               {OPTIONS_LINES_PER_PAGE.map((option, index) => (
-                <Button
-                  size={"sm"}
-                  variant="ghost"
-                  className="w-full"
-                  key={index}
-                  onClick={() =>
-                    onChange({ type: "linesPerCaption", value: option.value })
-                  }
-                >
-                  {option.label}
-                </Button>
+                <PopoverClose asChild>
+                  <Button
+                    size={"sm"}
+                    variant="ghost"
+                    className="w-full"
+                    key={index}
+                    onClick={() =>
+                      onChange({ type: "linesPerCaption", value: option.value })
+                    }
+                  >
+                    {option.label}
+                  </Button>
+                </PopoverClose>
               ))}
             </PopoverContent>
           </Popover>
@@ -556,17 +605,18 @@ const CaptionWords = ({
 
               <PopoverContent className="z-[300] w-32 p-0">
                 {OPTIONS_WORDS_PER_LINE.map((option, index) => (
-                  <Button
-                    size={"sm"}
-                    variant="ghost"
-                    className="w-full truncate"
-                    key={index}
-                    onClick={() =>
-                      onChange({ type: "wordsPerLine", value: option.value })
-                    }
-                  >
-                    {option.label}
-                  </Button>
+                  <PopoverClose asChild key={index}>
+                    <Button
+                      size={"sm"}
+                      variant="ghost"
+                      className="w-full truncate"
+                      onClick={() =>
+                        onChange({ type: "wordsPerLine", value: option.value })
+                      }
+                    >
+                      {option.label}
+                    </Button>
+                  </PopoverClose>
                 ))}
               </PopoverContent>
             </Popover>
@@ -601,17 +651,18 @@ const CaptionWords = ({
 
               <PopoverContent className="z-[300] w-32 p-0">
                 {OPTIONS_WORDS_IN_LINE.map((option, index) => (
-                  <Button
-                    size={"sm"}
-                    variant="ghost"
-                    className="w-full truncate"
-                    key={index}
-                    onClick={() =>
-                      onChange({ type: "showObject", value: option.value })
-                    }
-                  >
-                    {option.label}
-                  </Button>
+                  <PopoverClose asChild key={index}>
+                    <Button
+                      size={"sm"}
+                      variant="ghost"
+                      className="w-full truncate"
+                      onClick={() =>
+                        onChange({ type: "showObject", value: option.value })
+                      }
+                    >
+                      {option.label}
+                    </Button>
+                  </PopoverClose>
                 ))}
               </PopoverContent>
             </Popover>
@@ -639,38 +690,46 @@ const CaptionWords = ({
               </PopoverTrigger>
 
               <PopoverContent className="z-[300] w-32 p-0">
-                <Button
-                  size={"sm"}
-                  variant="ghost"
-                  className="w-full"
-                  onClick={() => handlePresetPosition("middle")}
-                >
-                  Auto
-                </Button>
-                <Button
-                  size={"sm"}
-                  variant="ghost"
-                  className="w-full"
-                  onClick={() => handlePresetPosition("up")}
-                >
-                  Top
-                </Button>
-                <Button
-                  size={"sm"}
-                  variant="ghost"
-                  className="w-full"
-                  onClick={() => handlePresetPosition("middle")}
-                >
-                  Center
-                </Button>
-                <Button
-                  size={"sm"}
-                  variant="ghost"
-                  className="w-full"
-                  onClick={() => handlePresetPosition("down")}
-                >
-                  Bottom
-                </Button>
+                <PopoverClose asChild>
+                  <Button
+                    size={"sm"}
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() => handlePresetPosition("middle")}
+                  >
+                    Auto
+                  </Button>
+                </PopoverClose>
+                <PopoverClose asChild>
+                  <Button
+                    size={"sm"}
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() => handlePresetPosition("up")}
+                  >
+                    Top
+                  </Button>
+                </PopoverClose>
+                <PopoverClose asChild>
+                  <Button
+                    size={"sm"}
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() => handlePresetPosition("middle")}
+                  >
+                    Center
+                  </Button>
+                </PopoverClose>
+                <PopoverClose asChild>
+                  <Button
+                    size={"sm"}
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() => handlePresetPosition("down")}
+                  >
+                    Bottom
+                  </Button>
+                </PopoverClose>
               </PopoverContent>
             </Popover>
           </div>
@@ -704,17 +763,18 @@ const CaptionWords = ({
             <PopoverContent className="w-48 p-2">
               <div className="space-y-1">
                 {animationOptions.map((opt) => (
-                  <Button
-                    key={opt.key}
-                    variant={
-                      selectedOptions.includes(opt.key) ? "default" : "ghost"
-                    }
-                    size="sm"
-                    className="w-full justify-start text-sm"
-                    onClick={() => toggleOption(opt.key)}
-                  >
-                    {opt.label}
-                  </Button>
+                  <PopoverClose asChild key={opt.key}>
+                    <Button
+                      variant={
+                        selectedOptions.includes(opt.key) ? "default" : "ghost"
+                      }
+                      size="sm"
+                      className="w-full justify-start text-sm"
+                      onClick={() => toggleOption(opt.key)}
+                    >
+                      {opt.label}
+                    </Button>
+                  </PopoverClose>
                 ))}
               </div>
             </PopoverContent>

@@ -45,4 +45,15 @@ function PopoverAnchor({
   return <PopoverPrimitive.Anchor data-slot="popover-anchor" {...props} />;
 }
 
-export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };
+/**
+ * Dismisses the popover. Wrap an option with `<PopoverClose asChild>` so picking it closes the
+ * menu — Radix keeps the popover open on any click inside the content, so without this every
+ * dropdown built on Popover stays up until you click the trigger a second time.
+ */
+function PopoverClose({
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Close>) {
+  return <PopoverPrimitive.Close data-slot="popover-close" {...props} />;
+}
+
+export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor, PopoverClose };

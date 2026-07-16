@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   IAudio,
   ICaption,
@@ -12,12 +12,11 @@ import BasicText from "./basic-text";
 import BasicImage from "./basic-image";
 import BasicVideo from "./basic-video";
 import BasicAudio from "./basic-audio";
-import BasicCaption from "./basic-caption";
+import BasicCaption from "../captions/style";
 import { MenuItem } from "../menu-item";
 import useStore from "../store/use-store";
 import useLayoutStore from "../store/use-layout-store";
 import TranscriptPanel from "./transcript-panel";
-import CaptionsPanel from "./captions-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { AudioLines, Captions, ImageIcon, Type, Video } from "lucide-react";
@@ -27,7 +26,8 @@ type TabDefinition = {
   label: string;
   features?: string[];
   transcript?: boolean;
-  captions?: boolean;
+  /** Render BasicCaption whole (no `type` → showAll) instead of slicing it across tabs. */
+  fullCaption?: boolean;
 };
 
 const TAB_CONFIG: Record<string, TabDefinition[]> = {
@@ -36,14 +36,13 @@ const TAB_CONFIG: Record<string, TabDefinition[]> = {
     { value: "motion", label: "Motion", features: ["animations"] },
     { value: "effects", label: "Effects", features: ["fontStroke", "fontShadow"] }
   ],
-  caption: [
-    { value: "content", label: "Content", features: ["captionPreset", "captionWords"] },
-    { value: "style", label: "Style", features: ["textControls"] },
-    { value: "colors", label: "Colors", features: ["captionColors"] },
-    { value: "motion", label: "Motion", features: ["animations"] },
-    { value: "effects", label: "Effects", features: ["fontStroke", "fontShadow"] },
-    { value: "transcript", label: "Guided Text", transcript: true }
-  ],
+  // ONE tab, rendering BasicCaption whole — the exact panel the left Captions menu shows.
+  // Slicing it across Content/Style/Colors/Motion/Effects meant Preset lived on one tab and
+  // Words on another, so styling a caption always cost extra clicks and the two entry points
+  // disagreed about what "the caption panel" even looked like. Guided Text is dropped here on
+  // purpose: a caption has no media of its own to transcribe, so that tab rendered empty
+  // (media clips keep theirs).
+  caption: [{ value: "caption", label: "Caption", fullCaption: true }],
   image: [
     { value: "adjust", label: "Adjust", features: ["crop", "basic"] },
     { value: "motion", label: "Motion", features: ["animations"] },
@@ -54,13 +53,11 @@ const TAB_CONFIG: Record<string, TabDefinition[]> = {
     { value: "audio", label: "Audio", features: ["volume", "speed"] },
     { value: "motion", label: "Motion", features: ["animations"] },
     { value: "style", label: "Style", features: ["outline", "shadow"] },
-    { value: "transcript", label: "Guided Text", transcript: true },
-    { value: "captions", label: "Captions", captions: true }
+    { value: "transcript", label: "Guided Text", transcript: true }
   ],
   audio: [
     { value: "audio", label: "Audio", features: ["volume", "speed"] },
-    { value: "transcript", label: "Guided Text", transcript: true },
-    { value: "captions", label: "Captions", captions: true }
+    { value: "transcript", label: "Guided Text", transcript: true }
   ]
 };
 
@@ -110,10 +107,10 @@ const TranscriptTab = ({ trackItem }: { trackItem: ITrackItem }) => (
   </div>
 );
 
-const CaptionsTab = ({ trackItem }: { trackItem: ITrackItem }) => (
-  <div className="rounded-[18px] bg-background/25 p-2">
-    <CaptionsPanel trackItem={trackItem} />
-  </div>
+// No `type` prop → BasicCaption renders showAll, i.e. the same full Preset/Words/Animations/
+// Colors list the left Captions menu puts up. One panel, one place it can differ: nowhere.
+const CaptionStyleTab = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => (
+  <BasicCaption trackItem={trackItem as ITrackItem & ICaption} />
 );
 
 const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => {
@@ -159,19 +156,22 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <div className="px-2 py-2">
-          <TabsList className="h-auto w-full justify-start gap-0.5 rounded-2xl bg-background/45 p-1 flex-wrap">
-            {tabs.map((tab) => (
-              <TabsTrigger
-                key={tab.value}
-                value={tab.value}
-                className="rounded-lg border-0 px-2 py-1.5 text-[11px] font-semibold shadow-none"
-              >
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
+        {/* A lone tab is just a label on top of the only thing there is — captions land here. */}
+        {tabs.length > 1 && (
+          <div className="px-2 py-2">
+            <TabsList className="h-auto w-full justify-start gap-0.5 rounded-2xl bg-background/45 p-1 flex-wrap">
+              {tabs.map((tab) => (
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  className="rounded-lg border-0 px-2 py-1.5 text-[11px] font-semibold shadow-none"
+                >
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-hidden px-2 py-2">
           {tabs.map((tab) => (
@@ -179,8 +179,8 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
               <div className="h-full overflow-y-auto rounded-[18px] bg-transparent">
                 {tab.transcript ? (
                   <TranscriptTab trackItem={trackItem} />
-                ) : tab.captions ? (
-                  <CaptionsTab trackItem={trackItem} />
+                ) : tab.fullCaption ? (
+                  <CaptionStyleTab trackItem={trackItem} />
                 ) : (
                   <div className="space-y-0">
                     {tab.features?.map((feature) => renderFeature(trackItem, feature))}
@@ -218,20 +218,24 @@ export const ControlItem = () => {
   const [trackItem, setTrackItem] = useState<ITrackItem | null>(null);
   const { setTrackItem: setLayoutTrackItem } = useLayoutStore();
 
+  // `layout.trackItem` is a single global slot shared with editor.tsx and the left Captions
+  // menu, and FloatingControl renders nothing while it's empty — so nulling it closes whoever's
+  // picker is open, not just ours. This effect re-runs on every trackItemsMap change, so with a
+  // blanket null it fired on each edit: applying a preset from the left menu rewrote the map,
+  // this ran with an empty selection, and the picker the click came from disappeared. Only
+  // release the slot when we're still the one holding it.
+  const heldItemRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeIds.length === 1) {
-      const [id] = activeIds;
-      const item = trackItemsMap[id];
-      if (item) {
-        setTrackItem(item);
-        setLayoutTrackItem(item);
-      } else {
-        console.log(transitionsMap[id]);
-        setTrackItem(null);
-        setLayoutTrackItem(null);
-      }
-    } else {
-      setTrackItem(null);
+    const item = activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
+    if (item) {
+      setTrackItem(item);
+      heldItemRef.current = item.id;
+      setLayoutTrackItem(item);
+      return;
+    }
+    setTrackItem(null);
+    if (useLayoutStore.getState().trackItem?.id === heldItemRef.current) {
+      heldItemRef.current = null;
       setLayoutTrackItem(null);
     }
   }, [activeIds, trackItemsMap, transitionsMap, setLayoutTrackItem]);

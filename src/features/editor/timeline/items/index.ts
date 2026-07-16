@@ -3,6 +3,7 @@ export { default as Image } from "./image";
 export { default as Audio } from "./audio";
 export { default as Video } from "./video";
 export { default as Caption } from "./caption";
+export { default as Graphic } from "./graphic";
 export { default as Helper } from "./helper";
 export { default as Track } from "./track";
 export { default as LinealAudioBars } from "./lineal-audio-bars";

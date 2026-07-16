@@ -137,8 +137,13 @@ export const CaptionWord: React.FC<CaptionWordProps> = ({
   const { start, end } = word;
   const startAtFrame = ((start + offsetFrom) / 1000) * fps;
   const endAtFrame = ((end + offsetFrom) / 1000) * fps;
-  const isActive = currentFrame > startAtFrame && currentFrame < endAtFrame;
-  const isAppeared = currentFrame > startAtFrame;
+  // `>=`, not `>`: a word is spoken ON its start frame, not one frame later. With `>` the very
+  // first word of a caption is never appeared at frame 0 — and since most presets carry an
+  // animation from ANIMATION_CAPTION_LIST, the styles above turn "not appeared" into
+  // `display: none`. Parked at the start of a clip that rendered EVERY word invisible, which
+  // reads as "applying a preset blanked the preview".
+  const isActive = currentFrame >= startAtFrame && currentFrame < endAtFrame;
+  const isAppeared = currentFrame >= startAtFrame;
 
   // Handle line-based visibility
   if (

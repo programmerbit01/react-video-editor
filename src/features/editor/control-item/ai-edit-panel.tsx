@@ -4,8 +4,8 @@ import useAiEditStore from "../store/use-ai-edit-store";
 import useStore from "../store/use-store";
 import { dispatch } from "@designcombo/events";
 import { PLAYER_SEEK } from "../constants/events";
-import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
-import { addCaptions } from "../ai-edit/caption-builder";
+import useCaptionTranscribeStore from "../captions/transcribe-store";
+import { addCaptions } from "../captions/builder";
 import {
   applyOperations,
   addAudio,

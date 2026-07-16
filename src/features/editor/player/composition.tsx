@@ -39,11 +39,38 @@ const Composition = () => {
     return map;
   }, [tracks]);
 
+  // itemId → index of its track, i.e. its layer.
+  const itemTrackIndex = useMemo(() => {
+    const map: Record<string, number> = {};
+    (tracks as ITrack[]).forEach((track, index) => {
+      track.items.forEach((itemId) => {
+        map[itemId] = index;
+      });
+    });
+    return map;
+  }, [tracks]);
+
   const groupedItems = groupTrackItems({
     trackItemIds,
     transitionsMap,
     trackItemsMap: trackItemsMap
   });
+
+  // Stack by TRACK, not by the order items happened to be added.
+  //
+  // Everything here is an absolutely-positioned Sequence, so paint order IS z-order — and this
+  // rendered straight down trackItemIds, which is just insertion order. Caption an audio clip
+  // and THEN drop in a video and the video lands last, painting over the captions: they were
+  // present, sized and correct, and invisible. Which clip you added first is not a layering
+  // decision. The track list is: it goes video → audio → text → caption → lottie, first track
+  // at the back. Array.prototype.sort is stable, so items sharing a track keep their order.
+  const orderedGroups = useMemo(
+    () =>
+      [...groupedItems].sort(
+        (a, b) => (itemTrackIndex[a[0]?.id] ?? 0) - (itemTrackIndex[b[0]?.id] ?? 0)
+      ),
+    [groupedItems, itemTrackIndex]
+  );
   const mediaItems = Object.values(trackItemsMap).filter((item) => {
     return item.type === "video" || item.type === "audio";
   });
@@ -207,7 +234,7 @@ const Composition = () => {
 
   const content = (
     <>
-      {groupedItems.map((group, index) => {
+      {orderedGroups.map((group, index) => {
         if (group.length === 1) {
           const item = trackItemsMap[group[0].id];
           const trackId = itemTrackMap[item.id];

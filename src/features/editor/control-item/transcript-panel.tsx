@@ -8,7 +8,7 @@ import { ScissorsLineDashed, SquareSplitHorizontal } from "lucide-react";
 import useCaptionTranscribeStore, {
   TranscriptResult,
   TranscriptSegment
-} from "../store/use-caption-transcribe-store";
+} from "../captions/transcribe-store";
 import useUploadStore from "../store/use-upload-store";
 import useStore from "../store/use-store";
 import { useCurrentPlayerFrame } from "../hooks/use-current-frame";

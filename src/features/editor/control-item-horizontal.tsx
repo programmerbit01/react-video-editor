@@ -14,7 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useIsLargeScreen } from "@/hooks/use-media-query";
 import { Icons } from "@/components/shared/icons";
 import BasicText from "./control-item/basic-text";
-import BasicCaption from "./control-item/basic-caption";
+import BasicCaption from "./captions/style";
 import BasicImage from "./control-item/basic-image";
 import BasicVideo from "./control-item/basic-video";
 import BasicAudio from "./control-item/basic-audio";
@@ -574,16 +574,21 @@ export default function ControlItemHorizontal() {
   // Framer Motion controls
   const controls = useAnimation();
 
+  // Only ever clear the SHARED layout.trackItem slot when we're still the one holding it —
+  // see the identical guard in control-item.tsx. FloatingControl renders nothing while the
+  // slot is empty, so a blanket null closes another panel's open picker.
+  const heldItemRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeIds.length === 1) {
-      const [id] = activeIds;
-      const trackItem = trackItemsMap[id];
-      if (trackItem) {
-        setTrackItem(trackItem);
-        setLayoutTrackItem(trackItem);
-      } else console.log(transitionsMap[id]);
-    } else {
-      setTrackItem(null);
+    const item = activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
+    if (item) {
+      setTrackItem(item);
+      heldItemRef.current = item.id;
+      setLayoutTrackItem(item);
+      return;
+    }
+    setTrackItem(null);
+    if (useLayoutStore.getState().trackItem?.id === heldItemRef.current) {
+      heldItemRef.current = null;
       setLayoutTrackItem(null);
     }
   }, [activeIds, trackItemsMap]);

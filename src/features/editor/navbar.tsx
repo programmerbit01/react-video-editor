@@ -71,6 +71,17 @@ import { resolveAssetUrl } from "./utils/asset-url";
 // /api/proxy wrapper baked into old/imported designs → direct R2.
 const toDirectMediaSrc = (src: unknown) => resolveAssetUrl(src);
 
+// Every caption our generator ever wrote points its fontUrl at this host, which now 403s.
+// A dead font URL doesn't degrade — it HANGS the load (see patchDesignMetadata), so these
+// have to be rewritten on the way in. Anton is the closest live bold display face to the
+// original "the bold font"; it comes from our own FONTS list (data/fonts.ts), which is
+// entirely Google-Fonts-hosted, so nothing new is vendored.
+const DEAD_FONT_HOST = "cdn.designcombo.dev";
+const FALLBACK_CAPTION_FONT = {
+  family: "Anton",
+  url: "https://fonts.gstatic.com/s/anton/v15/1Ptgg87LROyAm0K08i4gS7lu.ttf",
+};
+
 const withEditorBase = (path: string) => {
   if (typeof window === "undefined") return path;
   if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
@@ -228,6 +239,24 @@ export default function Navbar({
 
       if (directSrc && directSrc !== details.src) {
         item.details = { ...details, src: directSrc };
+      }
+
+      // Repoint captions off the dead font CDN. cdn.designcombo.dev now 403s, and
+      // @designcombo/state's font loader neither resolves nor rejects when a load fails
+      // (a failed .load() resolves to an Error, which has no .family, so the only resolve
+      // path is unreachable) — so DESIGN_LOAD awaits it forever and the project silently
+      // never opens. Read details back off the item: the src rewrite above may have
+      // already replaced it.
+      const fontDetails = (item.details ?? {}) as Record<string, unknown>;
+      if (
+        typeof fontDetails.fontUrl === "string" &&
+        fontDetails.fontUrl.includes(DEAD_FONT_HOST)
+      ) {
+        item.details = {
+          ...fontDetails,
+          fontUrl: FALLBACK_CAPTION_FONT.url,
+          fontFamily: FALLBACK_CAPTION_FONT.family,
+        };
       }
 
       if (item?.type === "video") {

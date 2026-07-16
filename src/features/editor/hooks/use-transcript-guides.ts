@@ -5,7 +5,7 @@ import useStore from "../store/use-store";
 import useCaptionTranscribeStore, {
   TranscriptResult,
   TranscriptSegment
-} from "../store/use-caption-transcribe-store";
+} from "../captions/transcribe-store";
 import {
   TranscriptOverlayStore,
   OverlaySegment,

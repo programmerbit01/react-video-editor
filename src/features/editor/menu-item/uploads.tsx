@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
 import { resolveAssetUrl } from "../utils/asset-url";
 import { vappAuth, sttForUrl } from "@/utils/vapp-api";
-import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import useCaptionTranscribeStore from "../captions/transcribe-store";
 import ModalUpload from "@/components/modal-upload";
 import Draggable from "@/components/shared/draggable";
 import { Component, useEffect, useRef, useState, memo } from "react";
@@ -147,7 +147,11 @@ const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
 const dragData = (item: any): Record<string, any> => {
   const src = getPlayerSrc(item);
   const dsrc = getDisplaySrc(item);
-  if (isAudio(item)) return { type: "audio", details: { src }, metadata: {} };
+  // Carry the library's label onto the item. The panel already knows this media as "sana is my
+  // name"; the clip only ever knew itself as "audio", because the name stopped here. Every R2
+  // pull lands at <job>/0.mp3, so the filename can't tell two voiceovers apart either.
+  const name = getLabel(item);
+  if (isAudio(item)) return { type: "audio", details: { src, name }, metadata: {} };
   const meta = mediaMetaCache.get(src) || mediaMetaCache.get(dsrc) || {};
   const width = meta.width || 1920, height = meta.height || 1080;
   if (isVideo(item)) {
@@ -156,10 +160,10 @@ const dragData = (item: any): Record<string, any> => {
     // the timeline captures the frame itself.
     const poster = String(item.poster || "");
     return poster
-      ? { type: "video", duration: meta.duration || 10000, details: { src, width, height }, metadata: { previewUrl: poster } }
-      : { type: "video", duration: meta.duration || 10000, details: { src, width, height } };
+      ? { type: "video", duration: meta.duration || 10000, details: { src, width, height, name }, metadata: { previewUrl: poster } }
+      : { type: "video", duration: meta.duration || 10000, details: { src, width, height, name } };
   }
-  return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: { previewUrl: dsrc } };
+  return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height, name }, metadata: { previewUrl: dsrc } };
 };
 
 const getLabel = (item: any) => {
@@ -860,7 +864,7 @@ export const Uploads = () => {
             .catch(() => {});
         }
         dispatch(ADD_AUDIO, {
-          payload: { id: generateId(), type: "audio", details: { src }, metadata: audioMeta },
+          payload: { id: generateId(), type: "audio", details: { src, name: getLabel(item) }, metadata: audioMeta },
           options: {},
         });
         return;
@@ -893,7 +897,7 @@ export const Uploads = () => {
             .catch(() => {});
         }
         dispatch(ADD_VIDEO, {
-          payload: { id: generateId(), duration, details: { src, width, height }, metadata: videoMeta },
+          payload: { id: generateId(), duration, details: { src, width, height, name: getLabel(item) }, metadata: videoMeta },
           options: { resourceId: "main", scaleMode: "fit" },
         });
         void capturePoster(getDisplaySrc(item)); // background: cache poster for later
@@ -911,7 +915,7 @@ export const Uploads = () => {
         } catch {}
       }
       dispatch(ADD_IMAGE, {
-        payload: { id: generateId(), type: "image", display: { from: 0, to: 5000 }, details: { src, width, height }, metadata: {} },
+        payload: { id: generateId(), type: "image", display: { from: 0, to: 5000 }, details: { src, width, height, name: getLabel(item) }, metadata: {} },
         options: {},
       });
     } finally {

@@ -31,7 +31,7 @@ import { ITimelineScaleState } from "@designcombo/types";
 import { useIsLargeScreen } from "@/hooks/use-media-query";
 import { useTimelineOffsetX } from "../hooks/use-timeline-offset";
 import useLayoutStore from "../store/use-layout-store";
-import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import useCaptionTranscribeStore from "../captions/transcribe-store";
 
 const IconPlayerPlayFilled = ({ size }: { size: number }) => (
   <svg

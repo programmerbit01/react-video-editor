@@ -5,18 +5,18 @@ import { dispatch } from "@designcombo/events";
 import { ADD_ANIMATION, EDIT_OBJECT } from "@designcombo/state";
 import React, { useEffect, useState } from "react";
 import { IBoxShadow, ICaption, ITrackItem } from "@designcombo/types";
-import Outline from "./common/outline";
-import Shadow from "./common/shadow";
-import CaptionWords from "./common/caption-words";
-import CaptionColors from "./common/caption-colors";
-import { TextControls } from "./common/text";
+import Outline from "../control-item/common/outline";
+import Shadow from "../control-item/common/shadow";
+import CaptionWords from "./sections/words";
+import CaptionColors from "./sections/colors";
+import { TextControls } from "../control-item/common/text";
 import { Animation, presets } from "../player/animated";
 import { PresetName } from "../player/animated/presets";
 import { X } from "lucide-react";
 import { ICompactFont, IFont } from "../interfaces/editor";
 import { DEFAULT_FONT } from "../constants/font";
-import { PresetCaption } from "./common/preset-caption";
-import AnimationCaption from "./common/animation-caption";
+import { PresetCaption } from "./sections/preset";
+import AnimationCaption from "./sections/animation-button";
 
 interface ITextControlProps {
   color: string;

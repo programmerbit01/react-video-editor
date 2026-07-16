@@ -6,11 +6,13 @@ import { Label } from "@/components/ui/label";
 import useLayoutStore from "../../store/use-layout-store";
 import { useIsLargeScreen } from "@/hooks/use-media-query";
 import {
+  activePresetIdOf,
   applyPreset,
-  groupCaptionItems
-} from "../floating-controls/caption-preset-picker";
+  groupCaptionItems,
+  presetLabel
+} from "../presets";
 import useStore from "../../store/use-store";
-import { PresetPicker } from "./preset-picker";
+import { PresetPicker } from "../../control-item/common/preset-picker";
 
 interface PresetTextProps {
   trackItem: ITrackItem & any;
@@ -40,9 +42,13 @@ const PresetCaptionContent = ({
   useEffect(() => {
     const groupedCaptions = groupCaptionItems(trackItemsMap);
 
-    const currentGroupItems = groupedCaptions[trackItem.metadata.sourceUrl];
-    const captionItemIds = currentGroupItems?.map((item) => item.id);
-    setCaptionItemIds(captionItemIds);
+    // Optional-chain `metadata`: our AI generator emits captions with metadata:null, and this
+    // effect is eager, so an unguarded read threw on selection — and with no ErrorBoundary in
+    // the editor tree that TypeError unmounted the whole app (the "blank screen"). groupBy
+    // buckets metadata-less captions under the string "undefined", and indexing with undefined
+    // coerces to that same key, so they still group together as one source.
+    const currentGroupItems = groupedCaptions[trackItem?.metadata?.sourceUrl] ?? [];
+    setCaptionItemIds(currentGroupItems.map((item) => item.id));
     setCaptionsData(currentGroupItems);
   }, [trackItemsMap, trackItem]);
 
@@ -67,7 +73,9 @@ const PresetCaptionContent = ({
             onClick={() => setFloatingControl("caption-preset-picker")}
           >
             <div className="w-full text-left">
-              <p className="truncate">None</p>
+              {/* Was a hardcoded "None" — it read the same whether or not a preset was on,
+                  so the panel could never tell you what was applied. */}
+              <p className="truncate">{presetLabel(activePresetIdOf(captionsData))}</p>
             </div>
             <ChevronDown className="text-muted-foreground" size={14} />
           </Button>

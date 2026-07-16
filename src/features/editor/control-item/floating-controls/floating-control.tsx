@@ -1,7 +1,7 @@
 import useLayoutStore from "../../store/use-layout-store";
-import AnimationCaption from "./animation-caption";
+import AnimationCaption from "../../captions/sections/animation-picker";
 import AnimationPicker from "./animation-picker";
-import CaptionPresetPicker from "./caption-preset-picker";
+import CaptionPresetPicker from "../../captions/presets";
 import FontFamilyPicker from "./font-family-picker";
 import TextPresetPicker from "./text-preset-picker";
 

@@ -7,7 +7,7 @@ import { Animation, presets } from "../../player/animated";
 import useLayoutStore from "../../store/use-layout-store";
 import useClickOutside from "../../hooks/useClickOutside";
 import { PresetName } from "../../player/animated/presets";
-import { groupCaptionItems } from "./caption-preset-picker";
+import { groupCaptionItems } from "../presets";
 import useStore from "../../store/use-store";
 
 const AnimationCaption = () => {
@@ -18,9 +18,12 @@ const AnimationCaption = () => {
   useEffect(() => {
     const groupedCaptions = groupCaptionItems(trackItemsMap);
 
-    const currentGroupItems = groupedCaptions[trackItem?.metadata.sourceUrl];
-    const captionItemIds = currentGroupItems?.map((item) => item.id);
-    setCaptionItemIds(captionItemIds);
+    // Chain on `metadata`, not just `trackItem` — the old `trackItem?.metadata.sourceUrl`
+    // guarded the one thing that is always present and left the one that isn't: captions from
+    // our AI generator carry metadata:null, and with no ErrorBoundary above this the throw
+    // blanked the editor. Same guard as the other three caption panels.
+    const currentGroupItems = groupedCaptions[trackItem?.metadata?.sourceUrl] ?? [];
+    setCaptionItemIds(currentGroupItems.map((item) => item.id));
   }, [trackItemsMap, trackItem]);
 
   const isAnimationActive = (presetName: PresetName, type: "in" | "out") => {

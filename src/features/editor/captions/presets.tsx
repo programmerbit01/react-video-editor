@@ -1,18 +1,16 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { dispatch } from "@designcombo/events";
-import { ADD_ITEMS, EDIT_OBJECT, LAYER_DELETE } from "@designcombo/state";
+import { EDIT_OBJECT } from "@designcombo/state";
 import { ITrackItem, ITrackItemsMap } from "@designcombo/types";
 import { CircleOff, XIcon } from "lucide-react";
-import useLayoutStore from "../../store/use-layout-store";
+import useLayoutStore from "../store/use-layout-store";
 import { useEffect, useRef, useState } from "react";
-import useClickOutside from "../../hooks/useClickOutside";
-import useStore from "../../store/use-store";
+import useClickOutside from "../hooks/useClickOutside";
+import useStore from "../store/use-store";
 import { groupBy } from "lodash";
-import { loadFonts } from "../../utils/fonts";
-import { transformCaptions } from "../common/caption-words";
-import { generateId } from "@designcombo/timeline";
-import { PresetPicker } from "../common/preset-picker";
+import { loadFonts } from "../utils/fonts";
+import { PresetPicker } from "../control-item/common/preset-picker";
 interface IBoxShadow {
   color: string;
   x: number;
@@ -20,6 +18,8 @@ interface IBoxShadow {
   blur: number;
 }
 export interface ICaptionsControlProps {
+  /** Stable identity, stamped on below. See STYLE_CAPTION_PRESETS. */
+  id?: string;
   type?: "word" | "lines";
   appearedColor: string;
   activeColor: string;
@@ -50,7 +50,7 @@ export const NONE_PRESET: ICaptionsControlProps = {
   borderWidth: 0,
   boxShadow: { color: "#000000", x: 15, y: 15, blur: 60 }
 };
-export const STYLE_CAPTION_PRESETS: ICaptionsControlProps[] = [
+const RAW_CAPTION_PRESETS: ICaptionsControlProps[] = [
   {
     appearedColor: "#FFFFFF",
     activeColor: "#50FF12",
@@ -4299,6 +4299,28 @@ export const STYLE_CAPTION_PRESETS: ICaptionsControlProps[] = [
   }
 ];
 
+// Presets are identified by their position in the list above — it's a static literal, so the
+// index is a stable id. applyPreset stamps it onto details.presetId, which is the only way the
+// panel can say WHICH preset is live and the picker can tick the right tile. Without it the
+// label read a hardcoded "None" forever and every tile looked unselected right after you
+// clicked it. (The animation picker already works this way — animations.in.name.)
+export const STYLE_CAPTION_PRESETS: ICaptionsControlProps[] = RAW_CAPTION_PRESETS.map(
+  (preset, index) => ({ ...preset, id: `caption-preset-${index}` })
+);
+
+/** Human label for the Preset row — presets carry no names, so number them as shown. */
+export const presetLabel = (presetId?: string | null): string => {
+  if (!presetId) return "None";
+  const i = STYLE_CAPTION_PRESETS.findIndex((p) => p.id === presetId);
+  return i < 0 ? "Custom" : `Preset ${i + 1}`;
+};
+
+/** The preset the given caption items share, or null when none/mixed. */
+export const activePresetIdOf = (captionsData: any[]): string | null => {
+  const ids = new Set((captionsData ?? []).map((c) => c?.details?.presetId ?? null));
+  return ids.size === 1 ? ([...ids][0] as string | null) : null;
+};
+
 export const getTextShadow = (boxShadow?: IBoxShadow): string | undefined => {
   if (!boxShadow) return undefined;
   return `${boxShadow.x / 8}px ${boxShadow.y / 8}px ${boxShadow.blur / 8}px ${
@@ -4337,10 +4359,7 @@ export const applyPreset = async (
     preset.preservedColorKeyWord = false;
   }
 
-  let newData = transformCaptions(
-    captionsData,
-    preset.type === "word" ? "singleWord" : "time"
-  );
+  if (!captionsData?.length) return;
 
   await loadFonts([
     {
@@ -4349,32 +4368,28 @@ export const applyPreset = async (
     }
   ]);
 
-  const { previewUrlDynamic, previewUrlStatic, type, ...sanitizedPreset } =
+  // A preset is STYLE ONLY. It never touches text, word timings, ids or tracks.
+  //
+  // This used to run every caption through transformCaptions() first — `type:"word"` presets
+  // re-cut the captions into one-word-per-item, the rest re-chunked them into 500ms groups —
+  // then LAYER_DELETE the originals and ADD_ITEMS replacements under a freshly generated
+  // track. So picking a style silently re-segmented your script ("I am good, thank you, Lim."
+  // became six items), minted new ids, and jumped the caption row above the clips it belonged
+  // under. Re-segmenting is the "Words per line" dropdown's job, and it already does it; the
+  // preset had no business doing it too.
+  //
+  // EDIT_OBJECT patches details in place — the same call "Apply style to all" uses.
+  const { previewUrlDynamic, previewUrlStatic, type, id, ...sanitizedPreset } =
     preset;
-  dispatch(LAYER_DELETE, {
-    payload: {
-      trackItemIds: captionsData.map((item) => item.id)
+  const payload: Record<string, any> = {};
+  for (const item of captionsData) {
+    if (item?.id) {
+      payload[item.id] = {
+        details: { ...sanitizedPreset, presetId: id ?? null }
+      };
     }
-  });
-
-  dispatch(ADD_ITEMS, {
-    payload: {
-      trackItems: newData.map((item) => ({
-        ...item,
-        details: {
-          ...item.details,
-          ...sanitizedPreset
-        }
-      })),
-      tracks: [
-        {
-          id: generateId(),
-          items: newData.map((item) => item.id),
-          type: "caption"
-        }
-      ]
-    }
-  });
+  }
+  if (Object.keys(payload).length) dispatch(EDIT_OBJECT, { payload });
 };
 
 export const groupCaptionItems = (trackItemsMap: ITrackItemsMap) => {
@@ -4399,9 +4414,11 @@ export default function CaptionPresetPicker({
   useEffect(() => {
     const groupedCaptions = groupCaptionItems(trackItemsMap);
 
-    const currentGroupItems = groupedCaptions[trackItem.metadata.sourceUrl];
-    const captionItemIds = currentGroupItems?.map((item) => item.id);
-    setCaptionItemIds(captionItemIds);
+    // Optional-chain `metadata` — third site of the same crash (see preset-caption.tsx).
+    // Captions written by our AI generator carry metadata:null, and there is no ErrorBoundary
+    // above these panels, so an unguarded read blanked the entire editor.
+    const currentGroupItems = groupedCaptions[trackItem?.metadata?.sourceUrl] ?? [];
+    setCaptionItemIds(currentGroupItems.map((item) => item.id));
     setCaptionsData(currentGroupItems);
   }, [trackItemsMap, trackItem]);
 

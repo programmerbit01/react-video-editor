@@ -14,6 +14,7 @@ import {
   Text,
   Video,
   Caption,
+  Graphic,
   Helper,
   Track,
   LinealAudioBars,
@@ -31,7 +32,7 @@ import { useTimelineOffsetX } from "../hooks/use-timeline-offset";
 import { useStateManagerEvents } from "../hooks/use-state-manager-events";
 import { useResizbleTimeline } from "../hooks/use-resizable-timeline";
 import useLayoutStore from "../store/use-layout-store";
-import useCaptionTranscribeStore from "../store/use-caption-transcribe-store";
+import useCaptionTranscribeStore from "../captions/transcribe-store";
 import { Captions as CaptionsIcon, Download, Upload, Loader2, CheckCircle2 } from "lucide-react";
 import { processFileUpload } from "@/utils/upload-service";
 import { registerVappMediaUrl, getVappUploadCtx } from "@/utils/vapp-upload-client";
@@ -42,6 +43,9 @@ import TrackControlsOverlay from "./track-controls-overlay";
 import { AnimationOverlayStore } from "../utils/animation-overlay-store";
 
 
+// The KEY is the lookup name — registerItems does setClass(value, key), and the timeline asks
+// for getClass(<capitalised item.type>). Anything the player can render must appear here or
+// adding it throws "No class registered for X" straight out of Timeline.addTrackItem, uncaught.
 CanvasTimeline.registerItems({
   Text,
   Image,
@@ -54,7 +58,20 @@ CanvasTimeline.registerItems({
   LinealAudioBars,
   RadialAudioBars,
   WaveAudioBars,
-  HillAudioBars
+  HillAudioBars,
+  // Data-graphic overlays. The player has rendered these all along (see the SequenceItem
+  // registry) and the AI generator emits them — 14 such items across the live projects — but
+  // the timeline had no class for any, so they crashed the editor on load. One labelled bar
+  // serves them all: there's no waveform or filmstrip to draw.
+  Barchart: Graphic,
+  Linechart: Graphic,
+  Statcard: Graphic,
+  Bulletlist: Graphic,
+  Lottie: Graphic,
+  // Not in any project today, but the player renders them and the UI can add them — which
+  // would crash the editor the same way. Registered so that can't happen.
+  Shape: Graphic,
+  Illustration: Graphic
 });
 
 const EMPTY_SIZE = { width: 0, height: 0 };
