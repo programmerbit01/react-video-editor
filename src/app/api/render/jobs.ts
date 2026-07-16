@@ -16,6 +16,8 @@ export interface RenderJob {
   cores?: number;
   log?: string[];
   cancelled?: boolean;
+  /** Item types FF could not draw and left out of this render. */
+  dropped?: { type: string; count: number }[];
 }
 
 export const jobs = new Map<string, RenderJob>();

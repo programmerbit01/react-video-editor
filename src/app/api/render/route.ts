@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { describeFfDropped, ffDroppedItems } from "@/features/editor/item-types";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
@@ -746,6 +747,17 @@ async function runExport(
     .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
 
   appendJobLog(jobId, `timeline ${videoItems.length} visual items, ${audioItems.length} audio items, total ${totalSec.toFixed(2)}s`);
+
+  // Say what this render is about to leave out. FF handles video/image/audio/caption and skips
+  // the other 14 types; until now it skipped them without a word, so a project whose charts
+  // never made it into the mp4 looked exactly like one that had none. The client warns before
+  // you commit to the wait — this is the record of what actually happened.
+  const dropped = ffDroppedItems(allItems as { type?: unknown }[]);
+  if (dropped.length) {
+    appendJobLog(jobId, `NOT RENDERED (FF cannot draw these): ${describeFfDropped(dropped)}`);
+    mergeJob(jobId, { dropped: dropped.map((d) => ({ type: d.type, count: d.count })) });
+  }
+
   logRam(jobId, "start (baseline)");
 
   if (videoItems.length === 0 && audioItems.length === 0) {

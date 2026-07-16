@@ -75,3 +75,35 @@ export const FF_UNSUPPORTED = ITEM_TYPE_NAMES.filter((t) => !ITEM_TYPES[t].ff);
 
 export const isItemType = (type: unknown): type is ItemType =>
   typeof type === "string" && type in ITEM_TYPES;
+
+/**
+ * What an FF export of these items would leave out, counted and named.
+ *
+ * FF renders four of the eighteen types and skips the rest without a word — you get an mp4 and
+ * simply never learn your charts aren't in it. Nothing here changes what FF renders; it only
+ * lets the app say so, before the wait rather than after.
+ *
+ * An unknown type counts as dropped. FF only ever handles types it was taught, so a type this
+ * registry has not heard of is one FF has not heard of either.
+ */
+export function ffDroppedItems(items: Iterable<{ type?: unknown }>) {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const type = item?.type;
+    if (typeof type !== "string") continue;
+    if (isItemType(type) && ITEM_TYPES[type].ff) continue;
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([type, count]) => ({
+      type,
+      count,
+      label: isItemType(type) ? ITEM_TYPES[type].label : type
+    }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/** "3 bar charts, 12 text" — the dropped list, in a sentence. */
+export function describeFfDropped(dropped: ReturnType<typeof ffDroppedItems>) {
+  return dropped.map((d) => `${d.count} ${d.label.toLowerCase()}`).join(", ");
+}

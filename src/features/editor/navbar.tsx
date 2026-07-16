@@ -28,6 +28,7 @@ import { Slider } from "@/components/ui/slider";
 
 import type StateManager from "@designcombo/state";
 import useStore from "./store/use-store";
+import { describeFfDropped, ffDroppedItems } from "./item-types";
 import { generateId } from "@designcombo/timeline";
 import type { IDesign } from "@designcombo/types";
 import { useDownloadState } from "./store/use-download-state";
@@ -647,6 +648,29 @@ const ENGINE_INFO: Record<string, { label: string; hint: string }> = {
   remotion: { label: "RE", hint: "All animations & transitions — slower" },
 };
 
+/**
+ * What FF would leave out of THIS project, named, above the button that starts the export.
+ *
+ * FF renders 4 of the 18 item types and says nothing about the other 14: you get an mp4 back and
+ * only find out your charts are missing by watching it. "Fast — animations limited" was the whole
+ * warning, and it doesn't name a single thing you'd lose. The choice between engines is only a
+ * real choice if you can see the cost, so this counts the actual items in the actual project.
+ */
+const FfDropWarning = () => {
+  const { trackItemsMap } = useStore();
+  const dropped = useMemo(
+    () => ffDroppedItems(Object.values(trackItemsMap ?? {}) as { type?: unknown }[]),
+    [trackItemsMap]
+  );
+  if (!dropped.length) return null;
+  return (
+    <p className="text-[10px] leading-tight text-amber-500/90">
+      FF will leave out {describeFfDropped(dropped)}. Use RE to keep{" "}
+      {dropped.length > 1 ? "them" : "it"}.
+    </p>
+  );
+};
+
 const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
   const isMediumScreen = useIsMediumScreen();
   const { actions, exportType, exportQuality, exportResolution, exportEngine, remoteUrl } = useDownloadState();
@@ -793,6 +817,7 @@ const DownloadPopover = ({ stateManager }: { stateManager: StateManager }) => {
           <p className="text-[10px] text-muted-foreground leading-tight">
             {ENGINE_INFO[exportEngine].hint}
           </p>
+          {exportEngine === "ffmpeg" && <FfDropWarning />}
         </div>
 
         <div className="flex flex-col gap-2 border-t border-border pt-3">
