@@ -612,12 +612,21 @@ function buildKenBurnsFilter(
   const progress = `min(on\\,${motionFrames})/${motionFrames}`;
   const centerX = "iw/2-(iw/zoom/2)";
   const centerY = "ih/2-(ih/zoom/2)";
-  // Supersample the source well above the output before zoompan. zoompan rounds its crop
-  // origin to whole INPUT pixels each frame; at only ~1.25× (2400px) the sub-pixel drift
-  // rounds unevenly → the image visibly TREMBLES/shakes during the zoom or pan. Scaling to
-  // ~3× gives zoompan enough resolution for smooth motion (segment-per-clip keeps the RAM
-  // of the bigger frame bounded). Tunable via FF_KENBURNS_SUPERSAMPLE.
-  const superSample = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2);
+  // Supersample the source well above the output before zoompan. zoompan crops at whole INPUT
+  // pixels, so its crop origin can only ever advance in integer steps. The default Ken Burns is
+  // gentle — 8% over a ~3s clip — which moves that origin well UNDER one pixel per frame, so it
+  // sits still, then hops a whole pixel, then sits still. That hop is the shake. Measured in a
+  // real export: the motion alternated 0.2px / 1.25px per frame, ±0.55px of wobble. Note the
+  // gentler the effect the WORSE it looks, which is why it survived so long — a fast pan hides it.
+  //
+  // Supersampling shrinks what one input pixel is worth on screen, and it is the only lever
+  // zoompan gives us (verified: cropping to a 2× canvas and scaling down changes nothing, and a
+  // cheaper scaler doesn't help either — the cost is zoompan's own per-frame downscale). At 4×
+  // the wobble drops to ~±0.11px, under a tenth of a pixel; this is also where the ffmpeg
+  // community landed with its "scale=8000:-1" recipe. It is NOT quadratic in RAM as the shape of
+  // the filter suggests — measured 0.81 → 0.86GB per segment, one extra frame buffer.
+  // Tunable via FF_KENBURNS_SUPERSAMPLE.
+  const superSample = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 4);
   const scaledW = Math.max(outW, Math.round(outW * superSample));
 
   let z = `min(1+${zt.toFixed(4)}*${progress},${maxZoom})`;
@@ -1071,11 +1080,12 @@ async function runExport(
   const RAM_BUDGET_GB = Math.max(1, Number(process.env.FF_RAM_BUDGET_GB) || 5.5);
   // Measured per-process: NVENC holds a GPU session and ~2.5GB; libx264 holds ~0.8GB.
   // Measured on a REAL segment — an image with Ken Burns, which is what most of them are:
-  // ffmpeg supersamples to 3840 before zoompan, and that upscaled plane is the cost. 839MB for
-  // Ken Burns alone, 885MB with two caption overlays (overlays are band-cropped, so they barely
-  // register). A plain scale-to-1920 encode is 270MB — measuring THAT is how you get a number
-  // three times too small.
-  const perSegGB = useNvenc ? 2.5 : 0.9;
+  // ffmpeg supersamples before zoompan, and that upscaled plane is the cost. 839MB for Ken Burns
+  // alone, 885MB with two caption overlays (overlays are band-cropped, so they barely register).
+  // A plain scale-to-1920 encode is 270MB — measuring THAT is how you get a number three times
+  // too small. Raising the supersample 2× → 4× (to kill the shake) adds ~6%, not the 4× the
+  // filter's shape implies: the plane is one frame buffer, not the whole decode. 0.885 → ~0.94.
+  const perSegGB = useNvenc ? 2.5 : 0.95;
   const budgetCap = Math.max(1, Math.floor(RAM_BUDGET_GB / perSegGB));
   // Leave the box room to breathe. `floor(free / perSeg)` plans to spend every last free byte —
   // which is the exact thing the budget above exists to stop, and it was still sitting here.
