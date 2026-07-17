@@ -34,6 +34,63 @@ Video Editor application using React and TypeScript.
 > builders; the copies disagreeing with each other caused every caption bug we've chased. That doc
 > is the standard, and it exists to stop a fourth from appearing.
 
+## 📐 The two registries
+
+Almost every bug worth a week here was one thing written twice. Two files exist to stop that, and
+nothing may keep its own copy of what they hold.
+
+### `src/features/editor/item-types.ts` — what can be on a timeline
+
+One list of the 18 item types. `timeline.tsx` derives its `itemTypes` and `registerItems` from it,
+and its class table is a `Record<ItemType, …>` — **add a type and the build fails until you give it
+a timeline class.**
+
+This is not hypothetical bookkeeping. There were four lists and no two agreed: the player rendered
+18 types, the timeline declared 15 legal and had a class for 16, and a type the player renders
+without a timeline class throws `fabric: No class registered for X` out of `Timeline.addTrackItem`,
+uncaught — the whole editor dies loading the project. It happened to the charts. Then it happened
+again to `progressBar`/`progressFrame`, which were missed *while fixing the charts*, because a
+hand-written list is not a list, it is a guess. That failure is now a compile error.
+
+The registry also records which types the FF export can draw.
+
+### `src/features/editor/project-schema.ts` — what a saved project is
+
+Two doors, both here: `buildProject` on the way out (manual Save, autosave and Export .json all
+come through it), `normalizeProject` on the way in.
+
+`normalizeProject` **reports** what it repaired rather than fixing it quietly — a repair means a
+producer wrote the wrong shape, and that is worth knowing while it is still cheap to fix. Check the
+console after opening a project.
+
+**Producers own correctness.** When you want to add a repair here, fix the producer instead.
+
+## 📤 Export — two engines, and what each one costs
+
+| | FF (ffmpeg) | RE (Remotion) |
+|---|---|---|
+| Speed | fast | slow |
+| Renders | video, image, audio, captions, **text** | everything the player renders |
+| Skips | charts, Lottie, shapes, audio bars, progress bars | — |
+
+FF is a flat concat of video/image segments with audio mixed under, and text/captions burned on as
+PNG overlays. It has **no compositing layer**, so anything else is skipped — and it used to skip
+them in silence: you got an mp4 and only learned your charts weren't in it by watching it. The
+Download popover now counts the real items in the open project and says so before you commit to
+the wait.
+
+Text and captions are drawn with `@napi-rs/canvas` and overlaid as PNGs rather than burned with
+`drawtext`, because the render box's ffmpeg can't be relied on to carry libass/drawtext.
+
+**If you touch the FF path, these three rules are paid for in RAM:**
+
+1. **Crop overlays to their own box.** A full-frame PNG makes every overlay composite the whole
+   1080p plane — measured at 25s and 5.5GB for one dense segment. Band-cropped captions: 3.7s.
+2. **Generate through the bounded pool, never `Promise.all`.** Each canvas is native memory; ~1800
+   at once spiked RAM ~14GB.
+3. **One ffmpeg per clip, not one giant `filter_complex`.** The monolithic graph opened an input
+   per clip *and* per caption (~400), spawning threads whose 8MB stacks alone passed 60GB → OOM.
+
 ## 🚀 See It in Action
 
 Check out the deployed version here: [React Video Editor Live Demo](https://video.designcombo.dev/)
