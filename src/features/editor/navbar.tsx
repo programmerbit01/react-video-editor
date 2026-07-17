@@ -360,8 +360,11 @@ export default function Navbar({
   return (
     <div
       style={{
+        // Side columns size to their content; the centre takes the rest and may shrink to 0.
+        // Fixed 320px side columns used to let the (now larger) right toolbar overflow LEFT and
+        // sit on top of the project title/save controls — this makes the columns push, not overlap.
         display: "grid",
-        gridTemplateColumns: isLargeScreen ? "320px 1fr 320px" : "1fr 1fr 1fr"
+        gridTemplateColumns: "auto minmax(0, 1fr) auto",
       }}
       className="bg-card pointer-events-none flex h-13 items-center border-b border-border/80 px-2"
     >
@@ -1125,7 +1128,7 @@ const StylePackPicker = () => {
           title="Style Pack — one-click house style preset"
         >
           <Sparkles className="size-3.5" />
-          <span className="hidden sm:inline">{active?.label || "Style Pack"}</span>
+          <span className="hidden 2xl:inline">{active?.label || "Style Pack"}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="bg-background z-[10001] w-60 px-2 py-2" sideOffset={6}>
@@ -1223,7 +1226,7 @@ const LookPicker = () => {
           title="Film Look — global colour grade & grain"
         >
           <Clapperboard className="size-3.5" />
-          <span className="hidden sm:inline">{isOn ? active.label : "Look"}</span>
+          <span className="hidden 2xl:inline">{isOn ? active.label : "Look"}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="bg-background z-[10001] w-56 px-2 py-2" sideOffset={6}>
@@ -1317,7 +1320,7 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
           title="Music bed"
         >
           <Music2 className="size-3.5" />
-          <span className="hidden sm:inline">{activeTrack?.name || "Music bed"}</span>
+          <span className="hidden 2xl:inline">{activeTrack?.name || "Music bed"}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="bg-background z-[10001] w-72 px-3 py-3" sideOffset={6}>
@@ -1433,7 +1436,7 @@ const ScriptGuideButton = () => {
       title="Guided Script"
     >
       <span>📋</span>
-      <span className="hidden sm:inline">Script</span>
+      <span className="hidden 2xl:inline">Script</span>
       {segments.length > 0 && (
         <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
           isOpen ? "bg-violet-500/20 text-violet-600 dark:text-violet-300" : "bg-muted text-muted-foreground"
@@ -1460,7 +1463,7 @@ const AiEditButton = () => {
       title="AI Edit"
     >
       <span>✦</span>
-      <span className="hidden sm:inline">AI Edit</span>
+      <span className="hidden 2xl:inline">AI Edit</span>
     </Button>
   );
 };

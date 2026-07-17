@@ -33,23 +33,21 @@ export default function AdminExportSettings() {
   const [ok, setOk] = useState(false);
   const [error, setError] = useState("");
 
-  // Gate the button on real superadmin, verified against the vApp.
+  // Gate the button on real superadmin. Detection goes through the editor's own route so it
+  // doesn't depend on the launch param scheme (baseUrl vs vappHost vs same-origin) — the token
+  // is always in the URL, and the server resolves the vApp base. Same check the PUT enforces.
   useEffect(() => {
     const { baseUrl, token } = vappCtx();
-    if (!baseUrl || !token) return;
+    if (!token) return;
     let alive = true;
     (async () => {
       try {
-        const r = await fetch(`${baseUrl}/vapp/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store",
-        });
+        const q = new URLSearchParams({ token });
+        if (baseUrl) q.set("baseUrl", baseUrl);
+        const r = await fetch(`${EDITOR_BASE}/api/admin/whoami?${q.toString()}`, { cache: "no-store" });
         if (!r.ok) return;
         const d = await r.json().catch(() => ({}));
-        const role = String(
-          d?.user?.role || d?.role || d?.data?.user?.role || d?.profile?.role || "",
-        ).toLowerCase();
-        if (alive && role === "superadmin") setIsSuperadmin(true);
+        if (alive && d?.superadmin) setIsSuperadmin(true);
       } catch { /* not superadmin / offline → button stays hidden */ }
     })();
     return () => { alive = false; };

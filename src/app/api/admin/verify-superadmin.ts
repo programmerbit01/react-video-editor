@@ -13,8 +13,18 @@ export interface SuperadminResult {
   error?: string;
 }
 
+// The vApp base to verify against. The editor is launched with different param schemes
+// (`baseUrl` on some deployments, `vappHost` on others, neither on same-origin setups), so
+// the client can't be relied on to supply it. Fall back to the same server-side vApp base the
+// render route uses — the token is what actually authenticates, and it's always in the URL.
+function resolveVappBase(passed?: string): string {
+  const p = String(passed || "").trim().replace(/\/+$/, "");
+  if (p) return p;
+  return (process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091").replace(/\/+$/, "");
+}
+
 export async function verifySuperadmin(baseUrl: string, token: string): Promise<SuperadminResult> {
-  const base = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const base = resolveVappBase(baseUrl);
   const tok = String(token || "").replace(/^Bearer\s+/i, "").trim();
   if (!tok) return { ok: false, status: 401, error: "missing token" };
   if (!base) return { ok: false, status: 502, error: "no vApp base" };
