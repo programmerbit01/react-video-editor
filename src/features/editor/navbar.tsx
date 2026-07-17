@@ -29,6 +29,7 @@ import { Slider } from "@/components/ui/slider";
 import type StateManager from "@designcombo/state";
 import useStore from "./store/use-store";
 import { describeFfDropped, ffDroppedItems } from "./item-types";
+import { buildProject, normalizeProject, VappProject } from "./project-schema";
 import { generateId } from "@designcombo/timeline";
 import type { IDesign } from "@designcombo/types";
 import { useDownloadState } from "./store/use-download-state";
@@ -67,21 +68,6 @@ import {
   upsertMusicBed,
 } from "./utils/scene-audio";
 import { resolveAssetUrl } from "./utils/asset-url";
-
-// Asset URLs resolve DIRECT (see utils/asset-url). This also unwraps any legacy
-// /api/proxy wrapper baked into old/imported designs → direct R2.
-const toDirectMediaSrc = (src: unknown) => resolveAssetUrl(src);
-
-// Every caption our generator ever wrote points its fontUrl at this host, which now 403s.
-// A dead font URL doesn't degrade — it HANGS the load (see patchDesignMetadata), so these
-// have to be rewritten on the way in. Anton is the closest live bold display face to the
-// original "the bold font"; it comes from our own FONTS list (data/fonts.ts), which is
-// entirely Google-Fonts-hosted, so nothing new is vendored.
-const DEAD_FONT_HOST = "cdn.designcombo.dev";
-const FALLBACK_CAPTION_FONT = {
-  family: "Anton",
-  url: "https://fonts.gstatic.com/s/anton/v15/1Ptgg87LROyAm0K08i4gS7lu.ttf",
-};
 
 const withEditorBase = (path: string) => {
   if (typeof window === "undefined") return path;
@@ -209,17 +195,7 @@ export default function Navbar({
   };
 
   const handleSaveProject = (name: string) => {
-    const sm = stateManager.toJSON() as Record<string, unknown>;
-    const data = {
-      ...sm,
-      // persist the scene-wide Film Look so reopening restores it
-      metadata: {
-        ...(sm.metadata as object),
-        look: useStore.getState().look,
-        stylePack: useStore.getState().stylePack,
-      },
-      ...(rawJson ? { _guidedScript: rawJson } : {}),
-    };
+    const data = buildProjectData();
     if (currentProjectId) {
       updateProject(currentProjectId, name, data);
     } else {
@@ -231,77 +207,19 @@ export default function Navbar({
     triggerSaveSuccess();
   };
 
-  const patchDesignMetadata = (data: Record<string, unknown>): Record<string, unknown> => {
-    const map = (data?.trackItemsMap ?? {}) as Record<string, Record<string, unknown>>;
-    for (const [, item] of Object.entries(map)) {
-      const details = (item.details ?? {}) as Record<string, unknown>;
-      const meta = (item.metadata ?? {}) as Record<string, unknown>;
-      const directSrc = toDirectMediaSrc(details.src);
-
-      if (directSrc && directSrc !== details.src) {
-        item.details = { ...details, src: directSrc };
-      }
-
-      // Repoint captions off the dead font CDN. cdn.designcombo.dev now 403s, and
-      // @designcombo/state's font loader neither resolves nor rejects when a load fails
-      // (a failed .load() resolves to an Error, which has no .family, so the only resolve
-      // path is unreachable) — so DESIGN_LOAD awaits it forever and the project silently
-      // never opens. Read details back off the item: the src rewrite above may have
-      // already replaced it.
-      const fontDetails = (item.details ?? {}) as Record<string, unknown>;
-      if (
-        typeof fontDetails.fontUrl === "string" &&
-        fontDetails.fontUrl.includes(DEAD_FONT_HOST)
-      ) {
-        item.details = {
-          ...fontDetails,
-          fontUrl: FALLBACK_CAPTION_FONT.url,
-          fontFamily: FALLBACK_CAPTION_FONT.family,
-        };
-      }
-
-      if (item?.type === "video") {
-        const normalizedPreview = toDirectMediaSrc(meta.previewUrl || directSrc || details.src);
-        if (normalizedPreview && normalizedPreview !== meta.previewUrl) {
-          item.metadata = { ...meta, previewUrl: normalizedPreview };
-        } else if (!meta.previewUrl && directSrc) {
-          item.metadata = { ...meta, previewUrl: directSrc };
-        }
-      }
-    }
-
-    // Collapse empty tracks: an imported design can carry blank tracks (items: []),
-    // which render as empty timeline rows and push captions/clips far apart ("kaafi
-    // jagah chhod kar neeche"). Empty tracks hold no item references, so dropping them
-    // is safe and pulls caption/content rows back adjacent. Never leaves zero tracks.
-    let tracks = (data as any).tracks;
-    if (Array.isArray(tracks)) {
-      const nonEmpty = tracks.filter((t: any) => Array.isArray(t?.items) && t.items.length > 0);
-      if (nonEmpty.length && nonEmpty.length < tracks.length) {
-        tracks = nonEmpty;
-        (data as any).tracks = tracks;
-      }
-    }
-
-    // Merge ALL caption tracks into ONE row. Each clip's captions were created on its
-    // own `captions-track--<clipId>` track → multiple caption rows. Captions are
-    // time-positioned and don't overlap, so they all fit on a single track and each
-    // still sits (by time) under its clip. Items keep metadata.sourceTrackItemId, so
-    // per-clip add/remove still works. Load-time only.
-    if (Array.isArray(tracks)) {
-      const capTracks = tracks.filter((t: any) => t?.type === "caption");
-      if (capTracks.length > 1) {
-        const first = capTracks[0];
-        first.items = capTracks.flatMap((t: any) => (Array.isArray(t.items) ? t.items : []));
-        tracks = tracks.filter((t: any) => t === first || t?.type !== "caption");
-        (data as any).tracks = tracks;
-      }
-    }
-    return data;
-  };
 
   const handleLoadProject = (project: SavedProject) => {
-    dispatch(DESIGN_LOAD, { payload: patchDesignMetadata(project.data as Record<string, unknown>) });
+    // Every project comes in through normalizeProject — see project-schema.ts. It reports what
+    // it had to repair rather than fixing it in silence: a repair here means a producer wrote
+    // the wrong shape, and that is worth knowing about while it is still cheap to fix.
+    const { project: design, repairs } = normalizeProject(project.data as VappProject);
+    if (repairs.length) {
+      console.warn(
+        `[project] "${project.name}" needed repairs on load:`,
+        repairs.map((r) => `${r.what} ×${r.count}`).join(" · ")
+      );
+    }
+    dispatch(DESIGN_LOAD, { payload: design });
     // restore the saved Film Look into the live store (preview + next render)
     const savedLook = (project.data as any)?.metadata?.look;
     const savedStylePack = (project.data as any)?.metadata?.stylePack;
@@ -332,18 +250,14 @@ export default function Navbar({
   // --- Import / Export project as a single .json file ---
   const importInputRef = useRef<HTMLInputElement>(null);
 
-  const buildProjectData = (): Record<string, unknown> => {
-    const sm = stateManager.toJSON() as Record<string, unknown>;
-    return {
-      ...sm,
-      metadata: {
-        ...(sm.metadata as object),
-        look: useStore.getState().look,
-        stylePack: useStore.getState().stylePack,
-      },
-      ...(rawJson ? { _guidedScript: rawJson } : {}),
-    };
-  };
+  // Manual Save, autosave and "Export project (.json)" all build the project HERE. They used to
+  // each hold their own copy of this, which is how two of them drifted.
+  const buildProjectData = (): Record<string, unknown> =>
+    buildProject(stateManager, {
+      look: useStore.getState().look,
+      stylePack: useStore.getState().stylePack,
+      guidedScript: rawJson
+    });
 
   // ── Autosave ────────────────────────────────────────────────────────────────
   // Persist the OPEN project automatically whenever the timeline changes (debounced), so
