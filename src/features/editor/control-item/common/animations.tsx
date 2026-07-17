@@ -197,10 +197,18 @@ export const Animations = ({ properties, trackItem }: PresetTextProps) => {
   const isMedia = trackItem?.type === "image" || trackItem?.type === "video";
   return (
     <div className="flex flex-col gap-2 py-4">
+      {/* Enter/exit animations first (Auto, Quick Fade, Custom) — one group. Ken Burns is a
+          different thing (a slow pan/zoom on the clip itself), so it gets its own section below
+          a divider instead of sitting in the middle of the animation controls. */}
       <Label className="font-sans text-xs font-semibold">Animations</Label>
       <GlobalAnimationToggle />
-      {isMedia && <KenBurnsSelect />}
       <SelectaAnimation trackItem={trackItem} />
+      {isMedia && (
+        <>
+          <div className="mt-2 border-t border-border/60 pt-3" />
+          <KenBurnsSelect />
+        </>
+      )}
     </div>
   );
 };
