@@ -26,8 +26,10 @@ export interface ItemTypeSpec {
    * how the app can say so out loud instead of shipping a silently incomplete video.
    */
   ff: boolean;
-  /** Human name, for anything the user reads (e.g. "3 charts won't be in this export"). */
+  /** Human name, for anything the user reads (e.g. "1 bar chart won't be in this export"). */
   label: string;
+  /** Only when adding "s" to `label` would be wrong — "3 texts" isn't a thing, "3 text items" is. */
+  plural?: string;
 }
 
 /**
@@ -43,7 +45,7 @@ export const ITEM_TYPES = {
   caption: { ff: true, label: "Captions" },
 
   // ── the player renders these; FF drops them ──────────────────────────────────────────────
-  text: { ff: false, label: "Text" },
+  text: { ff: false, label: "Text", plural: "text items" },
   shape: { ff: false, label: "Shape" },
   illustration: { ff: false, label: "Illustration" },
   lottie: { ff: false, label: "Lottie animation" },
@@ -56,10 +58,10 @@ export const ITEM_TYPES = {
   progressBar: { ff: false, label: "Progress bar" },
   progressFrame: { ff: false, label: "Progress frame" },
 
-  linealAudioBars: { ff: false, label: "Audio bars (lineal)" },
-  radialAudioBars: { ff: false, label: "Audio bars (radial)" },
-  waveAudioBars: { ff: false, label: "Audio bars (wave)" },
-  hillAudioBars: { ff: false, label: "Audio bars (hill)" }
+  linealAudioBars: { ff: false, label: "Audio bars (lineal)", plural: "audio bars (lineal)" },
+  radialAudioBars: { ff: false, label: "Audio bars (radial)", plural: "audio bars (radial)" },
+  waveAudioBars: { ff: false, label: "Audio bars (wave)", plural: "audio bars (wave)" },
+  hillAudioBars: { ff: false, label: "Audio bars (hill)", plural: "audio bars (hill)" }
 } as const satisfies Record<string, ItemTypeSpec>;
 
 export type ItemType = keyof typeof ITEM_TYPES;
@@ -95,15 +97,16 @@ export function ffDroppedItems(items: Iterable<{ type?: unknown }>) {
     counts.set(type, (counts.get(type) ?? 0) + 1);
   }
   return [...counts.entries()]
-    .map(([type, count]) => ({
-      type,
-      count,
-      label: isItemType(type) ? ITEM_TYPES[type].label : type
-    }))
+    .map(([type, count]) => {
+      const spec = isItemType(type) ? ITEM_TYPES[type] : undefined;
+      const one = spec?.label ?? type;
+      const many = (spec as ItemTypeSpec | undefined)?.plural ?? `${one}s`;
+      return { type, count, label: count === 1 ? one : many };
+    })
     .sort((a, b) => b.count - a.count);
 }
 
-/** "3 bar charts, 12 text" — the dropped list, in a sentence. */
+/** "3 text items, 2 bar charts" — the dropped list, in a sentence. */
 export function describeFfDropped(dropped: ReturnType<typeof ffDroppedItems>) {
   return dropped.map((d) => `${d.count} ${d.label.toLowerCase()}`).join(", ");
 }

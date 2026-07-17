@@ -68,9 +68,10 @@ const getDefaultLottieBox = (
   };
 };
 
-// Insert a Lottie item onto the timeline. Stored as an "image" item with
-// metadata.graphicType === "lottie" (same trick as charts) so designcombo's
-// track machinery works unchanged; the player routes it to the Lottie renderer.
+// Insert a Lottie item onto the timeline. It used to be stored as an "image" with
+// metadata.graphicType === "lottie" — the same disguise the charts wore, to dodge a timeline
+// crash that no longer exists (see item-types.ts). An animation that calls itself a photo gets
+// treated like one: FF handed it to ffmpeg as a still frame, and the export warning skipped it.
 function addLottieItem(
   details: Record<string, unknown>,
   durationMs: number,
@@ -93,7 +94,7 @@ function addLottieItem(
   const newItem = {
     id,
     name: "lottie",
-    type: "image",
+    type: "lottie",
     display: { from, to },
     details: {
       width: box.width,
@@ -104,8 +105,9 @@ function addLottieItem(
       speed: 1,
       ...details,
     },
+    // The rest of the metadata is real Lottie data the renderer needs — only graphicType, which
+    // existed to undo the disguise, is gone.
     metadata: {
-      graphicType: "lottie",
       previewUrl,
       label,
       ...(sourceUrl ? { lottieUrl: sourceUrl } : {}),

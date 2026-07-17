@@ -12,7 +12,6 @@ interface ImageProps extends ResizableProps {
   src: string;
   metadata?: {
     previewUrl?: string;
-    graphicType?: string;
   };
 }
 

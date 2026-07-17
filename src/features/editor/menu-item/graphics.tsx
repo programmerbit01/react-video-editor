@@ -55,16 +55,18 @@ function addGraphicItem(
     playerRef?.current?.seekTo(Math.round((previewMs / 1000) * fps));
   }, 80);
 
-  // Use "image" as the timeline-facing type so the Fabric.js timeline renderer
-  // doesn't throw "No class registered for Barchart". The real graphic type is
-  // stored in metadata.graphicType and checked by sequence-item.tsx in the player.
+  // A chart says it is a chart. It used to say "image" — a workaround for the timeline throwing
+  // "No class registered for Barchart", with the truth hidden in metadata.graphicType — and that
+  // crash is gone: item-types.ts registers every type, and the class table won't compile without
+  // one. The disguise outlived its reason and cost more than the crash did: anything keying off
+  // `type` saw a photo. FF happily fed charts to ffmpeg as still frames, and the export warning
+  // that is supposed to say "1 bar chart won't render" counted them as images and stayed quiet.
   const newItem = {
     id,
     name: type,
-    type: "image",
+    type,
     display: { from, to },
-    details,
-    metadata: { graphicType: type }
+    details
   };
 
   // Find or create a suitable track ("helper" type accepts overlay items)

@@ -16,9 +16,8 @@ import { BaseSequence, SequenceItemOptions } from "../base-sequence";
  *   - details.src           : a Lottie JSON URL (e.g. a LottieFiles export). Fetched
  *     at render time through the editor proxy, exactly like images.
  *
- * Stored on the timeline as a normal "image" item with metadata.graphicType ===
- * "lottie" (the same trick the charts use) so designcombo's add/track machinery
- * works unchanged; sequence-item.tsx routes it here.
+ * A Lottie is `type: "lottie"` — it used to be an "image" wearing metadata.graphicType, which
+ * meant everything reading `type` saw a photo, and FF handed the animation to ffmpeg as a still.
  */
 export const LottieItem = ({
   item,
