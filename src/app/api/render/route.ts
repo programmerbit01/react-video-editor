@@ -29,6 +29,11 @@ const DEFAULT_FPS = 30;
 // Ken Burns supersample factor — ONE source so the render and its log can never disagree
 // (they did: the render used 4× while the log still printed "2x"). See buildKenBurnsFilter.
 const KENBURNS_SUPERSAMPLE = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 4);
+// Video Ken Burns is lighter: the video's own motion + detail hide the sub-pixel stepping that
+// forced 4× on stills, so 2× is enough — and every video frame is unique (no looped still), so
+// the supersample cost is real per frame. Measured cost per KB'd video segment: 2.2× at 2×,
+// 5.4× at 4×. Only clips with kenBurns set pay it; the rest are untouched. Tunable.
+const KENBURNS_SUPERSAMPLE_VIDEO = Math.max(1, Number(process.env.FF_KENBURNS_SUPERSAMPLE_VIDEO) || 2);
 
 function mergeJob(jobId: string, patch: Record<string, unknown>) {
   const current = jobs.get(jobId) ?? { status: "PENDING", progress: 0 };
@@ -606,6 +611,7 @@ function buildKenBurnsFilter(
   clipDurS: number,
   outW: number,
   outH: number,
+  isVideo = false,
 ): string | null {
   const kind = String(details?.kenBurns || "off");
   if (!kind || kind === "off") return null;
@@ -632,8 +638,8 @@ function buildKenBurnsFilter(
   // the wobble drops to ~±0.11px, under a tenth of a pixel; this is also where the ffmpeg
   // community landed with its "scale=8000:-1" recipe. It is NOT quadratic in RAM as the shape of
   // the filter suggests — measured 0.81 → 0.86GB per segment, one extra frame buffer.
-  // Tunable via FF_KENBURNS_SUPERSAMPLE.
-  const superSample = KENBURNS_SUPERSAMPLE;
+  // Tunable via FF_KENBURNS_SUPERSAMPLE (video uses the lighter FF_KENBURNS_SUPERSAMPLE_VIDEO).
+  const superSample = isVideo ? KENBURNS_SUPERSAMPLE_VIDEO : KENBURNS_SUPERSAMPLE;
   const scaledW = Math.max(outW, Math.round(outW * superSample));
 
   let z = `min(1+${zt.toFixed(4)}*${progress},${maxZoom})`;
@@ -672,7 +678,11 @@ function buildKenBurnsFilter(
       return null;
   }
 
-  return `scale=${scaledW}:-1,zoompan=z='${z}':x='${x}':y='${y}':d=${totalFrames}:s=${outW}x${outH}:fps=${DEFAULT_FPS},setsar=1`;
+  // Images loop ONE still, so zoompan expands it into all N frames (d=totalFrames). Video already
+  // has N distinct frames, so it emits one output per input (d=1) — d=totalFrames on video would
+  // stall on the first frame. `on` (the running output-frame index) drives progress either way.
+  const d = isVideo ? 1 : totalFrames;
+  return `scale=${scaledW}:-1,zoompan=z='${z}':x='${x}':y='${y}':d=${d}:s=${outW}x${outH}:fps=${DEFAULT_FPS},setsar=1`;
 }
 
 const PLATFORM_PRESETS: Record<string, {
@@ -1144,7 +1154,12 @@ async function runExport(
     } else if (seg.entry) {
       const trimFrom = Math.max(0, Number(seg.entry.item.trim?.from ?? 0) / 1000);
       a.push("-ss", trimFrom.toFixed(3), "-t", dur.toFixed(3), "-i", seg.entry.path);
-      fp.push(`[0:v]scale=${outW}:${outH},setsar=1,setpts=PTS-STARTPTS${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
+      // Ken Burns on video too (a slow punch-in): same filter, lighter supersample. zoompan resets
+      // its own timeline, so setpts must come AFTER it, not before, or the pan freezes.
+      const kbv = buildKenBurnsFilter(seg.entry.item.details, dur, outW, outH, true);
+      fp.push(kbv
+        ? `[0:v]${kbv},setpts=PTS-STARTPTS${getFadeFilters(seg.entry.item, 0, dur)}[v]`
+        : `[0:v]scale=${outW}:${outH},setsar=1,setpts=PTS-STARTPTS${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
     } else {
       a.push("-f", "lavfi", "-t", dur.toFixed(3), "-i", `color=black:s=${outW}x${outH}:r=${DEFAULT_FPS}`);
       fp.push(`[0:v]setsar=1[v]`);
