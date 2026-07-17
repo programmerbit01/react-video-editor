@@ -501,16 +501,26 @@ async function generateHighlightedCaptionOverlays(
   if (hasWordHighlight && !baseOnly) {
     const firstWordMs = Number(words[0]?.start ?? 0);
     const offsetMs = (captionItem.display?.from ?? 0) - firstWordMs;
-    const wordTasks = words.map(async (w: any, wi: number) => {
+    // SEQUENTIAL, and it must stay that way.
+    //
+    // This was Promise.all over the words, which quietly undid the caller's bound: the pool out
+    // there admits CAP_CONC captions, each of which then fired ALL of its words at once, so the
+    // canvases actually in flight were CAP_CONC × words — 80+ where the caller believed 4.
+    //
+    // The ceiling that matters is the libuv threadpool (see CAP_CONC): @napi-rs/canvas segfaults
+    // above it, and a bound that an inner Promise.all can multiply is not a bound. Capping
+    // CAP_CONC alone would not have saved us while this line stayed.
+    //
+    // Costs nothing: the outer pool still parallelises across captions.
+    for (let wi = 0; wi < words.length; wi++) {
+      const w = words[wi];
       const wFromS = Math.max(fromS, (Number(w.start ?? 0) + offsetMs) / 1000);
       const wToS = Math.min(toS, (Number(w.end ?? 0) + offsetMs) / 1000);
-      if (wToS <= wFromS + 0.01) return null;
+      if (wToS <= wFromS + 0.01) continue;
       const wPath = path.join(tmpDir, `cap_${capIdx}_w${wi}.png`);
       await drawCaption(wi, wPath);
-      return { path: wPath, fromS: wFromS, toS: wToS, x: 0, y: bandTop };
-    });
-    const results = await Promise.all(wordTasks);
-    for (const r of results) { if (r) overlays.push(r); }
+      overlays.push({ path: wPath, fromS: wFromS, toS: wToS, x: 0, y: bandTop });
+    }
   }
 
   return overlays;
@@ -918,10 +928,36 @@ async function runExport(
 
   if (captionItems.length) startStage(jobId, "Captions", `${captionItems.length} items${captionBaseOnly ? " · base-only (too many words for per-word highlight)" : " · word-highlight"}`);
   // Generate caption PNGs through a BOUNDED pool, not one big Promise.all. Each word makes a
-  // full-frame 1920×1080 canvas (~8MB of NATIVE memory); word-highlight over 200+ captions =
-  // ~1800 canvases, and doing them all at once spiked RAM by ~14GB. 8 captions in flight keeps
-  // peak canvas memory to a few hundred MB. Tunable via FF_CAPTION_CONCURRENCY.
-  const CAP_CONC = Math.max(2, Number(process.env.FF_CAPTION_CONCURRENCY) || 8);
+  // canvas of NATIVE memory; word-highlight over 200+ captions is ~1800 of them, and doing them
+  // all at once spiked RAM by ~14GB.
+  //
+  // ── NEVER EXCEED THE LIBUV THREADPOOL ───────────────────────────────────────────────────────
+  // canvas.encode() runs on the libuv threadpool, and @napi-rs/canvas SEGFAULTS — signal 11, the
+  // Node process gone, no exception to catch — the moment more encodes are in flight than the
+  // pool has threads. Node's default pool is 4. This defaulted to 8. Measured on the render box,
+  // 1200 PNGs, three runs each:
+  //
+  //     UV_THREADPOOL_SIZE=4   conc=8    →  3/3 segfault
+  //     UV_THREADPOOL_SIZE=8   conc=8    →  0/3
+  //     UV_THREADPOOL_SIZE=16  conc=16   →  0/3
+  //     (default pool)         conc=1,2,4 →  0/3
+  //
+  // conc ≤ pool is fine at any volume; conc > pool dies. That one line off the default is the
+  // whole of "the editor goes down mid-export": the crash killed :3001, higgs proxied to a dead
+  // port and returned 500 on refresh, the render never finished, and pressing Export again
+  // stacked another one on the pile.
+  //
+  // The pool size cannot be changed once it exists, so this bends to it instead. Raising
+  // UV_THREADPOOL_SIZE in the service environment raises this ceiling with it.
+  const UV_POOL = Math.max(1, Number(process.env.UV_THREADPOOL_SIZE) || 4);
+  const CAP_CONC_WANTED = Math.max(1, Number(process.env.FF_CAPTION_CONCURRENCY) || 8);
+  const CAP_CONC = Math.min(CAP_CONC_WANTED, UV_POOL);
+  if (CAP_CONC < CAP_CONC_WANTED) {
+    console.log(
+      `[FF/canvas] caption concurrency ${CAP_CONC_WANTED} → ${CAP_CONC}: @napi-rs/canvas segfaults ` +
+        `above UV_THREADPOOL_SIZE (${UV_POOL}). Raise UV_THREADPOOL_SIZE to go faster.`
+    );
+  }
   const allWordOverlays: { path: string; fromS: number; toS: number; x: number; y: number }[][] = new Array(captionItems.length);
   let capCursor = 0, capDone = 0;
   await Promise.all(Array.from({ length: Math.min(CAP_CONC, captionItems.length) }, async () => {
