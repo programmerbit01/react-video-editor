@@ -577,10 +577,12 @@ const FfDropWarning = () => {
     [trackItemsMap]
   );
   if (!dropped.length) return null;
+  // "them" tracks the number of ITEMS, not the number of types — two bar charts is still "them".
+  const total = dropped.reduce((n, d) => n + d.count, 0);
   return (
     <p className="text-[10px] leading-tight text-amber-500/90">
       FF will leave out {describeFfDropped(dropped)}. Use RE to keep{" "}
-      {dropped.length > 1 ? "them" : "it"}.
+      {total > 1 ? "them" : "it"}.
     </p>
   );
 };

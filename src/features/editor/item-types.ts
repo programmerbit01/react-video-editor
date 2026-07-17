@@ -38,14 +38,16 @@ export interface ItemTypeSpec {
  * timelineClassKey.
  */
 export const ITEM_TYPES = {
-  // ── FF handles these four ────────────────────────────────────────────────────────────────
+  // ── FF renders these ─────────────────────────────────────────────────────────────────────
   video: { ff: true, label: "Video" },
   image: { ff: true, label: "Image" },
-  audio: { ff: true, label: "Audio" },
-  caption: { ff: true, label: "Captions" },
+  audio: { ff: true, label: "Audio", plural: "audio" },
+  // Captions and text are both drawn with canvas and overlaid as PNGs. The render box's ffmpeg
+  // can't be relied on to carry libass/drawtext, so burning text directly is not an option.
+  caption: { ff: true, label: "Captions", plural: "captions" },
+  text: { ff: true, label: "Text", plural: "text items" },
 
   // ── the player renders these; FF drops them ──────────────────────────────────────────────
-  text: { ff: false, label: "Text", plural: "text items" },
   shape: { ff: false, label: "Shape" },
   illustration: { ff: false, label: "Illustration" },
   lottie: { ff: false, label: "Lottie animation" },

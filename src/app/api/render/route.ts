@@ -14,6 +14,7 @@ import { jobs, jobChildren } from "./jobs";
 import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
 import { readJsonBody } from "@/utils/request-body";
+import { generateTextOverlay } from "./text-overlay";
 
 const execFileAsync = promisify(execFile);
 
@@ -909,6 +910,34 @@ async function runExport(
   for (const overlays of allWordOverlays) if (overlays) captionOverlays.push(...overlays);
   if (captionItems.length) endStage(jobId, "Captions", "done", `${captionOverlays.length} overlays${captionBaseOnly ? " (base-only)" : ""}`);
   if (captionItems.length) logRam(jobId, "after captions");
+
+  // ── Text → the same overlay pipe ────────────────────────────────────────────────────────
+  // Text was the biggest thing FF silently dropped, and captions already prove the mechanism:
+  // draw with canvas, overlay the PNG. One PNG per item (no word variants), cropped to the
+  // text's own box, so the cost is a rounding error next to the captions above — hence the same
+  // bounded pool rather than a Promise.all: the pool is what keeps peak canvas RAM flat.
+  const textItems = allItems
+    .filter((it: any) => it.type === "text" && String(it.details?.text || "").trim())
+    .sort((a: any, b: any) => (a.display?.from ?? 0) - (b.display?.from ?? 0));
+
+  if (textItems.length) {
+    startStage(jobId, "Text", `${textItems.length} items`);
+    const textOut: (typeof captionOverlays[number] | null)[] = new Array(textItems.length);
+    let txCursor = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(CAP_CONC, textItems.length) }, async () => {
+        while (true) {
+          const i = txCursor++;
+          if (i >= textItems.length || jobs.get(jobId)?.cancelled) return;
+          textOut[i] = await generateTextOverlay(textItems[i], outW, outH, canvasW, canvasH, tmpDir, i);
+        }
+      })
+    );
+    const made = textOut.filter(Boolean) as typeof captionOverlays;
+    captionOverlays.push(...made);
+    endStage(jobId, "Text", "done", `${made.length} overlays`);
+    logRam(jobId, "after text");
+  }
 
   mergeJob(jobId, { status: "PROCESSING", progress: 50 });
   if (jobs.get(jobId)?.cancelled) { appendJobLog(jobId, "✕ cancelled by user"); return; } // cancelled during download/captions
