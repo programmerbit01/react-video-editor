@@ -6,6 +6,7 @@ import { execSync, execFile } from "child_process";
 import { promisify } from "util";
 import { mkdir, rm } from "fs/promises";
 import { jobs } from "./jobs";
+import { readExportSettings, clampRamBudget } from "../admin/export-settings-store";
 import { ensureCached, enforceCap, registerAsset } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
 import { readJsonBody } from "@/utils/request-body";
@@ -159,11 +160,27 @@ const RENDER_CONCURRENCY = (() => {
   return Math.max(4, cores - 2);
 })();
 
-// Concurrency is NOT RAM-capped — per-worker RAM is kept low at the source (no GPU-layer
-// texture pinning in render; see items/image.tsx + video.tsx), so full `cores-2` workers
-// stay within budget the way they always did. Helper just reports value + total cores.
-function effectiveConcurrency(): { value: number; cores: number } {
-  return { value: RENDER_CONCURRENCY, cores: os.cpus()?.length || 0 };
+// Each headless-Chrome worker's rough RAM cost. Used to cap workers by the export RAM budget
+// so RR obeys the same ceiling FF does — the old "not RAM-capped" assumption held for ONE
+// render, but the queue runs several at once (two overlapping RR renders were seen in the
+// logs), and cores-2 × N-renders × Chrome is exactly how a fleet box OOMs. Tunable.
+const RR_PER_WORKER_GB = Math.max(0.3, Number(process.env.RENDER_PER_WORKER_GB) || 0.8);
+
+// Workers, capped three ways: cores (speed), the export RAM budget (the superadmin ceiling),
+// and the machine's actually-free RAM (70% headroom). The tightest wins — same discipline as
+// the FF route. `budgetGB` undefined → cores-only, the prior behaviour.
+function effectiveConcurrency(budgetGB?: number): { value: number; cores: number; capBy: string } {
+  const cores = os.cpus()?.length || 0;
+  let value = RENDER_CONCURRENCY;
+  let capBy = "cores";
+  if (budgetGB && budgetGB > 0) {
+    const byBudget = Math.max(1, Math.floor(budgetGB / RR_PER_WORKER_GB));
+    if (byBudget < value) { value = byBudget; capBy = "ram-budget"; }
+  }
+  const freeGB = os.freemem() / 1073741824;
+  const byFree = Math.max(1, Math.floor((freeGB * 0.7) / RR_PER_WORKER_GB));
+  if (byFree < value) { value = byFree; capBy = "free-ram"; }
+  return { value, cores, capBy };
 }
 
 // GPU GL backend for headless-Chrome rendering. AUTO: if an NVIDIA GPU is
@@ -318,6 +335,7 @@ function audioOnlyDesign(design: any): any {
 // outputPath. Throws on any failure so the caller falls back to renderMedia.
 async function renderViaNvenc(
   jobId: string, composition: any, serveUrl: string, inputProps: any, outputPath: string, crf: number, t0: number,
+  budgetGB?: number,
 ): Promise<void> {
   const { renderFrames, renderMedia } = await import("@remotion/renderer");
   const totalFrames = composition.durationInFrames;
@@ -330,8 +348,8 @@ async function renderViaNvenc(
     mergeJob(jobId, { encoder: "h264_nvenc" }); // so the report shows NVENC live, not just at the end
     logLine(jobId, "NVENC path: renderFrames → ffmpeg h264_nvenc");
     // 1) Render frames (image sequence) — with a stall watchdog + live fps.
-    const conc = effectiveConcurrency();
-    logLine(jobId, `render workers: ${conc.value}/${conc.cores} cores`);
+    const conc = effectiveConcurrency(budgetGB);
+    logLine(jobId, `render workers: ${conc.value}/${conc.cores} cores (cap: ${conc.capBy})`);
     startStage(jobId, "Render frames", `0/${totalFrames}`);
     let lastFrames = 0, lastAt = Date.now(), tickF = 0, tickAt = Date.now(), inst = 0, lastPct = 0, stalled = false;
     const watch = setInterval(() => {
@@ -413,6 +431,11 @@ async function renderViaNvenc(
 async function runRemotionExport(jobId: string, design: any, options: any) {
   const { renderMedia, selectComposition } = await import("@remotion/renderer");
 
+  // The RAM budget this render may plan for. Precedence: the job's own value (superadmin
+  // setting, injected by the GUI) → the machine's saved setting/env/default. It caps how many
+  // Chrome workers run, so a fleet box doesn't OOM under several concurrent renders.
+  const ramBudgetGB = clampRamBudget(options?.ramBudgetGB) ?? (await readExportSettings()).ramBudgetGB;
+
   const exportsDir = publicPath("exports");
   await mkdir(exportsDir, { recursive: true });
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
@@ -462,8 +485,8 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   const videoSecs = composition.durationInFrames / composition.fps;
   const exportQuality = String(options?.quality || "high");
   const crf = CRF_BY_QUALITY[exportQuality] ?? 20;
-  const conc = effectiveConcurrency();
-  logLine(jobId, `render workers: ${conc.value}/${conc.cores} cores`);
+  const conc = effectiveConcurrency(ramBudgetGB);
+  logLine(jobId, `render workers: ${conc.value}/${conc.cores} cores (cap: ${conc.capBy})`);
   const renderCfg = {
     concurrency: conc.value,
     cores: totalCores,
@@ -498,7 +521,7 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   let usedNvenc = false;
   if (await hasNvenc()) {
     try {
-      await renderViaNvenc(jobId, composition, serveUrl, inputProps, outputPath, crf, _t0);
+      await renderViaNvenc(jobId, composition, serveUrl, inputProps, outputPath, crf, _t0, ramBudgetGB);
       usedNvenc = true;
     } catch (e) {
       logLine(jobId, `NVENC path failed — falling back to Remotion libx264: ${String((e as any)?.message || e).slice(0, 120)}`);
@@ -654,12 +677,34 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   }
 }
 
+// A GUI render already going on THIS machine, if any. Mirrors the FF route: pressing Export
+// again is how you ask "is it still running?", so we hand back the live job instead of
+// spawning a second heavy Chrome render of the same video. Pull/queue jobs (skipCallback)
+// are NOT reattached — those are distinct jobs an agent chose to run, and the worker RAM cap
+// (free-RAM-aware) is what keeps several from swamping the box.
+function activeGuiRender(): string | null {
+  for (const [id, job] of jobs) {
+    const s = String((job as any).status || "").toUpperCase();
+    if ((s === "PENDING" || s === "PROCESSING") && !(job as any).cancelled) return id;
+  }
+  return null;
+}
+
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody(request);
     const { design, options } = body;
     if (!design) {
       return NextResponse.json({ message: "design required" }, { status: 400 });
+    }
+
+    // GUI double-press → reattach to the render already running (not a second one).
+    if (!options?.skipCallback) {
+      const running = activeGuiRender();
+      if (running) {
+        logLine(running, "↩ export pressed again — reattached to this render (already running)");
+        return NextResponse.json({ render: { id: running, reattached: true } }, { status: 200 });
+      }
     }
 
     const jobId = randomBytes(8).toString("hex");

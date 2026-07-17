@@ -11,6 +11,7 @@ import { Readable } from "stream";
 import os from "os";
 
 import { jobs, jobChildren } from "./jobs";
+import { readExportSettings, clampRamBudget } from "../admin/export-settings-store";
 import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
 import { readJsonBody } from "@/utils/request-body";
@@ -25,6 +26,9 @@ const CALLBACK_BASE = (
   process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091"
 ).replace(/\/+$/, "");
 const DEFAULT_FPS = 30;
+// Ken Burns supersample factor — ONE source so the render and its log can never disagree
+// (they did: the render used 4× while the log still printed "2x"). See buildKenBurnsFilter.
+const KENBURNS_SUPERSAMPLE = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 4);
 
 function mergeJob(jobId: string, patch: Record<string, unknown>) {
   const current = jobs.get(jobId) ?? { status: "PENDING", progress: 0 };
@@ -242,6 +246,9 @@ export async function POST(request: Request) {
       options?.maxDim,
       options?.mutedTrackIds ?? [],
       skipCallback,
+      // Budget carried by the job (GUI passes the superadmin setting; a queue/MCP job may
+      // carry its own). undefined → runExport reads the machine's saved setting / env / default.
+      clampRamBudget(options?.ramBudgetGB) ?? undefined,
     ).catch((err) => {
       console.error(`[render] job ${jobId} failed:`, err);
       const current = jobs.get(jobId);
@@ -626,7 +633,7 @@ function buildKenBurnsFilter(
   // community landed with its "scale=8000:-1" recipe. It is NOT quadratic in RAM as the shape of
   // the filter suggests — measured 0.81 → 0.86GB per segment, one extra frame buffer.
   // Tunable via FF_KENBURNS_SUPERSAMPLE.
-  const superSample = Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 4);
+  const superSample = KENBURNS_SUPERSAMPLE;
   const scaledW = Math.max(outW, Math.round(outW * superSample));
 
   let z = `min(1+${zt.toFixed(4)}*${progress},${maxZoom})`;
@@ -729,6 +736,7 @@ async function runExport(
   maxDim?: number,
   mutedTrackIds: string[] = [],
   skipCallback = false,
+  ramBudgetGB?: number,
 ) {
   const startedAt = Date.now();
   const exportsDir = publicPath("exports");
@@ -1077,7 +1085,10 @@ async function runExport(
   // So: budget first, then trim to what's actually free. FF_RAM_BUDGET_GB moves the ceiling;
   // FF_SEG_CONCURRENCY overrides the count outright.
   const freeGB = os.freemem() / 1073741824;
-  const RAM_BUDGET_GB = Math.max(1, Number(process.env.FF_RAM_BUDGET_GB) || 5.5);
+  // Budget precedence: the job's own value (superadmin setting, injected by the GUI) → the
+  // machine's saved setting/env/default. readExportSettings folds in FF_RAM_BUDGET_GB + the
+  // 5.5 default, so a bare box still behaves exactly as before.
+  const RAM_BUDGET_GB = Math.max(1, ramBudgetGB ?? (await readExportSettings()).ramBudgetGB);
   // Measured per-process: NVENC holds a GPU session and ~2.5GB; libx264 holds ~0.8GB.
   // Measured on a REAL segment — an image with Ken Burns, which is what most of them are:
   // ffmpeg supersamples before zoompan, and that upscaled plane is the cost. 839MB for Ken Burns
@@ -1208,7 +1219,7 @@ async function runExport(
   );
 
   startStage(jobId, "Render segments", `0/${segs.length} · ${SEG_CONC} ffmpeg parallel`);
-  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg × ${SEG_THREADS} threads · planning ~${plannedGB.toFixed(1)}GB of a ${RAM_BUDGET_GB}GB budget (${freeGB.toFixed(1)}GB free) · supersample ${Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2)}x`);
+  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg × ${SEG_THREADS} threads · planning ~${plannedGB.toFixed(1)}GB of a ${RAM_BUDGET_GB}GB budget (${freeGB.toFixed(1)}GB free) · supersample ${KENBURNS_SUPERSAMPLE}x`);
   logRam(jobId, "segments start");
 
   // ── RAM watchdog ────────────────────────────────────────────────────────────────────────

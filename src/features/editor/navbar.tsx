@@ -35,6 +35,7 @@ import type { IDesign } from "@designcombo/types";
 import { useDownloadState } from "./store/use-download-state";
 import DownloadProgressModal from "./download-progress-modal";
 import RenderStatusWidget from "./render-status-widget";
+import AdminExportSettings from "./admin-export-settings";
 import AutosizeInput from "@/components/ui/autosize-input";
 import { debounce } from "lodash";
 import {
@@ -506,6 +507,7 @@ export default function Navbar({
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
           <RenderStatusWidget />
+          <AdminExportSettings />
           <StylePackPicker />
           <LookPicker />
           <MusicBedPicker stateManager={stateManager} />

@@ -48,3 +48,6 @@ next-env.d.ts
 .proxy-cache/
 # render-machine local asset cache (localize prefetch — regenerated, never commit)
 .asset-cache/
+
+# Per-machine export settings (superadmin RAM budget) — runtime state, not source
+export-settings.json
