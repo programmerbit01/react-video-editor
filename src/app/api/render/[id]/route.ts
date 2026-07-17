@@ -27,27 +27,25 @@ export async function GET(
       }
     } catch {}
   }
+  // Return the job, plus the two fields only this route can compute.
+  //
+  // This used to hand-list every field, and it had drifted: `stages` was missing, so the live
+  // stage detail the render works hard to maintain — "Download 47/207 · 12 cached", "Captions
+  // 30/212" — was built, updated every tick, and thrown away here. The client reads r.stages
+  // (use-download-state.ts) and render-report.tsx renders it; the whole reporting path existed
+  // and was fed nothing, which is why an export shows a bare percent that sits still for a
+  // minute and looks hung. `dropped` was missing too, for the same reason: the list is written
+  // by hand, so every field added to RenderJob has to be remembered here, and one wasn't.
+  //
+  // `cancelled` and `log` go too — they are already public in spirit; there is nothing on a
+  // render job that the person waiting on the render shouldn't see.
   return NextResponse.json({
     render: {
+      ...job,
       id,
-      status: job.status,
-      progress: job.progress,
-      error: job.error,
       public_url: publicUrl,
       presigned_url:
         job.status === "COMPLETED" ? `/api/render/${id}/download` : undefined,
-      engine: job.engine,
-      source: job.source,
-      project_name: job.project_name,
-      started_at: job.started_at,
-      video_seconds: job.video_seconds,
-      render_seconds: job.render_seconds,
-      speed_x: job.speed_x,
-      encoder: job.encoder,
-      gpu: job.gpu,
-      hwAccel: job.hwAccel,
-      cores: job.cores,
-      log: job.log,
     }
   });
 }
