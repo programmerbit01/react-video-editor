@@ -2,10 +2,9 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useDownloadState } from "./store/use-download-state";
 import { RenderReportRow, type RenderJob } from "./render-report";
 import { Button } from "@/components/ui/button";
-import { CircleCheckIcon, Minimize2Icon, XIcon } from "lucide-react";
+import { CircleCheckIcon, Minimize2Icon, XIcon, Loader2, CopyIcon, CheckIcon } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
-import { processFileUpload } from "@/utils/upload-service";
 import { useEffect, useRef, useState } from "react";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -15,24 +14,29 @@ const DownloadProgressModal = () => {
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
   const isFailed = !!error;
+  // The render finished but `output` isn't set yet: the box is still uploading the mp4 to R2,
+  // so the shareable link (and the auto-download) aren't ready. Without a state for this the
+  // footer flipped back to "Minimize / Cancel" and looked stuck between "done" and "downloading".
+  const finalizing = Math.floor(progress) >= 100 && !output && !isFailed;
+  // The link to hand the user: the R2 public URL, else the job URL if it's already absolute.
+  // A basePath-relative local path is not shareable, so we fall back to a Download button.
+  const shareUrl =
+    output?.publicUrl || (output?.url && /^https?:\/\//.test(output.url) ? output.url : null);
   const showDock = minimizedProgressModal && (exporting || isCompleted || isFailed);
   const dialogOpen = displayProgressModal && !minimizedProgressModal;
 
   const [elapsed, setElapsed] = useState(0);
   const [autoDownloaded, setAutoDownloaded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const startRef = useRef<number | null>(null);
   const finalRef = useRef<number>(0);
-
-  const [cloudState, setCloudState] = useState<"idle" | "uploading" | "done" | "error">("idle");
-  const [cloudUrl, setCloudUrl] = useState<string | null>(null);
 
   useEffect(() => {
     startRef.current = Date.now();
     finalRef.current = 0;
     setElapsed(0);
     setAutoDownloaded(false);
-    setCloudState("idle");
-    setCloudUrl(null);
+    setCopied(false);
   }, [exportRunId]);
 
   useEffect(() => {
@@ -53,8 +57,7 @@ const DownloadProgressModal = () => {
       startRef.current = null;
       setElapsed(0);
       setAutoDownloaded(false);
-      setCloudState("idle");
-      setCloudUrl(null);
+      setCopied(false);
     }
   }, [displayProgressModal, minimizedProgressModal]);
 
@@ -69,43 +72,13 @@ const DownloadProgressModal = () => {
     if (output?.url) await download(output.url, "untitled.mp4");
   };
 
-  const handleUploadToCloud = async () => {
-    if (!output?.url || cloudState !== "idle") return;
-
-    // render_callback already uploaded to R2 — use that URL directly, no re-upload needed
-    if (output.publicUrl) {
-      setCloudUrl(output.publicUrl);
-      setCloudState("done");
-      return;
-    }
-
-    // Fallback: fetch local video and upload via vapp server
-    setCloudState("uploading");
+  const handleCopy = async () => {
+    if (!shareUrl) return;
     try {
-      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-      const fetchUrl = output.url.startsWith("http")
-        ? output.url
-        : `${window.location.origin}${basePath}${output.url}`;
-      const res = await fetch(fetchUrl);
-      if (!res.ok) throw new Error(`fetch ${res.status}`);
-      const blob = await res.blob();
-      const file = new File([blob], `render_${Date.now()}.mp4`, { type: "video/mp4" });
-      const uploadData = await processFileUpload(`render-upload-${Date.now()}`, file, {
-        onProgress: () => {},
-        onStatus: (_, status) => {
-          if (status === "failed") setCloudState("error");
-        },
-      });
-      const url = uploadData?.metadata?.directUrl || uploadData?.filePath || uploadData?.url;
-      if (url) {
-        setCloudUrl(url);
-        setCloudState("done");
-      } else {
-        setCloudState("error");
-      }
-    } catch {
-      setCloudState("error");
-    }
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked — the field is selectable as a fallback */ }
   };
 
   const handleMinimize = () => {
@@ -195,45 +168,47 @@ const DownloadProgressModal = () => {
             <RenderReportRow job={modalJob} borderBottom={false} />
           </div>
 
+          {/* Render is done but the mp4 is still uploading to R2 — the link/auto-download aren't
+              ready yet. Say so, instead of falling back to the "still rendering" footer. */}
+          {finalizing && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Finalizing — preparing your download link…
+            </div>
+          )}
+
           {isCompleted && (
             <>
               <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <CircleCheckIcon className="h-4 w-4 text-green-500" />
                 Saved to your Downloads{finalRef.current > 0 ? ` · ${fmt(finalRef.current)}` : ""}
               </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleDownload}>
-                  Download again
-                </Button>
-                {cloudState === "idle" && (
-                  <Button variant="outline" size="sm" onClick={handleUploadToCloud}>
-                    Upload to Cloud
-                  </Button>
-                )}
-                {cloudState === "uploading" && (
-                  <Button variant="outline" size="sm" disabled>
-                    Uploading…
-                  </Button>
-                )}
-              </div>
-              {cloudState === "done" && cloudUrl && (
-                <div className="flex flex-col items-center gap-1 w-full max-w-sm">
-                  <div className="text-xs text-muted-foreground uppercase tracking-wide">Cloud URL</div>
+
+              {shareUrl ? (
+                // The video is already on R2 — show its link directly. No "Download again" (it
+                // auto-downloaded and this link re-downloads), no "Upload to Cloud" (already up).
+                <div className="flex w-full max-w-md flex-col items-center gap-1.5">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Video link</div>
                   <div className="flex w-full items-center gap-2">
                     <input
                       readOnly
-                      value={cloudUrl}
-                      className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                      value={shareUrl}
+                      className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200"
                       onClick={(e) => (e.target as HTMLInputElement).select()}
                     />
-                    <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(cloudUrl)}>
-                      Copy
+                    <Button variant="outline" size="sm" className="shrink-0" onClick={handleCopy}>
+                      {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
                     </Button>
                   </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Auto-downloaded. Open or re-download from this link anytime.
+                  </div>
                 </div>
-              )}
-              {cloudState === "error" && (
-                <div className="text-xs text-red-400">Upload failed. Try again.</div>
+              ) : (
+                // Local-only export (no shareable URL) — keep a way to fetch the file again.
+                <Button variant="outline" size="sm" onClick={handleDownload}>
+                  Download again
+                </Button>
               )}
             </>
           )}
@@ -244,7 +219,7 @@ const DownloadProgressModal = () => {
             </Button>
           )}
 
-          {!isCompleted && !isFailed && (
+          {!isCompleted && !isFailed && !finalizing && (
             <>
               <div className="text-center text-xs text-zinc-500">
                 <div>Closing the browser will not cancel the export.</div>
