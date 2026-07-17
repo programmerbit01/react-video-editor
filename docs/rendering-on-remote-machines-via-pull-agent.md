@@ -14,13 +14,26 @@ settings (format / resolution / quality / **FF vs RE engine**).
 
 | Way | Path | Where it renders | When to use |
 |-----|------|------------------|-------------|
-| **Local** | browser → same-origin `/api/render*` | the editor you're viewing | quick, single machine |
-| **Remote** | browser → another editor's `/api/render*` (URL) | the machine at that URL | one specific remote box |
+| **Local** | browser → same-origin `/editor/api/render*` | the editor you're viewing | quick, single machine — **and the way to debug the queue** |
+| **Remote** | browser → another editor's `/editor/api/render*` (URL) | the machine at that URL | one specific remote box |
 | **Queue** *(default)* | browser → vApp server `/vapp/render/enqueue` → PB queue → **pull agent** | any free render machine | fleet, concurrency, no URL typing |
 
 **Engine:** `FF` = ffmpeg (`/api/render`, fast, animations limited, real ffmpeg binary).
 `RE` = remotion (`/api/render-remotion`, all animations/transitions, headless Chrome).
 The queue path carries `options.engine`, so FF/RE both work through the fleet.
+
+### Local and Queue end at the same handler — use that
+
+The agent posts `{service_url}/api/render`, where `service_url` already ends in `/editor` — i.e.
+`/editor/api/render`, with the same `{design, options}` body. **Local now posts to exactly that
+path.** So a Local export exercises the same route a queued job triggers, minus the agent: debug
+Local first, and what you fix is what the fleet runs.
+
+Local used to send a bare `/api/render`, which is *not* where the route lives — the editor runs
+under `basePath: '/editor'`. It only worked because higgs rewrites that one string. Verified
+against an editor with no higgs in front of it: `POST /api/render` → **404** (never reached the
+route), `POST /editor/api/render` → **400 "design required"** (handler reached). Opening the editor
+directly on `:3001` and hitting Local silently 404'd.
 
 ---
 

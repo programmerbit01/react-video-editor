@@ -91,6 +91,47 @@ Text and captions are drawn with `@napi-rs/canvas` and overlaid as PNGs rather t
 3. **One ffmpeg per clip, not one giant `filter_complex`.** The monolithic graph opened an input
    per clip *and* per caption (~400), spawning threads whose 8MB stacks alone passed 60GB → OOM.
 
+### The RAM budget is a ceiling, not a suggestion
+
+`SEG_CONC` (how many ffmpeg run at once) is **budget first, then trimmed to what's free**. It used
+to be `min(cores-1, 8, floor(free/2.5))` — "don't exceed free RAM" is not a budget, it is
+permission to spend all of it, and on Linux spending all of free RAM is how you summon the OOM
+killer. What it takes is the biggest process on the box: the editor. That is the shape of "the
+same project exports fine on a Mac and takes the editor down on Linux" — the Mac had 3.6GB free,
+landed on 2 segments, and swapped. It survived by being cramped.
+
+Encoder threads are capped for the same reason. The filter pools were capped long ago; libx264
+never was, so it took its default ~1.5×cores — **~15 threads per segment on a 10-core Mac, ~36 on
+a 24-core Xeon**, each with its own stack and frame buffers. Measured on one 3s 1080p segment:
+**481MB at default threads, 251MB at `-threads 2`.** So "GB per segment" was never a constant; it
+scaled with the machine, which makes a budget built on a constant fiction *precisely on the big
+boxes*. `SEG_THREADS` is now sized so `SEG_CONC × SEG_THREADS ≈ cores` — busy, not oversubscribed,
+and per-segment cost no longer depends on how big the box is.
+
+| Env | Default | What it does |
+|---|---|---|
+| `FF_RAM_BUDGET_GB` | `5.5` | Hard ceiling the concurrency is planned against |
+| `FF_SEG_CONCURRENCY` | *(computed)* | Override the ffmpeg count outright |
+| `FF_SEG_THREADS` | *(computed)* | Override threads per ffmpeg |
+| `FF_SEG_ENCODER` | `libx264` | `nvenc` to use the GPU (costs ~2.5GB/segment vs ~0.8GB) |
+| `FF_CAPTION_CONCURRENCY` | `8` | Caption/text PNGs generated at once |
+
+**The export says what it costs, in the console.** `[FF/ram]` prints the concurrency decision and
+every cap that fed it, samples real RAM every 500ms, warns the moment it passes the budget *with
+the true per-ffmpeg cost*, and prints the peak against the estimate at the end. If the estimate is
+wrong, the next run says so instead of the machine falling over — which is the only way to learn
+this on a box you can't attach to.
+
+### Progress reporting
+
+The render maintains `stages[]` with live detail — `Download 47/207 · 12 cached · 0 failed`,
+`Captions 30/212`, `Render segments 88/190 · 6 parallel · 1.4 seg/s`. `/api/render/[id]` returns
+the whole job, `use-download-state.ts` reads `r.stages`, and `render-report.tsx` renders it.
+
+That route used to hand-list the fields it returned and `stages` wasn't among them, so the detail
+was built, updated every tick, and thrown away — leaving a bare percent that creeps and looks
+hung. **Don't reintroduce a field list here.** Return the job.
+
 ## 🚀 See It in Action
 
 Check out the deployed version here: [React Video Editor Live Demo](https://video.designcombo.dev/)
