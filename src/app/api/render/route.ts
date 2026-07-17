@@ -171,11 +171,40 @@ async function registerRenderJob(payload: Record<string, unknown>) {
   }
 }
 
+/** A render that is still going. There is at most one — see the POST handler. */
+function activeRender(): string | null {
+  for (const [id, job] of jobs) {
+    const s = String(job.status || "").toUpperCase();
+    if ((s === "PENDING" || s === "PROCESSING") && !job.cancelled) return id;
+  }
+  return null;
+}
+
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody(request);
     const { design, options } = body;
     if (!design) return NextResponse.json({ message: "design required" }, { status: 400 });
+
+    // ONE render at a time. Asking for a second hands back the one already going.
+    //
+    // A box was found with five: three rendering, two queued. Nothing here refused them, and
+    // each planned its own RAM budget knowing nothing about the others — so the "5.5GB ceiling"
+    // was really 5 × 5.5GB, and the editor died of its own clones. The RAM budget is per-render;
+    // this is what makes that true.
+    //
+    // It happens without anyone doing anything unreasonable: the box gets busy, a status poll
+    // times out, the client gives up after 12 tries and says "Lost contact with the render
+    // server" — while the render carries on. So you press Export again. Now there are two, the
+    // box is slower, the next poll fails sooner. That is the whole spiral.
+    //
+    // Handing back the running job instead of erroring is deliberate: pressing Export again is
+    // how you ask "is it still going?", and now the modal simply re-attaches and shows you.
+    const running = activeRender();
+    if (running) {
+      appendJobLog(running, "↩ export pressed again — reattached to this render (already running)");
+      return NextResponse.json({ render: { id: running, reattached: true } }, { status: 200 });
+    }
 
     const jobId = randomBytes(8).toString("hex");
     mergeJob(jobId, {
@@ -1005,9 +1034,19 @@ async function runExport(
   const freeGB = os.freemem() / 1073741824;
   const RAM_BUDGET_GB = Math.max(1, Number(process.env.FF_RAM_BUDGET_GB) || 5.5);
   // Measured per-process: NVENC holds a GPU session and ~2.5GB; libx264 holds ~0.8GB.
-  const perSegGB = useNvenc ? 2.5 : 0.8;
+  // Measured on a REAL segment — an image with Ken Burns, which is what most of them are:
+  // ffmpeg supersamples to 3840 before zoompan, and that upscaled plane is the cost. 839MB for
+  // Ken Burns alone, 885MB with two caption overlays (overlays are band-cropped, so they barely
+  // register). A plain scale-to-1920 encode is 270MB — measuring THAT is how you get a number
+  // three times too small.
+  const perSegGB = useNvenc ? 2.5 : 0.9;
   const budgetCap = Math.max(1, Math.floor(RAM_BUDGET_GB / perSegGB));
-  const freeCap = Math.max(1, Math.floor(freeGB / perSegGB));
+  // Leave the box room to breathe. `floor(free / perSeg)` plans to spend every last free byte —
+  // which is the exact thing the budget above exists to stop, and it was still sitting here.
+  // With 2.4GB free it planned 3 segments ≈ 2.55GB, and the kernel killed ffmpeg mid-encode
+  // ("segment 6 failed — killed by SIGKILL with no output"). Free RAM is not a spending target.
+  const FREE_HEADROOM = 0.7;
+  const freeCap = Math.max(1, Math.floor((freeGB * FREE_HEADROOM) / perSegGB));
   const SEG_CONC = Math.max(
     1,
     Number(process.env.FF_SEG_CONCURRENCY) ||
@@ -1077,9 +1116,30 @@ async function runExport(
     // Track the child so a Cancel can SIGKILL it mid-render (not just stop the next wave).
     let reg = jobChildren.get(jobId); if (!reg) { reg = new Set(); jobChildren.set(jobId, reg); }
     await new Promise<void>((resolve, reject) => {
-      const child = execFile("ffmpeg", a, { timeout: 900_000, maxBuffer: 32 * 1024 * 1024 }, (err) => {
+      const child = execFile("ffmpeg", a, { timeout: 900_000, maxBuffer: 32 * 1024 * 1024 }, (err, _stdout, stderr) => {
         reg!.delete(child);
-        if (err) reject(err); else resolve();
+        if (!err) return resolve();
+
+        // Say WHY, not what we asked for.
+        //
+        // execFile's Error.message is the entire command line — here that is two thousand
+        // characters of filter graph, which then becomes the export's error and the only thing
+        // the user is told. It says nothing. What matters is the exit code, the signal, and
+        // ffmpeg's own stderr.
+        //
+        // The signal is the whole diagnosis when it matters: a segment killed with SIGKILL that
+        // printed nothing was almost certainly killed by the kernel for RAM, and that is
+        // indistinguishable from a bad filter unless we look.
+        const e = err as NodeJS.ErrnoException & { code?: unknown; signal?: string; killed?: boolean };
+        const tail = String(stderr || "").trim().split("\n").slice(-6).join("\n").slice(-600);
+        const why = e.signal
+          ? `killed by ${e.signal}${e.signal === "SIGKILL" && !tail ? " with no output — the kernel's OOM killer looks like this" : ""}`
+          : `exit ${e.code ?? "?"}`;
+        const detail = tail || "(ffmpeg printed nothing)";
+        console.error(
+          `[FF/seg] segment ${idx} failed — ${why}\n${detail}\n  full command: ffmpeg ${a.join(" ")}`
+        );
+        reject(new Error(`segment ${idx} failed — ${why}: ${detail}`));
       });
       reg!.add(child);
     });
@@ -1094,7 +1154,7 @@ async function runExport(
   // previous number was never visible until the machine fell over.
   console.log(
     `[FF/ram] budget ${RAM_BUDGET_GB}GB · ${perSegGB}GB per segment (${useNvenc ? "nvenc" : "libx264"}) → ` +
-      `caps: budget=${budgetCap} free=${freeCap} (${freeGB.toFixed(1)}GB free) cores=${totalCores - 1} hard=8` +
+      `caps: budget=${budgetCap} free=${freeCap} (${(freeGB * FREE_HEADROOM).toFixed(1)}GB of ${freeGB.toFixed(1)}GB free, 30% held back) cores=${totalCores - 1} hard=8` +
       `${process.env.FF_SEG_CONCURRENCY ? ` · FF_SEG_CONCURRENCY=${process.env.FF_SEG_CONCURRENCY} OVERRIDE` : ""}` +
       ` → SEG_CONC=${SEG_CONC} × ${SEG_THREADS} threads = ${SEG_CONC * SEG_THREADS}/${totalCores} cores,` +
       ` planning ~${plannedGB.toFixed(1)}GB peak for ${segs.length} segments`
