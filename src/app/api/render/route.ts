@@ -988,6 +988,48 @@ async function runExport(
   if (totalSec > segCur + 0.02) segs.push({ entry: null, fromS: segCur, toS: totalSec });
   if (segs.length === 0) segs.push({ entry: null, fromS: 0, toS: totalSec });
 
+  // ── How many ffmpeg run at once ─────────────────────────────────────────────────────────
+  //
+  // A HARD RAM budget, not "however much is free".
+  //
+  // The old rule divided FREE ram by a per-segment estimate, so a roomier box simply ran more
+  // ffmpeg: 13GB free planned 5 segments ≈ 12.5GB, and a 40GB box planned 20GB. Nothing
+  // capped it, because "don't exceed free RAM" is not a budget — on Linux, spending all of
+  // free RAM is exactly what summons the OOM killer, and what it kills is the biggest process
+  // on the box: the editor itself. That is why one project exports fine on a Mac and takes the
+  // editor down on Linux — the Mac had 3.6GB free, landed on 2 segments, and swapped the rest.
+  // The Linux box had room to hang itself with.
+  //
+  // So: budget first, then trim to what's actually free. FF_RAM_BUDGET_GB moves the ceiling;
+  // FF_SEG_CONCURRENCY overrides the count outright.
+  const freeGB = os.freemem() / 1073741824;
+  const RAM_BUDGET_GB = Math.max(1, Number(process.env.FF_RAM_BUDGET_GB) || 5.5);
+  // Measured per-process: NVENC holds a GPU session and ~2.5GB; libx264 holds ~0.8GB.
+  const perSegGB = useNvenc ? 2.5 : 0.8;
+  const budgetCap = Math.max(1, Math.floor(RAM_BUDGET_GB / perSegGB));
+  const freeCap = Math.max(1, Math.floor(freeGB / perSegGB));
+  const SEG_CONC = Math.max(
+    1,
+    Number(process.env.FF_SEG_CONCURRENCY) ||
+      Math.min(totalCores - 1 || 3, 8, budgetCap, freeCap)
+  );
+  // Threads PER segment — give each ffmpeg a share of the box instead of all of it.
+  //
+  // The filter pools were capped long ago; the encoder never was, so libx264 kept its default
+  // of ~1.5×cores. That is the difference between the machines: a 10-core Mac gives each
+  // segment ~15 threads, a 24-core Xeon gives it ~36 — each with its own 8MB stack and its own
+  // x264 frame buffers. So "GB per segment" isn't a constant at all, it scales with core count,
+  // and a budget built on a constant is fiction on a big box. It also oversubscribes: SEG_CONC
+  // processes each sizing themselves for the whole machine means cores × SEG_CONC threads
+  // fighting over cores × 1 cores, which is slower, not faster.
+  //
+  // Sized so SEG_CONC × SEG_THREADS ≈ cores: the box stays busy, nothing is oversubscribed,
+  // and per-segment RAM stops depending on how big the machine is.
+  const SEG_THREADS =
+    Number(process.env.FF_SEG_THREADS) ||
+    Math.max(2, Math.min(8, Math.floor((totalCores || 4) / SEG_CONC)));
+
+
   const renderSeg = async (seg: Seg, idx: number): Promise<string> => {
     const dur = Math.max(0.1, seg.toS - seg.fromS);
     const segPath = path.join(tmpDir, `seg_${String(idx).padStart(5, "0")}.mp4`);
@@ -1026,7 +1068,11 @@ async function runExport(
       fp.push(`[${prev}][c${i}]overlay=x=${caps[i].x ?? 0}:y=${caps[i].y ?? 0}:enable='between(t,${rf.toFixed(3)},${rt.toFixed(3)})'[${o}]`);
       prev = o; ii++;
     }
+    // -threads: the encoder's share of the box. Without it libx264 takes ~1.5×cores for a
+    // three-second clip, so per-segment RAM scales with the machine and SEG_CONC processes
+    // oversubscribe it several times over.
     a.push("-filter_complex", fp.join(";"), "-map", `[${prev}]`, ...segVideoArgs,
+      "-threads", String(SEG_THREADS),
       "-r", String(DEFAULT_FPS), "-pix_fmt", "yuv420p", "-an", "-t", dur.toFixed(3), segPath);
     // Track the child so a Cancel can SIGKILL it mid-render (not just stop the next wave).
     let reg = jobChildren.get(jobId); if (!reg) { reg = new Set(); jobChildren.set(jobId, reg); }
@@ -1040,18 +1086,48 @@ async function runExport(
     return segPath;
   };
 
-  // Render segments with bounded concurrency (each is RAM-light → a few in parallel is fine).
-  // FF_SEG_CONCURRENCY = how many ffmpeg run at once (RAM ∝ this; lower it if RAM is tight).
-  // RAM-AWARE: budget ~2.5GB per segment ffmpeg and never exceed FREE RAM, so a starved box
-  // (this one runs an 18GB LLM + services) auto-drops parallelism instead of OOMing. Explicit
-  // FF_SEG_CONCURRENCY overrides. Floor 2.
-  const freeGB = os.freemem() / 1073741824;
-  const ramCap = Math.max(2, Math.floor(freeGB / 2.5));
-  const SEG_CONC = Math.max(2, Number(process.env.FF_SEG_CONCURRENCY) || Math.min(totalCores - 1 || 3, 8, ramCap));
+  const plannedGB = SEG_CONC * perSegGB;
   const nGap = segs.filter((s) => !s.entry).length;
+
+  // Why this number, in the console, every time. When an export dies on a box we can't attach
+  // to, the alternative is guessing — and the whole reason this budget exists is that the
+  // previous number was never visible until the machine fell over.
+  console.log(
+    `[FF/ram] budget ${RAM_BUDGET_GB}GB · ${perSegGB}GB per segment (${useNvenc ? "nvenc" : "libx264"}) → ` +
+      `caps: budget=${budgetCap} free=${freeCap} (${freeGB.toFixed(1)}GB free) cores=${totalCores - 1} hard=8` +
+      `${process.env.FF_SEG_CONCURRENCY ? ` · FF_SEG_CONCURRENCY=${process.env.FF_SEG_CONCURRENCY} OVERRIDE` : ""}` +
+      ` → SEG_CONC=${SEG_CONC} × ${SEG_THREADS} threads = ${SEG_CONC * SEG_THREADS}/${totalCores} cores,` +
+      ` planning ~${plannedGB.toFixed(1)}GB peak for ${segs.length} segments`
+  );
+
   startStage(jobId, "Render segments", `0/${segs.length} · ${SEG_CONC} ffmpeg parallel`);
-  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg (RAM-bounded, ${freeGB.toFixed(1)}GB free) · supersample ${Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2)}x`);
+  appendJobLog(jobId, `segments: ${segs.length} (${segs.length - nGap} clips + ${nGap} gaps) · ${SEG_CONC} parallel ffmpeg × ${SEG_THREADS} threads · planning ~${plannedGB.toFixed(1)}GB of a ${RAM_BUDGET_GB}GB budget (${freeGB.toFixed(1)}GB free) · supersample ${Math.max(1.5, Number(process.env.FF_KENBURNS_SUPERSAMPLE) || 2)}x`);
   logRam(jobId, "segments start");
+
+  // ── RAM watchdog ────────────────────────────────────────────────────────────────────────
+  // Samples what the render is ACTUALLY costing while it runs, and says so out loud. The
+  // budget above is arithmetic on an estimate; this is the measurement that either confirms
+  // it or tells us the estimate is wrong. It is also the only thing that survives an OOM kill
+  // — when the box takes the editor out, the last line printed is the evidence.
+  const ramUsedGB = () => (os.totalmem() - os.freemem()) / 1073741824;
+  const ramAtStart = ramUsedGB();
+  let ramPeak = ramAtStart;
+  let ramWarned = false;
+  const ramWatch = setInterval(() => {
+    const now = ramUsedGB();
+    if (now > ramPeak) ramPeak = now;
+    const spent = now - ramAtStart;
+    if (!ramWarned && spent > RAM_BUDGET_GB) {
+      ramWarned = true;
+      console.warn(
+        `[FF/ram] ⚠ OVER BUDGET — this render has added ${spent.toFixed(1)}GB (budget ${RAM_BUDGET_GB}GB) ` +
+          `at ${segDone}/${segs.length} segments, ${SEG_CONC} parallel. The ${perSegGB}GB/segment estimate is ` +
+          `too low: real cost ≈ ${(spent / SEG_CONC).toFixed(2)}GB per ffmpeg. ` +
+          `Lower FF_SEG_CONCURRENCY or FF_RAM_BUDGET_GB — on Linux the OOM killer takes the editor.`
+      );
+    }
+  }, 500);
+
   const segPaths: string[] = new Array(segs.length);
   let segDone = 0, segCursor = 0; const encStartT = Date.now();
   try {
@@ -1071,7 +1147,16 @@ async function runExport(
         mergeJob(jobId, { status: "PROCESSING", progress: 55 + Math.round((segDone / segs.length) * 35) });
       }
     }));
+    clearInterval(ramWatch);
+    const spent = ramPeak - ramAtStart;
+    console.log(
+      `[FF/ram] segments done · peak +${spent.toFixed(1)}GB over baseline ` +
+        `(${ramPeak.toFixed(1)}GB system) · budget ${RAM_BUDGET_GB}GB · ` +
+        `real cost ≈ ${(spent / SEG_CONC).toFixed(2)}GB per ffmpeg vs the ${perSegGB}GB estimate` +
+        `${spent > RAM_BUDGET_GB ? " ← OVER" : ""}`
+    );
   } catch (segErr: any) {
+    clearInterval(ramWatch);
     if (jobs.get(jobId)?.cancelled) {  // ffmpeg was SIGKILLed by a cancel → not a real failure
       endStage(jobId, "Render segments", "failed", "cancelled");
       appendJobLog(jobId, "✕ cancelled by user");
