@@ -417,8 +417,14 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
   await mkdir(exportsDir, { recursive: true });
   const outputPath = path.join(exportsDir, `${jobId}.mp4`);
 
-  // Keep /editor in origin — headless Chrome accesses Next.js directly
-  // e.g. http://127.0.0.1:3001/editor so /api/proxy → /editor/api/proxy
+  // Keep /editor in the origin — headless Chrome reaches Next.js directly, under the basePath.
+  //
+  // CORS WARNING: this origin is what R2 sees, and R2 serves an ALLOWLIST, not `*` (see
+  // features/editor/utils/asset-url.ts — verified against the live bucket). http://localhost:3001
+  // and http://127.0.0.1:3001 are NOT on it, so a direct R2 fetch from this Chrome comes back
+  // with no access-control-allow-origin. Server-side downloads don't care; a browser does. If
+  // media loads for the FF export and not for this one, check the bucket's CORS policy before
+  // suspecting anything in here.
   const serverOrigin = (
     process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor"
   ).replace(/\/$/, "");
