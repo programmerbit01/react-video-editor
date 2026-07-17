@@ -510,7 +510,6 @@ export default function Navbar({
       <div className="flex h-13 items-center justify-end gap-2">
         <div className="pointer-events-auto flex h-10 items-center gap-2 rounded-md px-2.5">
           <RenderStatusWidget />
-          <AdminExportSettings />
           <StylePackPicker />
           <LookPicker />
           <MusicBedPicker stateManager={stateManager} />
@@ -529,6 +528,7 @@ export default function Navbar({
           </Button>
 
           <DownloadPopover stateManager={stateManager} />
+          <AdminExportSettings />
         </div>
       </div>
 
