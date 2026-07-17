@@ -32,6 +32,7 @@ export default function UserMenu() {
   const [open, setOpen] = useState(false);
 
   const [budget, setBudget] = useState<number | "">("");
+  const [cores, setCores] = useState(0);
   const [bounds, setBounds] = useState({ min: 1.5, max: 64, default: 5.5 });
   const [savedAt, setSavedAt] = useState<number | undefined>();
   const [loading, setLoading] = useState(false);
@@ -68,6 +69,7 @@ export default function UserMenu() {
       const d = await r.json();
       setBudget(Number(d?.settings?.ramBudgetGB ?? 5.5));
       setSavedAt(d?.settings?.updatedAt);
+      if (typeof d?.cores === "number") setCores(d.cores);
       if (d?.bounds) setBounds(d.bounds);
     } catch (e: any) {
       setError(String(e?.message || e));
@@ -104,7 +106,13 @@ export default function UserMenu() {
   if (!user) return null;
 
   const val = Number(budget);
-  const ffmpegN = Number.isFinite(val) && val > 0 ? Math.max(1, Math.floor(val / PER_FFMPEG_GB)) : 0;
+  // The real limit is the SMALLER of the RAM budget and cores-1 (the render clamps to both, plus
+  // whatever's actually free). Showing only the RAM number overstated it — 10GB on a 10-core box
+  // is 8-9 ffmpeg, not 10.
+  const byRam = Number.isFinite(val) && val > 0 ? Math.floor(val / PER_FFMPEG_GB) : 0;
+  const byCores = cores > 1 ? cores - 1 : 0;
+  const ffmpegN = byCores > 0 ? Math.max(1, Math.min(byRam, byCores)) : Math.max(1, byRam);
+  const coreLimited = byCores > 0 && byCores < byRam;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -157,10 +165,12 @@ export default function UserMenu() {
             </div>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
               {ffmpegN > 0
-                ? <>≈ <span className="text-foreground font-medium">{ffmpegN} ffmpeg</span> in parallel (auto, clamped to free RAM). Higher = faster, more RAM.</>
+                ? <>≈ <span className="text-foreground font-medium">{ffmpegN} ffmpeg</span> in parallel{coreLimited && cores ? <> (capped by {cores} cores, not RAM)</> : <> (auto, clamped to free RAM)</>}. Higher = faster, more RAM.</>
                 : <>Higher = more parallel encoders = faster, more RAM.</>}
             </p>
-            <p className="text-[11px] text-muted-foreground">Range {bounds.min}–{bounds.max} GB. Video quality is fixed.</p>
+            <p className="text-[11px] text-muted-foreground">
+              Limited by both RAM and cores{cores ? <> — this box has <span className="text-foreground">{cores}</span></> : null}. Range {bounds.min}–{bounds.max} GB. Video quality is fixed.
+            </p>
             {error && <p className="text-xs text-destructive">{error}</p>}
             {ok && !error && (
               <p className="text-xs text-emerald-500">Saved{savedAt ? ` · ${new Date(savedAt * 1000).toLocaleTimeString()}` : ""}</p>

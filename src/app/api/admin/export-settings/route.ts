@@ -20,8 +20,13 @@ import { verifySuperadmin } from "../verify-superadmin";
 
 export async function GET() {
   const s = await readExportSettings();
+  // The machine's core count so the UI hint can tell the truth: ffmpeg parallelism is capped by
+  // cores-1 as well as the RAM budget, whichever is smaller.
+  const os = await import("os");
+  const cores = os.cpus()?.length || 0;
   return NextResponse.json({
     settings: s,
+    cores,
     bounds: { min: RAM_BUDGET_MIN, max: RAM_BUDGET_MAX, default: RAM_BUDGET_DEFAULT },
   });
 }

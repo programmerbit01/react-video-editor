@@ -1114,10 +1114,14 @@ async function runExport(
   // ("segment 6 failed — killed by SIGKILL with no output"). Free RAM is not a spending target.
   const FREE_HEADROOM = 0.7;
   const freeCap = Math.max(1, Math.floor((freeGB * FREE_HEADROOM) / perSegGB));
+  // Three real limits, whichever is smallest: CPU (cores-1, leave one for the box), the RAM
+  // budget, and what's actually free right now. The old fixed cap of 8 defeated the budget knob
+  // — a 24-core box with plenty of RAM still ran only 8 — so it's gone; cores-1 is the natural
+  // CPU ceiling. FF_SEG_CONCURRENCY still overrides everything.
   const SEG_CONC = Math.max(
     1,
     Number(process.env.FF_SEG_CONCURRENCY) ||
-      Math.min(totalCores - 1 || 3, 8, budgetCap, freeCap)
+      Math.min(totalCores - 1 || 3, budgetCap, freeCap)
   );
   // Threads PER segment — give each ffmpeg a share of the box instead of all of it.
   //
