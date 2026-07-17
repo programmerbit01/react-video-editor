@@ -717,8 +717,8 @@ export default function AiEditPanel() {
   if (!s.isOpen) return null;
 
   const panelStyle: React.CSSProperties = s.isFullscreen
-    ? { position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh", zIndex: 9999, overflow: "visible" }
-    : { position: "fixed", left: s.floatPos.x, top: s.floatPos.y, width: s.panelSize.width, zIndex: 9999, overflow: "visible" };
+    ? { position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh", zIndex: 1000, overflow: "visible" }
+    : { position: "fixed", left: s.floatPos.x, top: s.floatPos.y, width: s.panelSize.width, zIndex: 1000, overflow: "visible" };
   const bodyHeight = s.isFullscreen ? "calc(100vh - 42px)" : s.panelSize.height;
   const iconBtn =
     "flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground hover:text-foreground";

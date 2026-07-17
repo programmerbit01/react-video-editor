@@ -608,8 +608,8 @@ export default function ScriptGuidePanel() {
   if (!isOpen) return null;
 
   const panelStyle: React.CSSProperties = isFullscreen
-    ? { position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh", zIndex: 9999, overflow: "visible" }
-    : { position: "fixed", left: floatPos.x, top: floatPos.y, width: panelSize.width, zIndex: 9999, overflow: "visible" };
+    ? { position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh", zIndex: 1000, overflow: "visible" }
+    : { position: "fixed", left: floatPos.x, top: floatPos.y, width: panelSize.width, zIndex: 1000, overflow: "visible" };
 
   return (
     <div
