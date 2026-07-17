@@ -56,7 +56,7 @@ The queue path carries `options.engine`, so FF/RE both work through the fleet.
 
 **Ports on a render box:**
 - `:3000` = **higgs** (Next 15) — serves the editor at `/editor` by rewriting `/editor/*`,
-  `/api/render`, `/api/render-remotion`, `/api/proxy`, `/api/export-timeline` → `:3001`.
+  `/api/render`, `/api/render-remotion`, `/api/export-timeline` → `:3001`.
 - `:3001` = **editor** (react-video-editor, Next 16, `basePath: /editor`) — does the actual render.
 
 **Hard rule:** the pull agent and the editor it drives are on the **same machine** — the
@@ -218,10 +218,11 @@ worker pulls R2 in parallel = fast. A same-origin `/api/proxy` hop only serializ
 everything through one Next process = slow ("proxy shit"). Single source of truth:
 `src/features/editor/utils/asset-url.ts` → `resolveAssetUrl()` (unwraps legacy
 `/api/proxy?url=` baked into old/imported designs → direct; used in navbar
-`patchDesignMetadata` + zip-export, uploads `getPlayerSrc`). `/api/proxy` is now a
-minimal dormant shim — it only activates for the legacy Garage host
-`vapp-media-gar.tomtap.ai` and ONLY when `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1`
-(default OFF). **Never re-wrap R2 URLs in the proxy.**
+`normalizeProject` in `project-schema.ts` + zip-export, uploads `getPlayerSrc`).
+`/api/proxy` is **deleted**. It was kept as a dormant shim for the legacy Garage host
+`vapp-media-gar.tomtap.ai`, said to lack a CORS preflight — that host answers
+`access-control-allow-origin: *`, so the shim's one reason was never true and it had
+been off by default anyway. **Never re-wrap R2 URLs in a proxy.**
 
 ### 9.2 Localize prefetch + local asset cache
 Before the render, `localizeAssets()` (in `render-remotion/route.ts`) rewrites every
@@ -284,8 +285,7 @@ bigger cost). Verify on the box (`NVENC auto-detect: available ✓` log).
 > Per render box: deploy the **editor** (build + restart) AND the **agent** (restart)
 > **together**. Keep the vApp server (presign-multipart endpoints) current. A box with
 > a new editor but no `/api/asset-cache` route, or an old agent, is the only way to
-> break this — a clean full deploy avoids it. Legacy Garage-host assets need
-> `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1` or migration to R2.
+> break this — a clean full deploy avoids it.
 
 ### 9.9 Quick failure → cause map (additions)
 | Symptom | Likely cause |
@@ -294,7 +294,7 @@ bigger cost). Verify on the box (`NVENC auto-detect: available ✓` log).
 | `Localize assets` errors `✕ … (cache-through)` | that asset wasn't prewarmed; served direct from R2 — harmless |
 | `NVENC path failed — falling back…` | frame glob / ffmpeg / no nvenc — using libx264; safe |
 | Agent reports `R2 upload ok` not `R2 multipart ok` | server multipart endpoints unreachable (old vApp) — single-PUT fallback |
-| Some old-project asset fails to load (CORS) | it's on the legacy Garage host — set `NEXT_PUBLIC_LEGACY_GARAGE_PROXY=1` or migrate |
+| Any asset fails to load (CORS) | check the R2 bucket's CORS policy FIRST — it should be `*`. An origin is an exact string (`http://host` ≠ `http://host:3000`), R2 rejects partial wildcards, and a per-origin ACAO gets cached per origin — we measured a 2-day-old header served for an origin already removed. Bust the cache before believing any test. |
 
 ---
 

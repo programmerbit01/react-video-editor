@@ -419,12 +419,11 @@ async function runRemotionExport(jobId: string, design: any, options: any) {
 
   // Keep /editor in the origin — headless Chrome reaches Next.js directly, under the basePath.
   //
-  // CORS WARNING: this origin is what R2 sees, and R2 serves an ALLOWLIST, not `*` (see
-  // features/editor/utils/asset-url.ts — verified against the live bucket). http://localhost:3001
-  // and http://127.0.0.1:3001 are NOT on it, so a direct R2 fetch from this Chrome comes back
-  // with no access-control-allow-origin. Server-side downloads don't care; a browser does. If
-  // media loads for the FF export and not for this one, check the bucket's CORS policy before
-  // suspecting anything in here.
+  // This origin is what R2 sees, and this Chrome is the only part of the render that CORS can
+  // touch — the FF path downloads server-side and never meets it. The bucket serves `*` today,
+  // so it's fine; it used to be a per-origin allowlist that 127.0.0.1:3001 was never on, and
+  // media failed here while working everywhere else. If that ever comes back, the bucket's CORS
+  // policy is the first place to look, not this file. See features/editor/utils/asset-url.ts.
   const serverOrigin = (
     process.env.EDITOR_INTERNAL_ORIGIN ?? "http://127.0.0.1:3001/editor"
   ).replace(/\/$/, "");

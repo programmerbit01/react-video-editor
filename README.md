@@ -140,10 +140,10 @@ Every vapp media item carries **two URLs**:
 
 | Field | Path | Purpose |
 |-------|------|---------|
-| `url` / `metadata.uploadedUrl` | `/api/proxy?url=<encoded-cdn>` | **Remotion player** (`details.src`). Remotion and `loadAudioData` call `fetch()` internally which is CORS-strict. The proxy adds the needed CORS headers. |
-| `metadata.directUrl` | `https://rpublic.tomtap.ai/...` | **HTML `<img>` / `<video>` display** and canvas `drawImage()`. Loads directly from CDN — no proxy hop, faster, no server bandwidth. |
+| `url` / `metadata.uploadedUrl` | `https://rpublic.tomtap.ai/...` | Everything — player (`details.src`), thumbnails, filmstrip, drag previews. |
+| `metadata.directUrl` | `https://rpublic.tomtap.ai/...` | Same URL. Kept because older items carry it. |
 
-Thumbnail images in the uploads panel, the timeline filmstrip, and drag previews all use `metadata.directUrl`. Only Remotion's internal player uses the proxy URL.
+These used to differ: `url` was `/api/proxy?url=<encoded>` because "Remotion and `loadAudioData` call `fetch()` internally which is CORS-strict". They fetch direct now, and the bucket's CORS policy is `*` — see `src/features/editor/utils/asset-url.ts`, which is the only place a stored URL is resolved. `/api/proxy` is deleted.
 
 ---
 
@@ -194,7 +194,7 @@ When the Upload modal is submitted:
 5. vapp_higgs route determines media type from `Content-Type`, forwards the file to `{baseUrl}/vapp/upload/{video|audio|image}` with `Authorization: Bearer {token}`.
 6. vapp_server saves to R2 via `save_upload_bytes`, returns `{ storage_url: "https://rpublic.tomtap.ai/..." }`.
 7. vapp_higgs returns `{ ok, url: storageUrl, type, name }` to the editor.
-8. `processVappFileUpload` builds an upload item with `metadata.directUrl = storageUrl` and `url = /api/proxy?url=...`, identical in shape to items fetched from the server.
+8. `processVappFileUpload` builds an upload item with `url` and `metadata.directUrl` both set to the direct storage URL, identical in shape to items fetched from the server.
 9. The item is prepended to the `uploads` store and immediately visible at the top of the panel.
 
 If no `?token=` is present (standalone/local mode), the original `/api/uploads/local` path is used unchanged.
