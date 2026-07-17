@@ -39,11 +39,17 @@ export async function verifySuperadmin(baseUrl: string, token: string): Promise<
     if (!res.ok) return { ok: false, status: 403, error: "auth rejected" };
     const d = await res.json().catch(() => ({} as any));
     // /vapp/auth/me returns { user: { role }, token }; accept a few shapes so a real
-    // superadmin is never wrongly locked out.
+    // admin is never wrongly locked out.
     const role = String(
       d?.user?.role || d?.role || d?.data?.user?.role || d?.profile?.role || "",
     ).toLowerCase();
-    if (role !== "superadmin") return { ok: false, status: 403, role, error: "superadmin only" };
+    // The vApp's role vocabulary is superadmin | admin | user, and a PocketBase superuser login
+    // (how the owner usually signs in) resolves to role "admin", NOT "superadmin". The vApp gates
+    // its own privileged actions on `role in (admin, superadmin)`, so match that — a superadmin-only
+    // gate would hide this from the very person who set the deployment up.
+    if (role !== "superadmin" && role !== "admin") {
+      return { ok: false, status: 403, role, error: "admin only" };
+    }
     return { ok: true, status: 200, role };
   } catch (e: any) {
     return { ok: false, status: 502, error: String(e?.message || e) };

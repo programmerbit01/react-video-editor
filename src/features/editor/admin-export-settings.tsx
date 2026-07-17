@@ -33,22 +33,24 @@ export default function AdminExportSettings() {
   const [ok, setOk] = useState(false);
   const [error, setError] = useState("");
 
-  // Gate the button on real superadmin. Detection goes through the editor's own route so it
+  // Gate the button on admin/superadmin. Detection goes through the editor's own route so it
   // doesn't depend on the launch param scheme (baseUrl vs vappHost vs same-origin) — the token
   // is always in the URL, and the server resolves the vApp base. Same check the PUT enforces.
   useEffect(() => {
     const { baseUrl, token } = vappCtx();
-    if (!token) return;
+    if (!token) { console.log("[export-settings] no token in URL → button hidden"); return; }
     let alive = true;
     (async () => {
       try {
         const q = new URLSearchParams({ token });
         if (baseUrl) q.set("baseUrl", baseUrl);
         const r = await fetch(`${EDITOR_BASE}/api/admin/whoami?${q.toString()}`, { cache: "no-store" });
-        if (!r.ok) return;
         const d = await r.json().catch(() => ({}));
+        console.log(`[export-settings] whoami → role="${d?.role ?? "(none)"}" allowed=${!!d?.superadmin} (http ${r.status})`);
         if (alive && d?.superadmin) setIsSuperadmin(true);
-      } catch { /* not superadmin / offline → button stays hidden */ }
+      } catch (e) {
+        console.log("[export-settings] whoami failed:", e);
+      }
     })();
     return () => { alive = false; };
   }, []);
@@ -105,7 +107,7 @@ export default function AdminExportSettings() {
           variant="ghost"
           size="icon"
           className="h-8 w-8 text-muted-foreground hover:text-foreground"
-          title="Export settings (superadmin)"
+          title="Export settings (admin)"
         >
           <SlidersHorizontal className="size-4" />
         </Button>
@@ -114,7 +116,7 @@ export default function AdminExportSettings() {
         <div className="mb-3">
           <p className="text-sm font-semibold">Export settings</p>
           <p className="text-xs text-muted-foreground">
-            Superadmin · applies to every export on this server
+            Admin · applies to every export on this server
           </p>
         </div>
 
