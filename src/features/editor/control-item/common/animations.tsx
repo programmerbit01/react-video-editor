@@ -250,19 +250,19 @@ const SelectaAnimation = ({ trackItem }: { trackItem: ITrackItem & IText }) => {
     <div className="flex gap-2 py-0 flex-col lg:flex-col">
       {isLargeScreen && (
         <Button
-          className="flex h-7 w-full items-center gap-1.5 text-xs"
-          variant="outline"
+          className="flex h-6 w-auto self-start items-center gap-1 px-2 text-[11px]"
+          variant="ghost"
           onClick={() => applyQuickFade(activeIds[0])}
           title="Apply Fade In + Fade Out (0.3s each) — most used by YouTubers"
         >
-          <Zap size={11} className="text-yellow-500 fill-yellow-500" />
+          <Zap size={10} className="text-yellow-500 fill-yellow-500" />
           Quick Fade
           <span className="text-muted-foreground text-[10px]">(0.3s)</span>
         </Button>
       )}
       <div className="flex gap-2 flex-row">
         <div className="flex-1 items-center text-sm text-muted-foreground hidden lg:flex">
-          Custom
+          Custom animation
         </div>
         {isLargeScreen ? (
         <div className="relative w-44">
