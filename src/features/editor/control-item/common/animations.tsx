@@ -128,10 +128,13 @@ const KenBurnsSelect = () => {
   };
 
   return (
-    <div className="flex flex-col gap-2 pb-2 border-b border-border/50">
+    <div className="flex flex-col gap-2">
+      {/* Own section, like "Animations": a heading, a line under it, then the settings. */}
+      <Label className="font-sans text-xs font-semibold">Ken Burns</Label>
+      <div className="border-t border-border/50" />
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
-          Ken Burns
+          Effect
         </span>
         <select
           value={value}
@@ -204,10 +207,9 @@ export const Animations = ({ properties, trackItem }: PresetTextProps) => {
       <GlobalAnimationToggle />
       <SelectaAnimation trackItem={trackItem} />
       {isMedia && (
-        <>
-          <div className="mt-2 border-t border-border/60 pt-3" />
+        <div className="mt-4">
           <KenBurnsSelect />
-        </>
+        </div>
       )}
     </div>
   );
@@ -249,16 +251,20 @@ const SelectaAnimation = ({ trackItem }: { trackItem: ITrackItem & IText }) => {
   return (
     <div className="flex gap-2 py-0 flex-col lg:flex-col">
       {isLargeScreen && (
-        <Button
-          className="flex h-6 w-auto self-start items-center gap-1 px-2 text-[11px]"
-          variant="ghost"
-          onClick={() => applyQuickFade(activeIds[0])}
-          title="Apply Fade In + Fade Out (0.3s each) — most used by YouTubers"
-        >
-          <Zap size={10} className="text-yellow-500 fill-yellow-500" />
-          Quick Fade
-          <span className="text-muted-foreground text-[10px]">(0.3s)</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wide flex-1">
+            Quick Fade
+          </span>
+          <Button
+            className="flex h-7 items-center gap-1 px-2.5 text-[11px]"
+            variant="outline"
+            onClick={() => applyQuickFade(activeIds[0])}
+            title="Apply Fade In + Fade Out (0.3s each) — most used by YouTubers"
+          >
+            <Zap size={11} className="text-yellow-500 fill-yellow-500" />
+            Apply <span className="text-muted-foreground text-[10px]">(0.3s)</span>
+          </Button>
+        </div>
       )}
       <div className="flex gap-2 flex-row">
         <div className="flex-1 items-center text-sm text-muted-foreground hidden lg:flex">

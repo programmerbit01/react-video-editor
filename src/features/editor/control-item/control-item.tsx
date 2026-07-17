@@ -115,7 +115,11 @@ const CaptionStyleTab = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => 
 
 const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => {
   const tabs = TAB_CONFIG[trackItem.type] ?? [];
-  const getDefaultTab = () => (tabs.find((t) => t.transcript)?.value ?? tabs[0]?.value) ?? "content";
+  const getDefaultTab = () => {
+    // Images open on Motion — Ken Burns / animations are what you reach for first on a still.
+    if (trackItem.type === "image" && tabs.some((t) => t.value === "motion")) return "motion";
+    return (tabs.find((t) => t.transcript)?.value ?? tabs[0]?.value) ?? "content";
+  };
   const [activeTab, setActiveTab] = useState(getDefaultTab());
 
   useEffect(() => {
