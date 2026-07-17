@@ -139,10 +139,20 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
 
         const isRemotion = exportEngine === "remotion";
         const routePath = isRemotion ? "/api/render-remotion" : "/api/render";
-        // remoteBase set → render on another machine's editor. A remote editor serves its
-        // API under the basePath (/editor); the local same-origin path resolves fine bare.
+        // remoteBase set → render on another machine's editor; empty → this one.
+        //
+        // The basePath goes on in BOTH cases, because that is where the route actually lives:
+        // the editor runs under basePath '/editor', so the handler is at /editor/api/render.
+        // Local used to send a bare /api/render and only worked because higgs happens to
+        // rewrite that one path to :3001/editor/api/render — open the editor directly on
+        // :3001 and Local 404s, having never reached the route. (Verified: POST /api/render
+        // → 404, POST /editor/api/render → 400 "design required".)
+        //
+        // It is also the URL the render agent posts to — {service_url}/api/render where
+        // service_url already ends in /editor. So Local and a queued job now hit the same
+        // handler by the same path, and testing Local tests what the agent triggers.
         const base = remoteBase ? remoteBase.trim().replace(/\/+$/, "") : "";
-        const basePathPrefix = base ? (process.env.NEXT_PUBLIC_BASE_PATH || "") : "";
+        const basePathPrefix = process.env.NEXT_PUBLIC_BASE_PATH || "";
         const apiBase = `${base}${basePathPrefix}${routePath}`;
 
         // Serialize once so we can show the payload size — a caption-heavy project is a
