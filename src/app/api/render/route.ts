@@ -1127,13 +1127,14 @@ async function runExport(
         // the user is told. It says nothing. What matters is the exit code, the signal, and
         // ffmpeg's own stderr.
         //
-        // The signal is the whole diagnosis when it matters: a segment killed with SIGKILL that
-        // printed nothing was almost certainly killed by the kernel for RAM, and that is
-        // indistinguishable from a bad filter unless we look.
+        // Name the signal, but do NOT guess who sent it. A SIGKILL with no output was confidently
+        // reported here as "the kernel's OOM killer" — it was this codebase's own orphan reaper
+        // killing the render it was in the middle of. A guess dressed as a diagnosis sent us
+        // hunting RAM on a box that had 26GB free.
         const e = err as NodeJS.ErrnoException & { code?: unknown; signal?: string; killed?: boolean };
         const tail = String(stderr || "").trim().split("\n").slice(-6).join("\n").slice(-600);
         const why = e.signal
-          ? `killed by ${e.signal}${e.signal === "SIGKILL" && !tail ? " with no output — the kernel's OOM killer looks like this" : ""}`
+          ? `killed by ${e.signal}${e.signal === "SIGKILL" && !tail ? " and printed nothing — something outside ffmpeg killed it (cancel, the reaper, the OOM killer, a supervisor)" : ""}`
           : `exit ${e.code ?? "?"}`;
         const detail = tail || "(ffmpeg printed nothing)";
         console.error(

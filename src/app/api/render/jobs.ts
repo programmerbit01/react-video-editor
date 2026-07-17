@@ -31,47 +31,60 @@ export function killJobChildren(id: string): void {
   jobChildren.delete(id);
 }
 
-// ── Reap ffmpeg we orphaned ──────────────────────────────────────────────────────────────────
+// ── Reap ffmpeg an earlier editor orphaned ───────────────────────────────────────────────────
 //
 // Both maps above live in memory, so a restart forgets every render it was running — but the
-// ffmpeg processes it spawned do NOT die with it. They are ordinary children: the parent goes,
-// they get reparented and carry on encoding, invisible to the new process and to Cancel, which
-// can only kill children THIS process registered. Restarting the editor to get the box back is
-// exactly what doesn't work, and the reported symptom — "I restart it and they keep running".
+// ffmpeg it spawned does NOT die with it. They are ordinary children: the parent goes, they get
+// reparented to pid 1 and carry on encoding, invisible to the new process and to Cancel, which
+// can only kill children THIS process registered. "I restart the editor and they keep running"
+// is exactly right, so a fresh process cleans up after the dead one.
 //
-// So the new process reaps them. Only ffmpeg whose command line points into our own exports
-// directory is touched: those are ours by construction, nobody else writes there, and the render
-// that owned them is already gone.
+// THE ONLY SAFE DISCRIMINATOR IS THE PARENT PID. A live render's ffmpeg and a dead render's
+// orphan look identical on the command line — both write into our exports dir. The difference is
+// that an orphan's parent is gone, so it has been reparented to pid 1; a live child still has a
+// real parent. Matching on the command line alone kills the render that is running right now:
+// this function did exactly that, and the segments it murdered reported "killed by SIGKILL with
+// no output", which the segment handler then blamed on the kernel's OOM killer. A self-inflicted
+// kill wearing an out-of-memory costume.
+//
+// It also runs ONCE per process. Module scope is not startup — a dev-mode re-evaluation is
+// enough to re-run it, mid-render.
+let reaped = false;
 function reapOrphanedFfmpeg(): void {
-  if (process.platform === "win32") return; // pkill/ps -o args= aren't a thing there
+  if (reaped || process.platform === "win32") return; // ps -o ppid= isn't a thing on win32
+  reaped = true;
   try {
     // Required lazily: this module is imported by route handlers, and pulling child_process in
     // at module scope drags it into every bundle that touches a job.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { execSync } = require("child_process") as typeof import("child_process");
     const exportsDir = `${eval("process.cwd()")}/public/exports`;
-    const out = execSync("ps -Ao pid=,args= 2>/dev/null || true", { encoding: "utf8" });
-    const self = process.pid;
-    const mine = out
+    const out = execSync("ps -Ao pid=,ppid=,args= 2>/dev/null || true", { encoding: "utf8" });
+    const orphans = out
       .split("\n")
-      // `ps -o pid=,args=` gives "  1234 ffmpeg -y …" or "  1234 /usr/bin/ffmpeg -y …", so the
-      // command is preceded by a SPACE as often as a slash. Anchoring on `/` alone matched
-      // nothing at all — this reaped zero orphans while looking like it worked.
+      // `ps` gives "  1234   1 ffmpeg -y …" or "  1234   1 /usr/bin/ffmpeg -y …" — the command is
+      // preceded by a SPACE as often as a slash, and anchoring on `/` alone matched nothing at all.
       .filter((l) => /(^|[\/\s])ffmpeg\s/.test(l) && l.includes(exportsDir))
-      .map((l) => Number(l.trim().split(/\s+/)[0]))
-      .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== self);
-    for (const pid of mine) {
+      .map((l) => {
+        const [pid, ppid] = l.trim().split(/\s+/, 2).map(Number);
+        return { pid, ppid };
+      })
+      // ppid 1 = the editor that started it is gone. Anything else still has a parent, and that
+      // parent might be us.
+      .filter((p) => Number.isFinite(p.pid) && p.pid > 0 && p.ppid === 1)
+      .map((p) => p.pid);
+    for (const pid of orphans) {
       try {
         process.kill(pid, "SIGKILL");
       } catch {
         /* already gone, or not ours to kill */
       }
     }
-    if (mine.length) {
+    if (orphans.length) {
       console.warn(
-        `[FF/reap] killed ${mine.length} orphaned ffmpeg left by a previous editor process ` +
-          `(pids ${mine.join(", ")}). They survive a restart because they are ordinary children ` +
-          `and jobChildren is in-memory — restarting the editor does not stop them.`
+        `[FF/reap] killed ${orphans.length} ffmpeg orphaned by a previous editor process ` +
+          `(pids ${orphans.join(", ")}). They outlive a restart because they are ordinary ` +
+          `children and jobChildren is in-memory — restarting the editor does not stop them.`
       );
     }
   } catch {
