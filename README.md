@@ -262,6 +262,25 @@ If no `?token=` is present (standalone/local mode), the original `/api/uploads/l
 
 ---
 
+### Adding media to the timeline — click-add + audio reliability
+
+**File:** `src/features/editor/menu-item/uploads.tsx` — `handleAdd`, `ensureAudioMeta`, `prewarm`
+
+Clicking a tile (or dropping it) dispatches `ADD_VIDEO` / `ADD_IMAGE` / `ADD_AUDIO`. `handleAdd` sets `addingId` first (that's the per-tile **spinner / cursor-wait "adding" overlay**), does any prep, dispatches, then clears `addingId` in `finally`. The spinner only paints if there's a real `await` between set and clear.
+
+- **Video / image** `await` a metadata probe (`fastVideoMeta` / `ensureImageMeta`), so the overlay shows.
+- **Audio** used to dispatch *synchronously* → React batched the two state updates and the overlay never painted. Worse, `@designcombo/state`'s audio handler (`Ss` → `ys`) **always re-loads the file itself** with `preload="auto"`, **no timeout**, **rejects on `error`** (→ unhandled rejection, clip silently dropped, no toast), and **no `Infinity`-duration guard** (VBR / chunked MP3s report `duration=Infinity` → broken `display` → clip effectively never appears). The payload `duration` is ignored for audio (video has a shortcut via `Ki`; audio does not), so there's no lever from the payload alone.
+
+`ensureAudioMeta(src)` fixes all three, entirely client-side — **no package patch, no proxy**:
+
+- Resolves the duration **before** dispatch → the "adding" overlay paints, exactly like video/image.
+- Warms the **same browser media cache** the package will hit next — `<audio>` with **no `crossOrigin`**, matching `cors.audio: false` in `editor.tsx` (a CORS vs non-CORS request caches separately, so this must match) — so the package's follow-up load resolves **fast and finite**.
+- **Recovers `Infinity` durations** by seeking to the end (`currentTime = 1e7`) and reading `durationchange`; this also fully caches the file so the package sees a finite duration too.
+- **Times out** (`AUDIO_META_TIMEOUT`) instead of hanging; on genuine failure shows a **`sonner` toast** instead of dropping the clip silently.
+- Result is cached in the shared `mediaMetaCache`; `prewarm` (tile hover) warms audio duration too, so a hovered item adds instantly and drag-drop benefits as well.
+
+---
+
 ### CORS — R2 / CDN reads
 
 On vapp_server startup, `ensure_bucket_cors()` in `vapp_storage.py` applies a CORS policy to the R2 bucket via the S3 API (`PUT /{bucket}?cors`). This allows direct CDN reads (GET/HEAD) from any origin. The policy is applied once per process lifetime via the `_bucket_cors_applied` flag.

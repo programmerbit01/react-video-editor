@@ -9,6 +9,7 @@ import { vappAuth, sttForUrl } from "@/utils/vapp-api";
 import useCaptionTranscribeStore from "../captions/transcribe-store";
 import ModalUpload from "@/components/modal-upload";
 import Draggable from "@/components/shared/draggable";
+import { toast } from "sonner";
 import { Component, useEffect, useRef, useState, memo } from "react";
 import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from "react";
 
@@ -140,6 +141,70 @@ const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
     v.src = src;
     v.load();
   });
+
+// Robust audio-duration probe. The state manager's OWN audio loader (@designcombo/state
+// `ys`) always re-loads the src with preload="auto", NO timeout, rejects on error, and has
+// NO Infinity-duration guard — so a click can silently drop the clip (unhandled rejection,
+// no toast) or land a broken one when a VBR/chunked MP3 reports duration=Infinity. Resolving
+// the duration here FIRST (a) makes the "adding" spinner paint during the await, and (b) warms
+// the SAME browser media cache the package will hit — no crossOrigin, matching cors.audio=false
+// in editor.tsx — so the package's follow-up load resolves fast AND finite. Result is cached in
+// the shared mediaMetaCache so a prewarmed (hover) item adds instantly.
+const AUDIO_META_TIMEOUT = 12000;
+const ensureAudioMeta = (src: string): Promise<CachedMediaMeta> => {
+  if (!src) return Promise.resolve({});
+  const cached = mediaMetaCache.get(src);
+  if (cached?.duration) return Promise.resolve(cached);
+  const existing = mediaMetaInflight.get(src);
+  if (existing) return existing;
+
+  const task = new Promise<CachedMediaMeta>((resolve) => {
+    const a = document.createElement("audio");
+    a.preload = "metadata";
+    // NO crossOrigin on purpose: the state manager loads audio non-CORS (cors.audio=false),
+    // so we must warm the same non-CORS cache entry it will later fetch.
+    let settled = false;
+    const cleanup = () => { try { a.src = ""; a.load(); } catch {} };
+    const finish = (meta: CachedMediaMeta) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      mediaMetaInflight.delete(src);
+      if (meta.duration) {
+        const merged = { ...(mediaMetaCache.get(src) || {}), ...meta };
+        mediaMetaCache.set(src, merged);
+        cleanup();
+        resolve(merged);
+      } else {
+        cleanup();
+        resolve({});
+      }
+    };
+    const timer = window.setTimeout(() => finish({}), AUDIO_META_TIMEOUT);
+
+    const readDuration = (): boolean => {
+      const d = a.duration;
+      if (Number.isFinite(d) && d > 0) { finish({ duration: Math.round(d * 1000) }); return true; }
+      return false;
+    };
+
+    a.onloadedmetadata = () => {
+      if (readDuration()) return;
+      // duration is Infinity/NaN (VBR/chunked MP3, no Content-Length) — force a scan to the
+      // end so the browser learns the real duration; this also fully caches the file, so the
+      // state manager's own load then reports a finite duration too.
+      const onDur = () => { if (readDuration()) a.removeEventListener("durationchange", onDur); };
+      a.addEventListener("durationchange", onDur);
+      try { a.currentTime = 1e7; } catch {}
+    };
+    a.onerror = () => finish({});
+    a.src = src;
+    a.load();
+  });
+
+  mediaMetaInflight.set(src, task);
+  return task;
+};
 
 // Drag payload for dropping a tile onto the scene/timeline. Matches what the scene
 // DroppableArea expects ({type, details.src, …}); it adds the id + places the clip.
@@ -843,7 +908,8 @@ export const Uploads = () => {
   // Video: just the poster (light) — dims come fast on click via fastVideoMeta.
   const prewarm = (item: any) => {
     if (isVideo(item)) void capturePoster(getDisplaySrc(item));
-    else if (!isAudio(item)) void ensureImageMeta(item);
+    else if (isAudio(item)) void ensureAudioMeta(getPlayerSrc(item)); // warm duration → instant, reliable click-add
+    else void ensureImageMeta(item);
   };
 
   const handleAdd = async (item: any) => {
@@ -853,6 +919,15 @@ export const Uploads = () => {
     const src = getPlayerSrc(item);
     try {
       if (isAudio(item)) {
+        // Resolve the duration FIRST (this is what paints the "adding" spinner during the
+        // await, exactly like video/image) and warm the media cache so the state manager's
+        // own audio load lands finite + fast. If even this robust probe can't get metadata,
+        // the package's stricter loader would silently drop the clip — surface it instead.
+        const meta = mediaMetaCache.get(src) || await ensureAudioMeta(src);
+        if (!meta.duration) {
+          toast.error("Couldn't load this audio — its metadata is unavailable. Please try again.");
+          return; // spinner cleared by finally
+        }
         const audioMeta: Record<string, any> = {};
         if (item.stt && typeof item.stt === "object") {
           audioMeta.transcriptData = item.stt;
@@ -864,7 +939,9 @@ export const Uploads = () => {
             .catch(() => {});
         }
         dispatch(ADD_AUDIO, {
-          payload: { id: generateId(), type: "audio", details: { src, name: getLabel(item) }, metadata: audioMeta },
+          // duration passed through for correctness/future-proofing (the current package
+          // recomputes it, but the warmed cache makes that resolve instantly + finite).
+          payload: { id: generateId(), type: "audio", duration: meta.duration, details: { src, name: getLabel(item) }, metadata: audioMeta },
           options: {},
         });
         return;
