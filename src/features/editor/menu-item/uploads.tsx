@@ -114,7 +114,32 @@ const cmpMedia = (a: any, b: any): number => {
 // Fast, metadata-ONLY probe (duration + dimensions) — resolves on loadedmetadata,
 // NO seek/canvas frame-capture. Used to add a clip to the timeline instantly; the
 // heavy ensureVideoMeta (preview frame) runs in the background afterwards.
-const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
+// Result is cached + de-duped: click-add, hover prewarm and the drop handler all ask for
+// the same numbers, and without this each one paid for its own <video> load.
+const fastVideoMeta = (src: string): Promise<CachedMediaMeta> => {
+  if (!src) return Promise.resolve({});
+  const cached = mediaMetaCache.get(src);
+  if (cached?.duration && cached?.width && cached?.height) return Promise.resolve(cached);
+  const existing = mediaMetaInflight.get(src);
+  if (existing) return existing;
+  const task = _fastVideoMetaOnce(src).then((meta) => {
+    mediaMetaInflight.delete(src);
+    // Keep whatever the probe DID learn (dims survive even when duration is unreadable);
+    // never write a 0/undefined over a good cached value.
+    const fresh: CachedMediaMeta = {};
+    if (meta.duration) fresh.duration = meta.duration;
+    if (meta.width) fresh.width = meta.width;
+    if (meta.height) fresh.height = meta.height;
+    if (!Object.keys(fresh).length) return {};
+    const merged = { ...(mediaMetaCache.get(src) || {}), ...fresh };
+    mediaMetaCache.set(src, merged);
+    return merged;
+  });
+  mediaMetaInflight.set(src, task);
+  return task;
+};
+
+const _fastVideoMetaOnce = (src: string): Promise<CachedMediaMeta> =>
   new Promise((resolve) => {
     if (!src) return resolve({});
     const v = document.createElement("video");
@@ -131,8 +156,12 @@ const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
     const timer = window.setTimeout(() => finish({}), 4000);
     v.onloadedmetadata = () => {
       window.clearTimeout(timer);
+      // `v.duration || 10` let Infinity through (it is truthy) — that cached an Infinity
+      // duration and every later reader believed it. Only a finite, positive duration is
+      // a result; anything else reports empty so the caller falls back / re-probes.
+      const d = v.duration;
       finish({
-        duration: Math.round((v.duration || 10) * 1000),
+        duration: Number.isFinite(d) && d > 0 ? Math.round(d * 1000) : 0,
         width: v.videoWidth || 1920,
         height: v.videoHeight || 1080,
       });
@@ -150,37 +179,35 @@ const fastVideoMeta = (src: string): Promise<CachedMediaMeta> =>
 // the SAME browser media cache the package will hit — no crossOrigin, matching cors.audio=false
 // in editor.tsx — so the package's follow-up load resolves fast AND finite. Result is cached in
 // the shared mediaMetaCache so a prewarmed (hover) item adds instantly.
-const AUDIO_META_TIMEOUT = 12000;
-const ensureAudioMeta = (src: string): Promise<CachedMediaMeta> => {
-  if (!src) return Promise.resolve({});
-  const cached = mediaMetaCache.get(src);
-  if (cached?.duration) return Promise.resolve(cached);
-  const existing = mediaMetaInflight.get(src);
-  if (existing) return existing;
+const AUDIO_META_TIMEOUT = 12000;   // header-only read: loadedmetadata must land in this
+const AUDIO_SCAN_TIMEOUT = 45000;   // duration=Infinity → we're downloading the WHOLE file
+// Every empty result carries WHY, so a failure names itself in the console instead of
+// surfacing as a bare "metadata is unavailable" toast. `error` = the element gave up on
+// the resource (transient CDN 404 on a just-generated file, aborted connection, decode
+// failure); `timeout`/`scan-timeout` = it was still downloading when the budget ran out.
+type AudioProbe = CachedMediaMeta & { reason?: "error" | "timeout" | "scan-timeout" };
 
-  const task = new Promise<CachedMediaMeta>((resolve) => {
+const probeAudioMeta = (src: string): Promise<AudioProbe> =>
+  new Promise<AudioProbe>((resolve) => {
     const a = document.createElement("audio");
     a.preload = "metadata";
     // NO crossOrigin on purpose: the state manager loads audio non-CORS (cors.audio=false),
     // so we must warm the same non-CORS cache entry it will later fetch.
     let settled = false;
+    let timer = 0;
+    const t0 = Date.now();
     const cleanup = () => { try { a.src = ""; a.load(); } catch {} };
-    const finish = (meta: CachedMediaMeta) => {
+    const finish = (meta: AudioProbe) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
-      mediaMetaInflight.delete(src);
-      if (meta.duration) {
-        const merged = { ...(mediaMetaCache.get(src) || {}), ...meta };
-        mediaMetaCache.set(src, merged);
-        cleanup();
-        resolve(merged);
-      } else {
-        cleanup();
-        resolve({});
+      if (!meta.duration) {
+        console.warn(`[audio-meta] ${meta.reason || "empty"} after ${Date.now() - t0}ms →`, src.slice(0, 140));
       }
+      cleanup();
+      resolve(meta);
     };
-    const timer = window.setTimeout(() => finish({}), AUDIO_META_TIMEOUT);
+    timer = window.setTimeout(() => finish({ reason: "timeout" }), AUDIO_META_TIMEOUT);
 
     const readDuration = (): boolean => {
       const d = a.duration;
@@ -190,20 +217,63 @@ const ensureAudioMeta = (src: string): Promise<CachedMediaMeta> => {
 
     a.onloadedmetadata = () => {
       if (readDuration()) return;
-      // duration is Infinity/NaN (VBR/chunked MP3, no Content-Length) — force a scan to the
-      // end so the browser learns the real duration; this also fully caches the file, so the
-      // state manager's own load then reports a finite duration too.
+      // duration is Infinity/NaN (VBR/chunked MP3, or a WAV whose RIFF size field is a
+      // placeholder because it was written while streaming) — force a scan to the end so
+      // the browser learns the real duration; this also fully caches the file, so the
+      // state manager's own load then reports a finite duration too. That scan downloads
+      // the ENTIRE file, so it gets its own, much longer budget — the header-only timeout
+      // used to kill long voiceovers mid-download and report them as broken.
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => finish({ reason: "scan-timeout" }), AUDIO_SCAN_TIMEOUT);
       const onDur = () => { if (readDuration()) a.removeEventListener("durationchange", onDur); };
       a.addEventListener("durationchange", onDur);
       try { a.currentTime = 1e7; } catch {}
     };
-    a.onerror = () => finish({});
+    a.onerror = () => finish({ reason: "error" });
     a.src = src;
     a.load();
   });
 
+const ensureAudioMeta = (src: string): Promise<CachedMediaMeta> => {
+  if (!src) return Promise.resolve({});
+  const cached = mediaMetaCache.get(src);
+  if (cached?.duration) return Promise.resolve(cached);
+  const existing = mediaMetaInflight.get(src);
+  if (existing) return existing;
+
+  const task = probeAudioMeta(src).then((meta) => {
+    mediaMetaInflight.delete(src);
+    if (!meta.duration) return {};
+    const merged = { ...(mediaMetaCache.get(src) || {}), duration: meta.duration };
+    mediaMetaCache.set(src, merged);
+    return merged;
+  });
+
   mediaMetaInflight.set(src, task);
   return task;
+};
+
+// Click-path probe: never gives up on the first empty result.
+// Two holes the single-shot version had, both of which look like "kabhi kabhi" to the user:
+//   1. A just-generated file may not be readable on the CDN edge yet (the same eventual
+//      consistency that bites frame extraction and the prompt optimiser) → one `error`,
+//      no retry, straight to the toast. It works "on the second try" because the second
+//      try is simply later.
+//   2. Hover prewarm starts a probe; a click 2s later joins that SAME inflight promise and
+//      inherits its already-spent budget — so the click could be handed a failure the user
+//      never waited for. The retry gives the click its own, fresh attempt.
+const ensureAudioMetaForAdd = async (src: string): Promise<CachedMediaMeta> => {
+  const cached = mediaMetaCache.get(src);
+  if (cached?.duration) return cached;
+  const first = await ensureAudioMeta(src);
+  if (first.duration) return first;
+  await new Promise((r) => setTimeout(r, 900));
+  console.warn("[audio-meta] retrying probe →", src.slice(0, 140));
+  const again = await probeAudioMeta(src);
+  if (!again.duration) return {};
+  const merged = { ...(mediaMetaCache.get(src) || {}), duration: again.duration };
+  mediaMetaCache.set(src, merged);
+  return merged;
 };
 
 // Drag payload for dropping a tile onto the scene/timeline. Matches what the scene
@@ -229,6 +299,59 @@ const dragData = (item: any): Record<string, any> => {
       : { type: "video", duration: meta.duration || 10000, details: { src, width, height, name } };
   }
   return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height, name }, metadata: { previewUrl: dsrc } };
+};
+
+// ── drag-drop ↔ click parity ─────────────────────────────────────────────────
+// The drag payload above is built at RENDER time out of whatever happens to be in the
+// meta cache. For a tile that hasn't been probed yet that means the placeholder
+// `duration: 10000` (video) or no duration at all (audio) — so a dropped clip landed
+// with a length unrelated to the file and the user had to drag its edge back to size.
+// Click-add never had the bug because it awaits the real duration before dispatching.
+//
+// The drop handler runs this first so both paths dispatch the SAME numbers. It is cheap:
+// a warm cache (hover prewarm, or an earlier add of the same file) returns without any
+// await at all, and a cold one costs a single metadata-only read that is de-duped with
+// whatever probe the hover already started. On failure it returns the payload untouched
+// — a clip with the old placeholder length, exactly like before, never a dropped drop.
+export const resolveDropPayload = async (payload: any): Promise<any> => {
+  try {
+    const type = String(payload?.type || "");
+    const src = String(payload?.details?.src || "");
+    if (!src) return payload;
+
+    if (type === "audio") {
+      const cached = mediaMetaCache.get(src);
+      const meta = cached?.duration ? cached : await ensureAudioMetaForAdd(src);
+      return meta.duration ? { ...payload, duration: meta.duration } : payload;
+    }
+
+    if (type === "video") {
+      const cached = mediaMetaCache.get(src);
+      if (cached?.duration && cached?.width && cached?.height) {
+        return {
+          ...payload,
+          duration: cached.duration,
+          details: { ...payload.details, width: cached.width, height: cached.height },
+        };
+      }
+      const fast = await fastVideoMeta(src);
+      if (!fast.duration) return payload;
+      return {
+        ...payload,
+        duration: fast.duration,
+        details: {
+          ...payload.details,
+          width: fast.width || payload?.details?.width || 1920,
+          height: fast.height || payload?.details?.height || 1080,
+        },
+      };
+    }
+
+    return payload; // image — its 5 000 ms display window already matches click-add
+  } catch (err) {
+    console.warn("[drop] duration resolve failed, using payload as-is", err);
+    return payload;
+  }
 };
 
 const getLabel = (item: any) => {
@@ -353,6 +476,18 @@ const _captureOnce = (src: string): Promise<string> =>
     const finish = (r: string) => { if (done) return; done = true; window.clearTimeout(timer); cleanup(); resolve(r); };
     const timer = window.setTimeout(() => finish(""), 12000);
     v.onloadedmetadata = () => {
+      // Free duration + dimensions: this element has already read the header, so record it
+      // instead of throwing it away and making some later probe load the file again. Hover
+      // prewarm captures a poster → the tile's drag payload now knows the real length too.
+      if (Number.isFinite(v.duration) && v.duration > 0) {
+        const prev = mediaMetaCache.get(src) || {};
+        mediaMetaCache.set(src, {
+          ...prev,
+          duration: prev.duration || Math.round(v.duration * 1000),
+          width: prev.width || v.videoWidth || 0,
+          height: prev.height || v.videoHeight || 0,
+        });
+      }
       const t = Number.isFinite(v.duration) && v.duration > 1 ? 1 : 0;
       try { v.currentTime = t; } catch { finish(""); }
     };
@@ -907,7 +1042,15 @@ export const Uploads = () => {
   // Warm caches on hover so a subsequent click adds to the timeline instantly.
   // Video: just the poster (light) — dims come fast on click via fastVideoMeta.
   const prewarm = (item: any) => {
-    if (isVideo(item)) void capturePoster(getDisplaySrc(item));
+    if (isVideo(item)) {
+      void capturePoster(getDisplaySrc(item));
+      // Hover is the start of the drag gesture, so warm the length too — the poster path
+      // returns instantly once cached and then learns nothing, which is how a dragged clip
+      // ended up with the 10s placeholder. De-duped + cached, so at most one light
+      // metadata read per file for the whole session.
+      const psrc = getPlayerSrc(item);
+      if (!mediaMetaCache.get(psrc)?.duration) void fastVideoMeta(psrc);
+    }
     else if (isAudio(item)) void ensureAudioMeta(getPlayerSrc(item)); // warm duration → instant, reliable click-add
     else void ensureImageMeta(item);
   };
@@ -923,7 +1066,7 @@ export const Uploads = () => {
         // await, exactly like video/image) and warm the media cache so the state manager's
         // own audio load lands finite + fast. If even this robust probe can't get metadata,
         // the package's stricter loader would silently drop the clip — surface it instead.
-        const meta = mediaMetaCache.get(src) || await ensureAudioMeta(src);
+        const meta = await ensureAudioMetaForAdd(src);
         if (!meta.duration) {
           toast.error("Couldn't load this audio — its metadata is unavailable. Please try again.");
           return; // spinner cleared by finally
