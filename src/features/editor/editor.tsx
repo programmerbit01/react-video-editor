@@ -98,7 +98,13 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
   const timelinePanelRef = useRef<ImperativePanelHandle>(null);
   const sceneRef = useRef<SceneRef>(null);
   const { timeline, playerRef, fps } = useStore();
-  const { activeIds, trackItemsMap, transitionsMap } = useStore();
+  const { activeIds, trackItemsMap, transitionsMap, tracks } = useStore();
+  const editorAreaRef = useRef<HTMLDivElement>(null);
+  // Content-aware cap for how tall the timeline panel can grow. Without it, dragging the
+  // timeline taller than its tracks just opened a big empty black canvas below the rows —
+  // "no benefit to expanding". This makes the max expansion follow the number of tracks
+  // (+ a comfortable floor), so you can open exactly enough to see every track and no more.
+  const [timelineMaxSize, setTimelineMaxSize] = useState(70);
   const lastSeekedIdRef = useRef<string | null>(null);
   // What we last wrote into the SHARED layout.trackItem slot, so we only ever clear our own.
   const lastSelectedIdRef = useRef<string | null>(null);
@@ -169,6 +175,39 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
     return () => window.removeEventListener("resize", onResize);
   }, [timeline]);
 
+  // Cap the timeline panel's max height to what its tracks actually need, so it can't be
+  // dragged open into a big empty black canvas. Recomputes whenever tracks change or the
+  // window resizes. Row heights mirror timeline.tsx's sizesMap.
+  useEffect(() => {
+    const ROW_PX: Record<string, number> = {
+      video: 50, image: 50, audio: 36, text: 32, caption: 24,
+    };
+    const computeMax = () => {
+      const groupPx = editorAreaRef.current?.clientHeight || 0;
+      if (groupPx <= 0) return;
+      const CHROME_PX = 96;                 // header + ruler + horizontal scrollbar
+      const MARGIN_PX = 44;                 // a hint of one more lane below the last track
+      const FLOOR_PX = 300;                 // never cap below a comfortably usable timeline
+      const contentPx =
+        CHROME_PX +
+        (tracks || []).reduce((s, t) => s + (ROW_PX[(t as any)?.type] ?? 40), 0) +
+        MARGIN_PX;
+      const desiredPx = Math.max(contentPx, FLOOR_PX);
+      const pct = Math.min(70, Math.max(15, (desiredPx / groupPx) * 100));
+      setTimelineMaxSize(pct);
+      // If the panel is already taller than the new cap, pull it back down to the cap.
+      const cur = (timelinePanelRef.current as any)?.getSize?.();
+      if (typeof cur === "number" && cur > pct + 0.5) {
+        timelinePanelRef.current?.resize(pct);
+        handleTimelineResize();
+      }
+    };
+    computeMax();
+    window.addEventListener("resize", computeMax);
+    return () => window.removeEventListener("resize", computeMax);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks]);
+
   useEffect(() => {
     if (activeIds.length === 1) {
       const [id] = activeIds;
@@ -231,7 +270,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
       <ScriptGuidePanel />
       <AiEditPanel />
 
-      <div className="flex flex-1 min-h-0">
+      <div ref={editorAreaRef} className="flex flex-1 min-h-0">
         {isLargeScreen ? (
           <ResizablePanelGroup direction="vertical" className="h-full w-full">
             {/* Top: 3-column area */}
@@ -282,7 +321,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
               ref={timelinePanelRef}
               defaultSize={35}
               minSize={15}
-              maxSize={70}
+              maxSize={timelineMaxSize}
               className="min-h-0"
               onResize={handleTimelineResize}
             >
