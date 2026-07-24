@@ -188,16 +188,12 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
         if (t === "caption") {
           setActiveMenuItem("captions");
         }
-        // Clicking a clip should jump the playhead + preview to it. Seek only when the
-        // selected id actually changes (not on every trackItemsMap churn), so it's a
-        // click response, not a re-seek. Robust vs the LAYER_SELECTION event path.
-        if (lastSeekedIdRef.current !== id) {
-          lastSeekedIdRef.current = id;
-          const fromMs = (trackItem as any)?.display?.from;
-          if (playerRef?.current && typeof fromMs === "number" && Number.isFinite(fromMs)) {
-            playerRef.current.seekTo(Math.max(0, Math.round((fromMs / 1000) * (fps || 30))));
-          }
-        }
+        // NOTE: selecting a clip must NOT move the playhead. It used to seek to the clip's
+        // start on select, which yanked the playhead away from where the user parked it —
+        // they select a clip to edit it, not to scrub. The playhead only moves on an
+        // explicit scrub (ruler click / playhead drag / transport). Keep lastSeekedIdRef in
+        // sync so any other code that reads it still sees the current selection.
+        lastSeekedIdRef.current = id;
       } else console.log(transitionsMap[id]);
     } else {
       setTrackItem(null);
