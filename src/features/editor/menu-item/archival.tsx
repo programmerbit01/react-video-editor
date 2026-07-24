@@ -40,6 +40,35 @@ const SHORT_SOURCE: Record<string, string> = {
 };
 const shortSource = (name: string) => SHORT_SOURCE[name] || name;
 
+// Snap a raw WxH to the aspect ratio a creator actually thinks in (9:16, 16:9, 1:1, …),
+// so a 1080x1920 clip reads "9:16" not "1080:1920". Falls back to a gcd-reduced ratio when
+// nothing common is close, and to "" when dimensions are unknown.
+const COMMON_RATIOS: [string, number][] = [
+  ["9:16", 9 / 16], ["16:9", 16 / 9], ["1:1", 1], ["4:5", 4 / 5], ["5:4", 5 / 4],
+  ["3:4", 3 / 4], ["4:3", 4 / 3], ["2:3", 2 / 3], ["3:2", 3 / 2], ["21:9", 21 / 9], ["9:21", 9 / 21],
+];
+const aspectLabel = (w?: number, h?: number): string => {
+  if (!w || !h || w <= 0 || h <= 0) return "";
+  const r = w / h;
+  // Always snap to the nearest creator-friendly ratio. Real stock dimensions are often a
+  // little off a clean ratio (a 2160x4096 clip is ~9:16 but not exactly), and for a browse
+  // hint the useful thing is the bucket (portrait/landscape/square), not "135:256". The
+  // COMMON_RATIOS gaps are wide enough that nearest-match never confuses e.g. 9:16 with 2:3.
+  let best = COMMON_RATIOS[0], bestErr = Infinity;
+  for (const c of COMMON_RATIOS) {
+    const err = Math.abs(r - c[1]) / c[1];
+    if (err < bestErr) { bestErr = err; best = c; }
+  }
+  return best[0];
+};
+
+// seconds → "M:SS" (badge on video tiles)
+const durationLabel = (secs?: number): string => {
+  const s = Math.round(Number(secs) || 0);
+  if (s <= 0) return "";
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
 const FORMATS: { id: MediaType; label: string }[] = [
   { id: "video", label: "Video" },
   { id: "image", label: "Images" },
@@ -294,19 +323,55 @@ const MediaTile = ({
       author: item.author,
     },
   };
+  const isVideo = item.type === "video";
+  const [hovering, setHovering] = useState(false);
+  const ar = aspectLabel(item.details?.width, item.details?.height);
+  const dur = isVideo ? durationLabel(item.details?.duration) : "";
+  // Bottom label is now the media TITLE, not the license. License + author stay in the
+  // hover tooltip so nothing legal is lost, but the visible label is the useful name.
+  const bottomLabel = (item.title || "").trim() || item.author || shortSource(item.source_name);
   return (
     <Draggable data={draggableData} renderCustomPreview={<div style={style} />} shouldDisplayPreview={shouldDisplayPreview}>
       <div
         onClick={() => handleAdd(item)}
-        title={`${item.title || ""}\n${item.source_name} · ${item.author} · ${item.license}`}
+        onMouseEnter={() => isVideo && setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
+        title={`${item.title || "Untitled"}\n${item.source_name} · ${item.author} · ${item.license}${ar ? ` · ${ar}` : ""}${dur ? ` · ${dur}` : ""}`}
         className="group relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md bg-background cursor-pointer"
       >
         <img draggable={false} src={item.preview} className="h-full w-full rounded-md object-cover" alt={item.title || "media"} />
-        <span className="absolute top-0 left-0 rounded-br bg-black/70 px-1 py-0.5 text-[9px] font-medium text-white/90">
+        {/* Hover preview: only videos, only while hovered — loads nothing until then. No
+            crossOrigin (never canvas-read), muted+loop autoplay for a light in-place preview. */}
+        {isVideo && hovering ? (
+          <video
+            src={item.details.src}
+            muted
+            loop
+            autoPlay
+            playsInline
+            preload="metadata"
+            className="absolute inset-0 h-full w-full rounded-md object-cover"
+          />
+        ) : null}
+        {/* top-left: source badge */}
+        <span className="absolute top-0 left-0 z-10 rounded-br bg-black/70 px-1 py-0.5 text-[9px] font-medium text-white/90">
           {shortSource(item.source_name)}
         </span>
-        <span className="absolute bottom-0 left-0 right-0 truncate bg-black/60 px-1 py-0.5 text-[9px] text-white/80">
-          {item.license}
+        {/* top-right: aspect ratio */}
+        {ar ? (
+          <span className="absolute top-0 right-0 z-10 rounded-bl bg-black/70 px-1 py-0.5 text-[9px] font-medium text-white/90">
+            {ar}
+          </span>
+        ) : null}
+        {/* bottom-right: video duration */}
+        {dur ? (
+          <span className="absolute bottom-0 right-0 z-10 rounded-tl bg-black/70 px-1 py-0.5 text-[9px] font-medium tabular-nums text-white/90">
+            {dur}
+          </span>
+        ) : null}
+        {/* bottom: title */}
+        <span className="absolute bottom-0 left-0 right-0 z-10 truncate bg-black/60 px-1 py-0.5 pr-7 text-[9px] text-white/85">
+          {bottomLabel}
         </span>
       </div>
     </Draggable>
