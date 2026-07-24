@@ -179,7 +179,12 @@ const _fastVideoMetaOnce = (src: string): Promise<CachedMediaMeta> =>
 // the SAME browser media cache the package will hit — no crossOrigin, matching cors.audio=false
 // in editor.tsx — so the package's follow-up load resolves fast AND finite. Result is cached in
 // the shared mediaMetaCache so a prewarmed (hover) item adds instantly.
-const AUDIO_META_TIMEOUT = 12000;   // header-only read: loadedmetadata must land in this
+// header-only read: loadedmetadata must land in this. 25s (was 12) because on a slow
+// connection even the RANGE-based metadata read of a long voiceover (measured: a 36-min,
+// 17 MB mp3) takes well past 12s — and it does NOT download the whole file, so a longer
+// window just waits, it doesn't cost bandwidth. 12s was turning a slow-but-fine file into
+// a hard "metadata unavailable" failure ([audio-meta] timeout after ~12008ms in the wild).
+const AUDIO_META_TIMEOUT = 25000;
 const AUDIO_SCAN_TIMEOUT = 45000;   // duration=Infinity → we're downloading the WHOLE file
 // Every empty result carries WHY, so a failure names itself in the console instead of
 // surfacing as a bare "metadata is unavailable" toast. `error` = the element gave up on
