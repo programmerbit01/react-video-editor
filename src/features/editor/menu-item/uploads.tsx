@@ -239,6 +239,25 @@ const probeAudioMeta = (src: string): Promise<AudioProbe> =>
     a.load();
   });
 
+// Ask the vApp server for the duration (server-side ffprobe). It reads only the file
+// header over HTTP Range, so it does NOT download the clip — a 36-min voiceover resolves
+// in ~1-2s regardless of the client's connection, where the browser <audio> probe below
+// would stall for 20s+ or time out on a slow link. Returns 0 (→ caller falls back to the
+// browser probe) whenever the server is unreachable, older, or can't determine it.
+const serverAudioDurationMs = async (src: string): Promise<number> => {
+  try {
+    const { baseUrl } = getVappParams();
+    if (!baseUrl || !/^https?:\/\//i.test(src)) return 0;
+    const res = await fetch(`${baseUrl}/vapp/media/duration?url=${encodeURIComponent(src)}`);
+    if (!res.ok) return 0;
+    const j = await res.json();
+    const s = Number(j?.duration_seconds);
+    return Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : 0;
+  } catch {
+    return 0;
+  }
+};
+
 const ensureAudioMeta = (src: string): Promise<CachedMediaMeta> => {
   if (!src) return Promise.resolve({});
   const cached = mediaMetaCache.get(src);
@@ -246,13 +265,17 @@ const ensureAudioMeta = (src: string): Promise<CachedMediaMeta> => {
   const existing = mediaMetaInflight.get(src);
   if (existing) return existing;
 
-  const task = probeAudioMeta(src).then((meta) => {
+  const task = (async (): Promise<CachedMediaMeta> => {
+    // Server ffprobe first (no download); only fall back to the in-browser probe if it
+    // can't answer. This is what removes the slow-network [audio-meta] timeouts.
+    const serverMs = await serverAudioDurationMs(src);
+    const meta = serverMs ? { duration: serverMs } : await probeAudioMeta(src);
     mediaMetaInflight.delete(src);
     if (!meta.duration) return {};
     const merged = { ...(mediaMetaCache.get(src) || {}), duration: meta.duration };
     mediaMetaCache.set(src, merged);
     return merged;
-  });
+  })();
 
   mediaMetaInflight.set(src, task);
   return task;
@@ -274,7 +297,10 @@ const ensureAudioMetaForAdd = async (src: string): Promise<CachedMediaMeta> => {
   if (first.duration) return first;
   await new Promise((r) => setTimeout(r, 900));
   console.warn("[audio-meta] retrying probe →", src.slice(0, 140));
-  const again = await probeAudioMeta(src);
+  // Retry server-first as well — a just-generated file the CDN edge 404'd a second ago may
+  // be readable now, and the server ffprobe is still cheaper than a browser download.
+  const retryMs = await serverAudioDurationMs(src);
+  const again = retryMs ? { duration: retryMs } : await probeAudioMeta(src);
   if (!again.duration) return {};
   const merged = { ...(mediaMetaCache.get(src) || {}), duration: again.duration };
   mediaMetaCache.set(src, merged);
