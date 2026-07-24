@@ -593,19 +593,7 @@ const Timeline = ({ stateManager }: { stateManager: StateManager }) => {
         onScroll={onRulerScroll}
       />
       <Playhead scrollLeft={scrollLeft} />
-      {/* Subtle empty-lane pattern behind the (transparent) track canvas, so when there are
-          few clips the space below them reads as empty timeline rows instead of a black
-          void. The real clips paint on top; this only shows through the empty area. */}
-      <div
-        className="flex"
-        style={{
-          // Crisp lane separator line every 44px + a very faint lane fill, so the empty
-          // area below the clips clearly reads as timeline rows, not a black void. The
-          // real clips paint on top; this only shows through the transparent empty space.
-          backgroundImage:
-            "repeating-linear-gradient(to bottom, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 43px, rgba(255,255,255,0.14) 43px, rgba(255,255,255,0.14) 44px)",
-        }}
-      >
+      <div className="flex">
         <div
           style={{ width: timelineOffsetX, height: canvasSize.height }}
           className="relative flex-none"

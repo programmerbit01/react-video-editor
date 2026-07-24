@@ -282,7 +282,7 @@ const Editor = ({ tempId, id }: { tempId?: string; id?: string }) => {
               ref={timelinePanelRef}
               defaultSize={35}
               minSize={15}
-              maxSize={85}
+              maxSize={70}
               className="min-h-0"
               onResize={handleTimelineResize}
             >
