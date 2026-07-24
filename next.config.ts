@@ -22,6 +22,11 @@ const nextConfig: NextConfig = {
 	},
 	env: {
 		NEXT_PUBLIC_BASE_PATH: '/editor',
+		// Stamped at BUILD time, so it changes on every deploy and only then. An inline
+		// head script compares it against localStorage and drops stale derived caches
+		// once when it changes — see src/features/editor/utils/build-stamp.ts for why a
+		// reload cannot clear those and why users ended up switching browsers instead.
+		NEXT_PUBLIC_BUILD_STAMP: String(Date.now()),
 	},
 	// Cross-origin remote rendering: another editor instance POSTs a project here and
 	// polls status / downloads the result from a different origin. Allow those requests.

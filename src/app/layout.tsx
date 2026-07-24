@@ -7,6 +7,7 @@ import {
 } from "@/components/store-initializer";
 import { QueryProvider } from "@/components/query-provider";
 import { ThemeProvider } from "@/components/theme-provider";
+import { buildStampScript } from "@/features/editor/utils/build-stamp";
 
 import "./globals.css";
 
@@ -43,6 +44,17 @@ export default async function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Runs before the app bundle — and therefore before any zustand persist
+            store hydrates — so a build change drops stale localStorage caches
+            instead of rehydrating a shape the new code no longer understands.
+            See build-stamp.ts for why a plain reload can't fix that. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: buildStampScript(process.env.NEXT_PUBLIC_BUILD_STAMP || ""),
+          }}
+        />
+      </head>
       <body
         className={`${geistMono.variable} ${geist.variable} ${outfit.variable} antialiased font-sans bg-muted`}
       >
