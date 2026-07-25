@@ -59,7 +59,9 @@ const useCropStore = create<ICropState>((set) => ({
   setStep: (step: number) => set({ step }),
   loadImage: (src: string) => {
     const image = document.createElement("img");
-    image.setAttribute("crossOrigin", "anonymous");
+    // No crossOrigin — the crop UI only DISPLAYS the media and records a crop rectangle
+    // (`area`, applied later as a CSS transform); it never canvas-reads pixels. A cors <img>
+    // here would just be a poison-prone load for no benefit. Whole editor is no-cors.
     image.setAttribute("src", src);
     image.addEventListener("load", () => {
       const imageWidth = image.naturalWidth;
@@ -90,9 +92,9 @@ const useCropStore = create<ICropState>((set) => ({
     video.setAttribute("playsinline", "");
     video.preload = "metadata";
     video.autoplay = false;
-
-    // Required when using a Service Worker on iOS Safari.
-    video.crossOrigin = "anonymous";
+    // No crossOrigin — the crop UI only DISPLAYS a frame and records the crop rectangle
+    // (`area`); it never canvas-reads pixels. Keeps this consistent with the no-cors player so
+    // it shares one cache entry and can never be poison-blocked.
 
     video.addEventListener("loadedmetadata", () => {
       video.currentTime = 0.01;

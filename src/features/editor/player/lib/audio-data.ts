@@ -23,6 +23,12 @@ export class AudioDataManager {
 
   private async loadAudioData(src: string, id: string): Promise<void> {
     try {
+      // Warm a FRESH cors cache entry first. A no-cors <audio> playback load caches an OPAQUE
+      // entry for this url; the waveform decode then fetches the same url and reads that opaque
+      // entry → "Failed to fetch. Does the resource support CORS?". `cache:"reload"` forces a
+      // fresh network request that comes back with R2's ACAO:*, so the decode reads a real cors
+      // response. Best-effort — swallow its own failure.
+      await fetch(src, { mode: "cors", cache: "reload" }).catch(() => {});
       const data = await getAudioData(src);
       this.audioDatas[id] = { data, lastAccessed: Date.now() };
       this.cleanupCache();
