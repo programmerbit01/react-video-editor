@@ -338,11 +338,11 @@ class Video extends Trimmable {
     return new Promise<void>((resolve) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
-      const needsCacheBust =
-        fallbackThumbnail.startsWith("http://") ||
-        fallbackThumbnail.startsWith("https://") ||
-        fallbackThumbnail.startsWith("/");
-      img.src = needsCacheBust ? `${fallbackThumbnail}${fallbackThumbnail.includes("?") ? "&" : "?"}t=${Date.now()}` : fallbackThumbnail;
+      // NO cache-buster on the poster url. The server poster endpoint reads `t` as the FRAME
+      // TIMESTAMP (/vapp/media/poster?url=…&t=), so `&t=Date.now()` asked ffmpeg for a frame at
+      // ~1.7e9 seconds → no such frame → 404 → black filmstrip. And on an R2 poster jpg a unique
+      // `t` is a fresh CDN cache key every request → permanent miss. Posters are immutable; as-is.
+      img.src = fallbackThumbnail;
       img.onload = () => {
         // Create a temporary canvas to resize the image
         const canvas = document.createElement("canvas");
