@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
 const DEFAULT_VAPP_BASE = process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091";
 
 const MODEL_FOR: Record<string, string> = {
-  audio: "vapp-fastest-tts",
+  audio: "eleven-multilingual-v2",   // the current + only TTS model for all audio
   image: "vapp-image",
   video: "vapp-video",
 };

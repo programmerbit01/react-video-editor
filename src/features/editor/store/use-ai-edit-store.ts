@@ -53,6 +53,7 @@ interface AiEditState {
   input: string;
   busy: boolean;
   model: string;
+  pipeline: string; // "" = normal Edit ; "comic_drama" | "faceless_video" = pipeline mode (swaps the system prompt)
   models: ChatModel[];
   history: HistoryEntry[];
   transcript: { key: string; segments: { start: number; end: number; text: string }[] } | null;
@@ -78,6 +79,7 @@ interface AiEditState {
   updateAt: (i: number, patch: Partial<ChatMsg>) => void;
   clearChat: () => void;
   setModel: (m: string) => void;
+  setPipeline: (v: string) => void;
   setModels: (m: ChatModel[]) => void;
   setTranscript: (t: { key: string; segments: { start: number; end: number; text: string }[] } | null) => void;
   addHistory: (e: HistoryEntry) => void;
@@ -108,6 +110,7 @@ const useAiEditStore = create<AiEditState>()(
   input: "",
   busy: false,
   model: "",
+  pipeline: "",
   models: [],
   history: [],
   transcript: null,
@@ -143,6 +146,7 @@ const useAiEditStore = create<AiEditState>()(
     }),
   clearChat: () => set({ messages: [] }),
   setModel: (m) => set({ model: m }),
+  setPipeline: (v) => set({ pipeline: v }),
   setModels: (m) => set({ models: m }),
   setTranscript: (t) => set({ transcript: t }),
   addHistory: (e) => set((st) => ({ history: [e, ...st.history] })),

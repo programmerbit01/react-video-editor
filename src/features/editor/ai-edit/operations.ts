@@ -481,6 +481,49 @@ Supported operations:
 IMPORTANT: For "zoom in/out" or "pan" ALWAYS use the kenBurns fields above — NEVER a CSS transform/scale (the player ignores that).
 Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. A "generate" op needs no itemId. If nothing is selected and the request isn't add/generate, return "operations": [] and explain in "summary". Output ONLY the json block.`;
 
+// ─── PIPELINE system prompts ────────────────────────────────────────────────────
+// A "pipeline" is just a DIFFERENT system prompt fed to the SAME ops machinery: the
+// LLM plans the whole thing and emits generate/arrange ops → the editor builds it on
+// the live timeline. No hardcoded steps — control lives entirely in the prompt.
+export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a VERTICAL (9:16) video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
+
+NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3). If they give no number, use N=6. If the request has NO story/subject at all, return "operations": [] and in "summary" ask them for the story and how many shots.
+
+BUILD IT:
+1) Decide the MAIN CHARACTER's look ONCE — face, hair, age, outfit, colour — in ~12 words. Repeat this EXACT description in EVERY shot so the same person appears throughout (change only the pose/emotion/scene).
+2) Plan N SHOTS, each one dramatic beat, ordered start → cliffhanger.
+3) For EACH of the N shots output a generate-image op with a PHOTOREAL prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, semi-realistic, realistic skin, dramatic moody lighting, shallow depth of field, 9:16":
+   { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"9:16" }
+   PHOTOREAL/cinematic — NOT flat cartoon or comic-ink.
+4) Output ONE generate-audio op = the spoken narration for the whole episode. Make it LONG ENOUGH to cover all N shots — about 15 words PER shot (N×15 words):
+   { "op":"generate", "kind":"audio", "text":"…" }
+5) Output ONE arrange op: { "op":"arrange", "target":"all", "totalMs": <N × 4000> }
+
+Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N image ops, then the audio op, then the arrange op… ] }`;
+
+export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a video editor. The user gives a topic. Turn it into a short faceless documentary as a JSON list of operations the editor applies to the timeline.
+
+NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=6. If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
+
+1) Output ONE generate-audio op = the narration script — real spoken sentences about the topic, LONG ENOUGH to cover all N shots (~15 words PER shot, N×15 words):
+   { "op":"generate", "kind":"audio", "text":"…" }
+2) Output N generate-image ops, one per narration beat, each a SHORT cinematic keyword prompt relevant to what the narration says:
+   { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"16:9" }
+3) Output ONE arrange op: { "op":"arrange", "target":"all", "totalMs": <N × 4000> }
+
+Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N image ops, the arrange op… ] }`;
+
+// Shown in the AI-Edit composer dropdown (top → bottom).
+export const PIPELINES: { id: string; label: string }[] = [
+  { id: "comic_drama", label: "🎭 Comic Drama" },
+  { id: "faceless_video", label: "🎬 Faceless Video" },
+];
+
+export const PIPELINE_PROMPTS: Record<string, string> = {
+  comic_drama: COMIC_DRAMA_PROMPT,
+  faceless_video: FACELESS_EDIT_PROMPT,
+};
+
 export function extractOps(text: string): OpsEnvelope | null {
   if (!text) return null;
   let jsonStr = "";

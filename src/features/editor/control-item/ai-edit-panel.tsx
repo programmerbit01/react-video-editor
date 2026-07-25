@@ -22,6 +22,8 @@ import {
   revertSnapshot,
   CAPABILITIES,
   OPS_SYSTEM_PROMPT,
+  PIPELINES,
+  PIPELINE_PROMPTS,
 } from "../ai-edit/operations";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
@@ -341,9 +343,15 @@ export default function AiEditPanel() {
       model: s.model,
       token: getToken(),
       stream: s.streaming,
+      // A PIPELINE swaps the system prompt (e.g. Comic Drama / Faceless Video) and treats
+      // the input as a topic/story — the LLM plans the whole thing and emits generate/arrange
+      // ops that build it on the timeline. No pipeline = the normal edit assistant.
       messages: [
-        { role: "system", content: OPS_SYSTEM_PROMPT },
-        { role: "user", content: `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}` },
+        { role: "system", content: PIPELINE_PROMPTS[s.pipeline] || OPS_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: s.pipeline ? text : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
+        },
       ],
     };
     if (!s.showThinking) {
@@ -456,8 +464,23 @@ export default function AiEditPanel() {
         replaceMedia(g.itemId, url);
       } else {
         let newId = "";
-        if (label === "audio") newId = addAudio(url, g.text || "voiceover");
-        else if (label === "image") newId = addImage(url, g.prompt || g.text || "image");
+        if (label === "audio") {
+          // Read the REAL voiceover length so the clip isn't the hardcoded 5s — and so the
+          // images can be arranged to MATCH it (no gap / no playback jump). Fallback 5s.
+          const durMs = await new Promise<number>((resolve) => {
+            try {
+              const a = document.createElement("audio");
+              a.preload = "metadata";
+              a.onloadedmetadata = () => resolve(Math.round((a.duration || 0) * 1000) || 0);
+              a.onerror = () => resolve(0);
+              setTimeout(() => resolve(0), 8000);
+              a.src = url;
+            } catch {
+              resolve(0);
+            }
+          });
+          newId = addAudio(url, g.text || "voiceover", 0, durMs > 500 ? durMs : 5000);
+        } else if (label === "image") newId = addImage(url, g.prompt || g.text || "image");
         else if (label === "video") newId = addVideo(url, g.prompt || g.text || "video");
         const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
         if (newId) s.updateAt(i, { snapshot: { ...cur, [newId]: null } });
@@ -475,21 +498,51 @@ export default function AiEditPanel() {
   // Run generations (background), THEN any arrange — generated items only get ids
   // once created, so an "arrange all" must wait until they're on the timeline.
   const runBuild = async (i: number, gens: any[], arranges: any[]) => {
-    await Promise.all(gens.map((g) => runGen(i, g)));
+    // Snapshot the visuals that exist BEFORE we generate, so we can arrange ONLY the new ones.
+    const mapBefore = useStore.getState().trackItemsMap || {};
+    const beforeVisual = new Set(Object.keys(mapBefore).filter((id) => (mapBefore[id] as any)?.type !== "audio"));
+    const wantVisual = gens.filter((g) => g.kind !== "audio").length;
+    const total = gens.length;
+    let doneN = 0;
+    // Run the generations in parallel, with a live progress counter (so the user sees it working).
+    await Promise.all(
+      gens.map((g) =>
+        runGen(i, g).finally(() => {
+          doneN += 1;
+          if (total > 1) s.updateAt(i, { genStatus: `🎨 Generating ${total} clips… (${doneN}/${total} done)` });
+        }),
+      ),
+    );
     if (!arranges.length) return;
-    if (gens.length) s.updateAt(i, { genStatus: "Arranging into one video…" });
+    s.updateAt(i, { genStatus: "🎬 Arranging into one video…" });
+    // RACE FIX: addImage/addVideo DISPATCH async — the new items are not in trackItemsMap the
+    // instant runGen resolves. Poll (up to ~5s) until the new visuals actually land, otherwise
+    // the arrange sees nothing and silently no-ops (looks like "images added but not arranged").
+    let newVisual: string[] = [];
+    for (let t = 0; t < 25; t++) {
+      const map = useStore.getState().trackItemsMap || {};
+      const order = useStore.getState().trackItemIds || Object.keys(map);
+      newVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio" && !beforeVisual.has(id));
+      if (newVisual.length >= wantVisual && newVisual.length) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    // Spread the shots across the VOICEOVER length when there is one (so image cuts match the
+    // narration), else the arrange op's own totalMs.
     const map = useStore.getState().trackItemsMap || {};
-    const order = useStore.getState().trackItemIds || Object.keys(map);
+    const audio: any = Object.values(map).find((it: any) => it?.type === "audio");
+    const audioMs = audio?.display ? Math.max(0, (audio.display.to || 0) - (audio.display.from || 0)) : 0;
     for (const a of arranges) {
       const hasExplicit = (a.items?.length || a.itemIds?.length) && !a.target;
       if (hasExplicit) {
         applyOperations([a]);
-      } else {
-        const visualIds = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio");
-        if (visualIds.length) applyOperations([{ op: "arrange", itemIds: visualIds, totalMs: a.totalMs }]);
+      } else if (newVisual.length) {
+        const totalMs = audioMs > 1500 ? audioMs : a.totalMs || newVisual.length * 4000;
+        applyOperations([{ op: "arrange", itemIds: newVisual, totalMs }]);
       }
     }
-    if (gens.length) s.updateAt(i, { genStatus: "✓ built into one video" });
+    s.updateAt(i, {
+      genStatus: newVisual.length ? `✓ Built into one video — ${newVisual.length} shots` : "⚠️ arrange: no new visuals landed on the timeline",
+    });
   };
 
   // Captions — ensure a transcript (transcribe if we don't have one), then lay a
@@ -713,6 +766,10 @@ export default function AiEditPanel() {
   };
 
   const lastUserText = [...s.messages].reverse().find((m) => m.role === "user")?.content || "";
+  // Live status of the current run (LLM + background generation) — surfaced at the TOP of the
+  // panel so the user always sees what's happening without scrolling to the last message.
+  const lastAsst = [...s.messages].reverse().find((m) => m.role === "assistant");
+  const liveStatus = lastAsst?.genStatus || "";
 
   if (!s.isOpen) return null;
 
@@ -896,7 +953,16 @@ export default function AiEditPanel() {
                 ))}
               </div>
             ) : (
-              <p className="text-[10px] text-muted-foreground">Select a clip, then describe the edit — or tap 💡 for ideas.</p>
+              <p className="text-[10px] text-muted-foreground">
+                {liveStatus ? (
+                  <span className="flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
+                    {!/^\s*[✓⚠️]/.test(liveStatus) && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" />}
+                    <span className="truncate">{liveStatus}</span>
+                  </span>
+                ) : (
+                  "Select a clip, then describe the edit — or tap 💡 for ideas."
+                )}
+              </p>
             )}
           </div>
 
@@ -1071,7 +1137,13 @@ export default function AiEditPanel() {
                   }
                 }}
                 rows={2}
-                placeholder="Describe the edit…"
+                placeholder={
+                  s.pipeline === "comic_drama"
+                    ? 'Enter a story idea, e.g. "a billionaire\'s secret revenge"…'
+                    : s.pipeline === "faceless_video"
+                      ? 'Enter a topic, e.g. "the history of black holes"…'
+                      : "Describe the edit…"
+                }
                 className="max-h-32 min-h-[36px] w-full resize-none bg-transparent px-1.5 py-1 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/40"
               />
               <div className="mt-1 flex items-center justify-between gap-1.5">
@@ -1095,6 +1167,25 @@ export default function AiEditPanel() {
                       ))}
                     </select>
                   )}
+                  {/* Pipeline — swaps the system prompt to build a whole video from a
+                      topic/story (Comic Drama on top, Faceless Video below). "" = normal Edit. */}
+                  <select
+                    value={s.pipeline}
+                    onChange={(e) => s.setPipeline(e.target.value)}
+                    className={`h-7 max-w-[124px] truncate rounded-lg border px-1.5 text-[10px] outline-none ${
+                      s.pipeline
+                        ? "border-violet-500/50 bg-violet-500/15 text-violet-600 dark:text-violet-300"
+                        : "border-border bg-background text-muted-foreground"
+                    }`}
+                    title="Pipeline — build a whole video from a topic/story"
+                  >
+                    <option value="">✦ Edit</option>
+                    {PIPELINES.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     onClick={send}
                     disabled={s.busy || !s.input.trim()}
