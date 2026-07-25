@@ -80,6 +80,13 @@ export const Video = ({
               endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
               playbackRate={playbackRate}
               src={resolveAssetUrl(details.src)}
+              // Load the SAME way the filmstrip + poster capture do (crossOrigin). Without
+              // this the preview player loaded the clip non-cors → the browser cached an
+              // opaque entry → the crossOrigin filmstrip/poster load of the very same url was
+              // then CORS-blocked AND stored as a second cache entry, so one clip downloaded
+              // twice. Consistent crossOrigin = one shared cache entry, no CORS error.
+              // Harmless during headless render (CORS doesn't apply there); R2 sends ACAO:*.
+              crossOrigin="anonymous"
               volume={options.isMuted ? 0 : (details.volume ?? 100) / 100}
               style={{
                 width: "100%",
