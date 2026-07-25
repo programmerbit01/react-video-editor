@@ -357,7 +357,24 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
               `${baseUrl}/vapp/job/status?job_id=${encodeURIComponent(jobId)}`,
               { headers: vappAuth(token), cache: "no-store" },
             );
-            if (!sr.ok) throw new Error("Failed to fetch queue job status.");
+            // A 404 here means the job was enqueued (we HAVE its job_id) but isn't VISIBLE in the
+            // status store yet — no render agent has claimed it and written its record. BIG
+            // projects (hundreds of clips / a multi-MB design) take much longer to be claimed than
+            // small ones, so a 404 is "not ready yet", NOT "failed". Wait patiently (~5 min) before
+            // giving up — a small export resolves in seconds, a 22-min / 400-item export can sit
+            // unclaimed a while. (Real network/5xx errors keep the stricter 12-try budget below —
+            // this is exactly why a large project failed with "Lost contact" while small ones
+            // exported fine, and why retrying it worked.)
+            if (sr.status === 404) {
+              if (++qNotFound >= 100) { // 100 × 3s ≈ 5 min
+                set({ exporting: false, error: "The render queue never registered this job (still not found after ~5 min). It may be too large for the queue right now — retry, or split the project into shorter exports." });
+                return;
+              }
+              set({ report: { ...get().report, log: ["⏳ Queued — waiting for a render agent to claim this large job…"] } });
+              setTimeout(checkStatus, 3000);
+              return;
+            }
+            if (!sr.ok) throw new Error(`Failed to fetch queue job status (${sr.status}).`);
             const j = await sr.json();
             const status = String(j?.status || "").toLowerCase();
             const prog = Number(j?.progress);
@@ -392,6 +409,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
               set({ exporting: false, error: String(j?.error || "Render queue job failed.") });
             } else {
               qPollFails = 0; // reached the server
+              qNotFound = 0;  // job is now visible — clear the "not registered yet" grace counter
               // A queued job sits at 0% until a render AGENT claims it — show WHAT it's waiting
               // on so it isn't a blank 0%. Once the agent reports stages/log, that takes over.
               if (!rm?.log && !rm?.stages) {
@@ -418,6 +436,7 @@ export const useDownloadState = create<DownloadState>((set, get) => ({
         };
 
         let qPollFails = 0;
+        let qNotFound = 0; // consecutive 404s = job enqueued but not yet registered in the status store
         setTimeout(checkStatus, 2000);
       } catch (error) {
         console.error(error);
