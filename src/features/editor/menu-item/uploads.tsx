@@ -428,6 +428,15 @@ const getVappParams = () => {
   };
 };
 
+// Server-side poster (one ffmpeg frame, cached) for a video url — a tiny <img> instead of
+// downloading the whole clip to canvas-capture a frame in the browser. Empty when we can't
+// build it (no baseUrl / non-http src), so the caller falls back to client capture.
+const videoPosterUrl = (src: string): string => {
+  const { baseUrl } = getVappParams();
+  if (!baseUrl || !/^https?:\/\//i.test(src)) return "";
+  return `${baseUrl}/vapp/media/poster?url=${encodeURIComponent(src)}`;
+};
+
 const toUploadItem = (item: any) => {
   const rawUrl = String(item.url || "");
   if (!rawUrl) return null;
@@ -584,27 +593,31 @@ function useInView<T extends HTMLElement>(rootMargin = "400px") {
 // ── Thumbnail ────────────────────────────────────────────────────────────────
 
 const VideoThumb = ({ src, serverPoster }: { src: string; serverPoster?: string }) => {
-  // serverPoster (meta.poster) → instant <img>, ZERO client capture. Only fall back to
-  // canvas capture when the server hasn't produced a poster yet.
+  // serverPoster → an <img> (a real meta.poster, or the server's /vapp/media/poster
+  // endpoint which ffmpeg-extracts one frame). Either way the tile shows a tiny image and
+  // NEVER downloads the whole clip. Only fall back to in-browser canvas capture if that
+  // <img> fails to load (endpoint 404 / older server).
   const [poster, setPoster] = useState<string>(() => serverPoster || posterCache.get(src) || "");
   const [failed, setFailed] = useState(false);
   const { ref, inView } = useInView<HTMLDivElement>();
 
   useEffect(() => {
-    if (serverPoster || poster || failed || !inView || !src) return;
+    if (poster || failed || !inView || !src) return;
     let alive = true;
     capturePoster(src).then((p) => {
       if (!alive) return;
       if (p) setPoster(p); else setFailed(true);
     });
     return () => { alive = false; };
-  }, [inView, src, poster, failed, serverPoster]);
+  }, [inView, src, poster, failed]);
 
   return (
     <div ref={ref} className="w-full h-full bg-white/5 flex items-center justify-center">
       {poster ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={poster} alt="" draggable={false} className="w-full h-full object-cover absolute inset-0" />
+        <img src={poster} alt="" draggable={false} className="w-full h-full object-cover absolute inset-0"
+          // Server poster/endpoint failed → clear it so the effect falls back to canvas capture.
+          onError={() => setPoster("")} />
       ) : failed ? (
         // Canvas capture unavailable → lazy <video> showing the frame at 1s (media fragment).
         // crossOrigin MUST match capturePoster's — else the browser caches a non-CORS
@@ -629,7 +642,10 @@ const Thumb = ({ item }: { item: any }) => {
     );
   }
   if (isVideo(item)) {
-    return <VideoThumb src={src} serverPoster={item.poster || ""} />;
+    // Prefer a real server poster (meta.poster); else point at the server's poster endpoint
+    // (ffmpeg one frame, cached) so the tile shows a tiny image and never downloads the clip.
+    // VideoThumb falls back to in-browser capture only if that <img> fails.
+    return <VideoThumb src={src} serverPoster={item.poster || videoPosterUrl(src)} />;
   }
   return (
     <img
