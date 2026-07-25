@@ -280,7 +280,13 @@ class Video extends Trimmable {
   }
 
   public async prepareAssets() {
-    this.clip = new CanvasVideoClip(this.src);
+    // With a poster we draw the strip from that ONE frame (createFallbackPattern) and never
+    // create the clip — so the filmstrip does NO crossOrigin canvas read and NO per-clip range
+    // seek. That range-seeking pulled much of a non-faststart clip just to sample thumbnails,
+    // AND created a second (cors) cache entry for a clip the no-cors player had already fetched
+    // — exactly why a clip already loaded in the media panel re-buffered when dropped on the
+    // timeline. Only a poster-less clip falls back to client frame capture.
+    this.clip = this.previewUrl ? null : new CanvasVideoClip(this.src);
   }
 
   private calculateFilmstripDimensions({

@@ -80,13 +80,14 @@ export const Video = ({
               endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
               playbackRate={playbackRate}
               src={resolveAssetUrl(details.src)}
-              // Load the SAME way the filmstrip + poster capture do (crossOrigin). Without
-              // this the preview player loaded the clip non-cors → the browser cached an
-              // opaque entry → the crossOrigin filmstrip/poster load of the very same url was
-              // then CORS-blocked AND stored as a second cache entry, so one clip downloaded
-              // twice. Consistent crossOrigin = one shared cache entry, no CORS error.
+              // NO crossOrigin — the preview player only PLAYS the clip (exactly like opening
+              // the url in a new tab), so a plain no-cors load is correct: it can never be
+              // CORS-blocked, and it plays even off a cache entry another no-cors load created,
+              // so playback never dies with MEDIA_ELEMENT_ERROR code 4 (the black-preview bug).
+              // The filmstrip/crop still load cors to canvas-read frames; if this no-cors load
+              // cached the clip first they simply fall back to the server poster — the player is
+              // never held hostage to a frame-capture surface.
               // Harmless during headless render (CORS doesn't apply there); R2 sends ACAO:*.
-              crossOrigin="anonymous"
               volume={options.isMuted ? 0 : (details.volume ?? 100) / 100}
               style={{
                 width: "100%",

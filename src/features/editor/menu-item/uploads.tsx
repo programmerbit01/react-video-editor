@@ -47,6 +47,12 @@ const inferMediaType = (url: string): string => {
 // reads (this is the field-mapping the higgs proxy used to do; now done in-editor
 // so the editor talks to the vApp server directly).
 const normalizeServerMedia = (it: any) => {
+  // Stored media metadata the agent writes at upload time, from the LOCAL output file
+  // (instant + exact, no CDN round-trip). Lives in the record's `meta` JSON:
+  //   meta.poster (R2 jpg url), meta.width / meta.height (px), meta.duration (seconds).
+  // When present, a clip lands on the timeline with ZERO network probe. Older records
+  // (no meta) fall back to the on-demand probes downstream.
+  const meta = (it && typeof it.meta === "object" && it.meta) ? it.meta : {};
   const entry: any = {
     url: it?.url || "",
     type: it?.media || inferMediaType(it?.url || ""), // media type: image|video|audio
@@ -57,7 +63,10 @@ const normalizeServerMedia = (it: any) => {
     updated: it?.updated || it?.updated_at || "",
     record_id: it?.record_id || "",
     prompt: it?.prompt || "",
-    poster: it?.poster || "", // server-generated video poster (instant, no client capture)
+    poster: meta.poster || it?.poster || "", // stored R2 poster (instant, no client capture)
+    width: Number(meta.width) || 0,
+    height: Number(meta.height) || 0,
+    duration: Number(meta.duration) || 0, // seconds
     source: it?.type || "", // vApp `type` = input | output (source dimension)
   };
   if (it?.stt && typeof it.stt === "object") entry.stt = it.stt;
@@ -319,15 +328,19 @@ const dragData = (item: any): Record<string, any> => {
   const name = getLabel(item);
   if (isAudio(item)) return { type: "audio", details: { src, name }, metadata: {} };
   const meta = mediaMetaCache.get(src) || mediaMetaCache.get(dsrc) || {};
-  const width = meta.width || 1920, height = meta.height || 1080;
+  // Warm probe cache first, then stored record metadata — no probe on the drop path either.
+  const width = meta.width || Number(item.width) || 1920, height = meta.height || Number(item.height) || 1080;
+  const durMs = meta.duration || (Number(item.duration) > 0 ? Math.round(Number(item.duration) * 1000) : 10000);
   if (isVideo(item)) {
     // Include the server poster URL (small, safe for dataTransfer) so the dropped clip
     // shows instantly. No data-URL here (that bloats dataTransfer); if no server poster,
     // the timeline captures the frame itself.
-    const poster = String(item.poster || "");
+    // Stored poster, else the server poster URL — either way a plain url, so a dropped clip
+    // shows instantly and nothing is downloaded to place it. (No data-URL: dataTransfer stays small.)
+    const poster = String(item.poster || "") || videoPosterUrl(dsrc || src);
     return poster
-      ? { type: "video", duration: meta.duration || 10000, details: { src, width, height, name }, metadata: { previewUrl: poster } }
-      : { type: "video", duration: meta.duration || 10000, details: { src, width, height, name } };
+      ? { type: "video", duration: durMs, details: { src, width, height, name }, metadata: { previewUrl: poster } }
+      : { type: "video", duration: durMs, details: { src, width, height, name } };
   }
   return { type: "image", display: { from: 0, to: 5000 }, details: { src, width, height, name }, metadata: { previewUrl: dsrc } };
 };
@@ -462,6 +475,10 @@ const toUploadItem = (item: any) => {
     record_id: item.record_id || "",
     prompt: item.prompt || "",
     poster: item.poster || "",
+    // Stored metadata carried through so the add/drop path never has to probe the clip.
+    width: Number(item.width) || 0,
+    height: Number(item.height) || 0,
+    duration: Number(item.duration) || 0, // seconds
     source: item.source || "", // input | output
   };
   if (item.stt && typeof item.stt === "object") entry.stt = item.stt;
@@ -510,7 +527,9 @@ const _captureOnce = (src: string): Promise<string> =>
     v.preload = "metadata";
     v.muted = true;
     v.playsInline = true;
-    v.crossOrigin = "anonymous"; // must match every other <video> load or the canvas taints
+    // No crossOrigin: the whole editor video path is no-cors (see player/items/video.tsx). This
+    // client capture then taints and yields nothing — fine, the server poster / meta.poster is the
+    // real source; staying no-cors means this can never poison a clip's cache entry.
     let done = false;
     const cleanup = () => { try { v.src = ""; v.load(); } catch {} };
     const finish = (r: string) => { if (done) return; done = true; window.clearTimeout(timer); cleanup(); resolve(r); };
@@ -620,9 +639,10 @@ const VideoThumb = ({ src, serverPoster }: { src: string; serverPoster?: string 
           onError={() => setPoster("")} />
       ) : failed ? (
         // Canvas capture unavailable → lazy <video> showing the frame at 1s (media fragment).
-        // crossOrigin MUST match capturePoster's — else the browser caches a non-CORS
-        // copy that later taints the canvas (→ black clips in the timeline).
-        <video src={`${src}#t=1`} muted playsInline preload="metadata" crossOrigin="anonymous"
+        // NO crossOrigin: this only DISPLAYS a frame, and every video load in the editor is
+        // no-cors now (player + tiles), so they all share ONE cache entry — a cors load here
+        // would be a second entry that re-downloads a clip the player already fetched.
+        <video src={`${src}#t=1`} muted playsInline preload="metadata"
           className="w-full h-full object-cover absolute inset-0" />
       ) : inView ? (
         <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
@@ -756,7 +776,10 @@ const UploadGridItem = memo(({
           <video
             ref={videoRef}
             src={src}
-            crossOrigin="anonymous"
+            // NO crossOrigin — this hover-preview only PLAYS the clip. Every video load in the
+            // editor is no-cors now (player + tiles + fallback frame), so they share ONE cache
+            // entry: a clip hover-played here is NOT re-downloaded when dropped on the timeline.
+            // A cors load here was a separate entry → the "same url buffers again on add" bug.
             className={`absolute inset-0 h-full w-full object-cover transition-opacity ${isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}
             playsInline
             preload="none"
@@ -871,7 +894,9 @@ export const Uploads = () => {
         video.preload = "metadata";
         video.muted = true;
         video.playsInline = true;
-        if (allowCanvasCapture) video.crossOrigin = "anonymous";
+        // No crossOrigin — dims (videoWidth/Height) don't need it, and a cors load here would be a
+        // poison-prone second cache entry. Canvas capture (if attempted) just taints → falls back
+        // to the server poster. Whole editor video path is no-cors now.
 
         const finishWithMeta = (previewUrl = "") => {
           const nextMeta: CachedMediaMeta = {
@@ -1141,18 +1166,27 @@ export const Uploads = () => {
         // Use cached meta if warm (prewarm/hover); else a FAST metadata-only probe.
         // Never block on the heavy frame-capture — that runs in the background after.
         const cached = mediaMetaCache.get(src) || mediaMetaCache.get(getDisplaySrc(item));
-        let duration = cached?.duration, width = cached?.width, height = cached?.height;
+        // Stored record metadata first (agent-measured, exact) → the clip lands INSTANTLY,
+        // no <video> probe over the (possibly slow/far) CDN. Only records with no stored
+        // dims/duration fall back to the client probe.
+        let duration = cached?.duration || (Number(item.duration) > 0 ? Math.round(Number(item.duration) * 1000) : 0);
+        let width = cached?.width || Number(item.width) || 0;
+        let height = cached?.height || Number(item.height) || 0;
         if (!duration || !width || !height) {
           const fast = await fastVideoMeta(getDisplaySrc(item) || src);
           duration = duration || fast.duration || 10000;
           width = width || fast.width || 1920;
           height = height || fast.height || 1080;
         }
-        // Prefer the server poster (meta.poster) — a plain URL the timeline shows with
-        // zero client capture. Else reuse a cached frame; else capture one now so the
-        // clip never renders solid black.
+        // Poster = a plain URL the timeline shows as a tiny <img>, never a client capture.
+        // Prefer a stored meta.poster, then an already-captured frame, then the SERVER poster
+        // endpoint (one ffmpeg frame, cached server-side, ~30 KB). The old fallback awaited
+        // capturePoster() — a client <video> load + seek + canvas decode that pulled a chunk
+        // of the clip over the wire — and THAT was the "Adding to timeline…" wait. A server
+        // url is just a string: nothing downloads on the add path. capturePoster stays only as
+        // a dev fallback for when there is no baseUrl to build a server url from.
         let previewUrl = item.poster || posterCache.get(getDisplaySrc(item)) || posterCache.get(src) || cached?.previewUrl || "";
-        if (!previewUrl) previewUrl = await capturePoster(getDisplaySrc(item));
+        if (!previewUrl) previewUrl = videoPosterUrl(getDisplaySrc(item) || src) || await capturePoster(getDisplaySrc(item));
         const videoMeta: Record<string, any> = { previewUrl };
         if (item.stt && typeof item.stt === "object") {
           videoMeta.transcriptData = item.stt;
@@ -1167,7 +1201,6 @@ export const Uploads = () => {
           payload: { id: generateId(), duration, details: { src, width, height, name: getLabel(item) }, metadata: videoMeta },
           options: { resourceId: "main", scaleMode: "fit" },
         });
-        void capturePoster(getDisplaySrc(item)); // background: cache poster for later
         return;
       }
 
