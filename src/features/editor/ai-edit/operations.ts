@@ -136,12 +136,19 @@ export function setSelection(ids: string[]): void {
 // designcombo's async reducer and only the LAST sticks (why the drama arrange's motion landed on just
 // the last image); one dispatch with a per-id payload applies to ALL. Returns the {id:kenBurns} map
 // applied (for logging).
-export function applyMotionBatch(items: { id: string; kenBurns: string; intensity?: number }[]): Record<string, string> {
+export function applyMotionBatch(items: { id: string; kenBurns: string; intensity?: number; duration?: number }[]): Record<string, string> {
   const payload: Record<string, any> = {};
   const applied: Record<string, string> = {};
   for (const it of items) {
     if (!it?.id) continue;
-    payload[it.id] = { details: { kenBurns: it.kenBurns, kenBurnsIntensity: it.intensity ?? 18 } };
+    payload[it.id] = {
+      details: {
+        kenBurns: it.kenBurns,
+        kenBurnsIntensity: it.intensity ?? 18,
+        // duration = % of the clip the move plays over; low = a quick "punch" then hold (100 = default slow).
+        ...(it.duration != null ? { kenBurnsDuration: it.duration } : {}),
+      },
+    };
     applied[it.id] = it.kenBurns;
   }
   if (Object.keys(payload).length) dispatch(EDIT_OBJECT, { payload });

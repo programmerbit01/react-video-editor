@@ -377,8 +377,8 @@ function normalizeShotWindows(
 
 // LLM motion word → the player's Ken Burns kind + intensity. 'punchIn' = a hard fast zoom for impact;
 // 'hold' = near-still for an emotional pause. Unknown/empty → fall back to an alternating default.
-const MOTION_MAP: Record<string, { kb: string; intensity: number }> = {
-  punchin: { kb: "zoomIn", intensity: 34 },
+const MOTION_MAP: Record<string, { kb: string; intensity: number; dur?: number }> = {
+  punchin: { kb: "zoomIn", intensity: 34, dur: 28 }, // dur=28% → a QUICK punch-zoom, then HOLDS (real punch feel)
   zoomin: { kb: "zoomIn", intensity: 16 },
   zoomout: { kb: "zoomOut", intensity: 16 },
   panleft: { kb: "panLeft", intensity: 14 },
@@ -404,6 +404,7 @@ export default function AiEditPanel() {
   const working = s.busy || genActive;
   const [elapsed, setElapsed] = useState(0);
   const workStartRef = useRef(0);
+  const workEndTimerRef = useRef<any>(null);
 
   // Vibe presets (built-in + user's custom, persisted). The dropdown lets you pick, add, edit, delete.
   const allVibes = [...VIBES, ...s.customVibes];
@@ -426,14 +427,22 @@ export default function AiEditPanel() {
     else s.updateCustomVibe(vibeEdit.id, vibeEdit.label, vibeEdit.style);
     setVibeEdit(null);
   };
+  // ONE continuous timer from send → fully done. It does NOT restart on the brief idle gaps between
+  // steps (LLM-done → generation-start, or between clips): a 5s grace window bridges those, so it
+  // measures the WHOLE run start→end. When done it FREEZES the total (badge stays "✓ 45s") until the
+  // next run resets it — so you can actually read the total.
   useEffect(() => {
     if (working) {
-      if (!workStartRef.current) workStartRef.current = Date.now();
+      if (workEndTimerRef.current) { clearTimeout(workEndTimerRef.current); workEndTimerRef.current = null; }
+      if (!workStartRef.current) { workStartRef.current = Date.now(); setElapsed(0); }
       const t = setInterval(() => setElapsed(Math.round((Date.now() - workStartRef.current) / 1000)), 500);
       return () => clearInterval(t);
     }
-    workStartRef.current = 0;
-    setElapsed(0);
+    // idle: don't end the run immediately — wait out a brief gap; only after 5s of real idle do we
+    // arm a fresh start for the NEXT run (elapsed stays frozen as the completed total meanwhile).
+    if (workStartRef.current && !workEndTimerRef.current) {
+      workEndTimerRef.current = setTimeout(() => { workStartRef.current = 0; workEndTimerRef.current = null; }, 5000);
+    }
   }, [working]);
 
   // Close the settings popover on any click outside it (except the gear toggle, which
@@ -1016,6 +1025,31 @@ export default function AiEditPanel() {
           beats = targetVisuals.map((id, k) => ({ itemId: id, fromMs: k * per, toMs: k === N - 1 ? totalMs : (k + 1) * per, text: "" }));
           elog(`[AI-Edit arrange] even fallback: ${N} × ${per}ms over ${totalMs}ms`);
         }
+        // MIN DURATIONS: images ≥2s, VIDEOS ≥3s (videos are motion — give them priority). A shot below
+        // its floor steals time from the shots that have slack (the longest first), keeping the whole
+        // sequence contiguous + spanning the same total. Kills the "1s flickery b-roll" look.
+        {
+          const total = beats[beats.length - 1].toMs;
+          const minFor = (id: string) => ((map[id] as any)?.type === "video" ? 3000 : 2000);
+          const mins = beats.map((b) => minFor(b.itemId));
+          let durs = beats.map((b) => b.toMs - b.fromMs);
+          const sumMin = mins.reduce((a, b) => a + b, 0);
+          if (sumMin >= total) {
+            durs = mins.map((m) => (m / sumMin) * total); // can't fit all floors → scale proportionally
+          } else {
+            let deficit = 0;
+            for (let k = 0; k < durs.length; k++) if (durs[k] < mins[k]) { deficit += mins[k] - durs[k]; durs[k] = mins[k]; }
+            let slack = durs.reduce((a, d, k) => a + Math.max(0, d - mins[k]), 0);
+            if (deficit > 0 && slack > 0) for (let k = 0; k < durs.length && deficit > 0.5; k++) {
+              const give = Math.min(Math.max(0, durs[k] - mins[k]), deficit * (Math.max(0, durs[k] - mins[k]) / slack));
+              durs[k] -= give;
+            }
+          }
+          let cur = 0;
+          beats = beats.map((b, k) => { const from = cur; const to = k === beats.length - 1 ? total : Math.round(from + durs[k]); cur = to; return { ...b, fromMs: from, toMs: Math.max(from + 300, to) }; });
+          beats[beats.length - 1].toMs = total;
+          elog(`[MIN DURATIONS] enforced img≥2s / vid≥3s → ${beats.map((b) => `${b.itemId.slice(0, 6)}:${b.toMs - b.fromMs}ms`).join(" | ")}`);
+        }
         try {
           s.updateAt(i, { beats }); // persist the CONTEXT — animate / effects / lip-sync read this later
           // ONE authoritative arrange: contiguous, gap-free, all shots CONSOLIDATED onto a single
@@ -1027,12 +1061,12 @@ export default function AiEditPanel() {
           // alternating default when there's no directed motion (transcript/even paths). IMAGE shots only
           // (videos move on their own), in ONE batched dispatch (N dispatches race → only last sticks).
           const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
-          const motionOf = (itemId: string, k: number) => {
+          const motionOf = (itemId: string, k: number): { kb: string; intensity: number; dur?: number } => {
             const m = (beats!.find((b) => b.itemId === itemId)?.motion || "").toLowerCase();
             return MOTION_MAP[m] || { kb: KB[k % KB.length], intensity: 20 };
           };
           const imgShots = targetVisuals.filter((id) => (map[id] as any)?.type === "image");
-          const applied = applyMotionBatch(imgShots.map((id, k) => { const mv = motionOf(id, k); return { id, kenBurns: mv.kb, intensity: mv.intensity }; }));
+          const applied = applyMotionBatch(imgShots.map((id, k) => { const mv = motionOf(id, k); return { id, kenBurns: mv.kb, intensity: mv.intensity, duration: mv.dur }; }));
           elog(`[MOTION] applied to ${imgShots.length} image shot(s) [${source}]: ${Object.entries(applied).map(([id, kb]) => `${id.slice(0, 6)}=${kb}`).join(", ")}`);
           // READBACK: confirm the kenBurns actually persisted on the items (if it shows here, it renders
           // on PLAY — a paused frame at a clip's start shows scale 1.0, i.e. "no zoom" until you play).
@@ -1361,9 +1395,12 @@ export default function AiEditPanel() {
             ))}
           </div>
           <span className="text-[11px] font-medium text-foreground">✦ AI Edit</span>
-          {working ? (
-            <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-[1px] text-[10px] font-medium tabular-nums text-sky-600">
-              <span className="h-[6px] w-[6px] animate-pulse rounded-full bg-sky-500" />
+          {working || elapsed > 0 ? (
+            <span
+              className={`flex items-center gap-1 rounded-full px-2 py-[1px] text-[10px] font-medium tabular-nums ${working ? "bg-sky-500/15 text-sky-600" : "bg-emerald-500/15 text-emerald-600"}`}
+              title={working ? "Working…" : "Total time for the last run"}
+            >
+              {working ? <span className="h-[6px] w-[6px] animate-pulse rounded-full bg-sky-500" /> : <span>✓</span>}
               {elapsed}s
             </span>
           ) : (
