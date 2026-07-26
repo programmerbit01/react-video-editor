@@ -61,7 +61,7 @@ import {
   deleteProject,
   type SavedProject,
 } from "./utils/project-storage";
-import { AUDIOS } from "./data/audio";
+import useAudioLibraryStore from "./store/use-audio-library-store";
 import {
   MUSIC_BED_ROLE,
   MUSIC_BED_VOLUME_DEFAULT,
@@ -1258,11 +1258,15 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
   const [open, setOpen] = useState(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const { music, removeMusic } = useAudioLibraryStore();
   const activeItem = getManagedAudioItems(trackItemsMap, MUSIC_BED_ROLE)[0] as any | undefined;
   const normalizeLocalSrc = (src?: string) => String(src || "").replace(/^\/editor/, "");
-  const activeTrack = AUDIOS.find(
-    (audio) => normalizeLocalSrc(audio.details?.src) === normalizeLocalSrc(activeItem?.details?.src)
-  );
+  // Saved sounds are absolute urls (Openverse/IA); only legacy local paths need the /editor base.
+  const resolveSrc = (src?: string) => {
+    const s = String(src || "");
+    return /^https?:\/\//.test(s) ? s : withEditorBase(normalizeLocalSrc(s));
+  };
+  const activeName = music.find((m) => resolveSrc(m.src) === (activeItem?.details?.src || ""))?.name;
   const [pendingVolume, setPendingVolume] = useState<number>(
     Number(activeItem?.details?.volume ?? MUSIC_BED_VOLUME_DEFAULT)
   );
@@ -1285,9 +1289,8 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
   };
 
   const togglePreview = (src?: string) => {
-    const normalizedSrc = normalizeLocalSrc(src);
-    if (!normalizedSrc) return;
-    const resolvedSrc = withEditorBase(normalizedSrc);
+    const resolvedSrc = resolveSrc(src);
+    if (!resolvedSrc) return;
     const audio = previewAudioRef.current;
     if (!audio) return;
 
@@ -1320,7 +1323,7 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
           title="Music bed"
         >
           <Music2 className="size-3.5" />
-          <span className="hidden 2xl:inline">{activeTrack?.name || "Music bed"}</span>
+          <span className="hidden 2xl:inline">{activeName || "Music bed"}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="bg-background z-[10001] w-72 px-3 py-3" sideOffset={6}>
@@ -1369,52 +1372,70 @@ const MusicBedPicker = ({ stateManager }: { stateManager: StateManager }) => {
         </div>
 
         <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
-          {AUDIOS.map((audio) => {
-            const isActive =
-              normalizeLocalSrc(activeItem?.details?.src) === normalizeLocalSrc(audio.details?.src);
-            const previewPath = withEditorBase(normalizeLocalSrc(audio.details?.src));
-            const isPreviewing = previewSrc === previewPath;
-            return (
-              <div
-                key={audio.id}
-                className={`flex items-center gap-2 rounded-sm px-2 py-2 text-sm transition-colors hover:bg-accent ${
-                  isActive ? "bg-accent font-medium" : ""
-                }`}
-              >
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-8 w-8 shrink-0 rounded-full"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    togglePreview(audio.details?.src);
-                  }}
-                  title={`Preview ${audio.name}`}
+          {music.length === 0 ? (
+            <div className="flex flex-col items-center gap-1 py-6 text-center text-muted-foreground">
+              <Music2 className="size-5 opacity-50" />
+              <span className="text-xs">No music saved yet</span>
+              <span className="text-[11px] px-4">Open Stock → Sound, search, and tap the ♪ button on a track to add it here.</span>
+            </div>
+          ) : (
+            music.map((audio) => {
+              const resolved = resolveSrc(audio.src);
+              const isActive = (activeItem?.details?.src || "") === resolved;
+              const isPreviewing = previewSrc === resolved;
+              return (
+                <div
+                  key={audio.id}
+                  className={`flex items-center gap-2 rounded-sm px-2 py-2 text-sm transition-colors hover:bg-accent ${
+                    isActive ? "bg-accent font-medium" : ""
+                  }`}
                 >
-                  {isPreviewing ? (
-                    <Pause className="size-3.5" />
-                  ) : (
-                    <Play className="size-3.5 ml-0.5" />
-                  )}
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const normalizedSrc = normalizeLocalSrc(audio.details?.src);
-                    applyMusicBed(withEditorBase(normalizedSrc), pendingVolume);
-                    setOpen(false);
-                  }}
-                  className="flex min-w-0 flex-1 items-center justify-between text-left"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate">{audio.name}</div>
-                    <div className="text-[11px] text-muted-foreground">{audio.metadata?.author}</div>
-                  </div>
-                  {isActive && <span className="ml-2 text-[10px] text-muted-foreground">●</span>}
-                </button>
-              </div>
-            );
-          })}
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 shrink-0 rounded-full"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePreview(audio.src);
+                    }}
+                    title={`Preview ${audio.name}`}
+                  >
+                    {isPreviewing ? (
+                      <Pause className="size-3.5" />
+                    ) : (
+                      <Play className="size-3.5 ml-0.5" />
+                    )}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      applyMusicBed(resolved, pendingVolume);
+                      setOpen(false);
+                    }}
+                    className="flex min-w-0 flex-1 items-center justify-between text-left"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate">{audio.name}</div>
+                      <div className="text-[11px] text-muted-foreground">{audio.source || audio.author || "Sound"}</div>
+                    </div>
+                    {isActive && <span className="ml-2 text-[10px] text-muted-foreground">●</span>}
+                  </button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-red-400"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeMusic(audio.id);
+                    }}
+                    title="Remove from Music bed"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+              );
+            })
+          )}
         </div>
       </PopoverContent>
     </Popover>

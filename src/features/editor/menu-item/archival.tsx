@@ -6,8 +6,9 @@ import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { ADD_ITEMS, ADD_AUDIO } from "@designcombo/state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, Music } from "lucide-react";
+import { Search, Loader2, Music, Music2, Zap, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import useAudioLibraryStore, { SavedSound } from "../store/use-audio-library-store";
 
 type MediaType = "video" | "image" | "sound";
 
@@ -402,11 +403,23 @@ const MediaTile = ({
 const SoundRow = ({ item, handleAdd }: { item: MediaItem; handleAdd: (i: MediaItem) => void }) => {
   const dur = item.details.duration || 0;
   const [adding, setAdding] = useState(false);
+  const { addSfx, addMusic, hasSfx, hasMusic } = useAudioLibraryStore();
+  const inSfx = hasSfx(item.details.src);
+  const inMusic = hasMusic(item.details.src);
   const onAddClick = () => {
     setAdding(true);
     handleAdd(item);
     window.setTimeout(() => setAdding(false), 1100);
   };
+  const asSaved = (): SavedSound => ({
+    id: item.id || item.details.src,
+    name: item.title || "Untitled",
+    src: item.details.src,
+    durationMs: dur ? Math.round(dur * 1000) : undefined,
+    author: item.author,
+    license: item.license,
+    source: item.source_name,
+  });
   return (
     <div
       onClick={onAddClick}
@@ -422,6 +435,26 @@ const SoundRow = ({ item, handleAdd }: { item: MediaItem; handleAdd: (i: MediaIt
         </div>
       </div>
       {adding && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/80" />}
+      {/* Save into the user's own library (not the timeline) — click the row to drop it on the
+          timeline, these buttons collect it into Music bed / SFX for reuse. */}
+      <button
+        type="button"
+        title={inMusic ? "In Music bed" : "Add to Music bed"}
+        aria-label="Add to Music bed"
+        onClick={(e) => { e.stopPropagation(); addMusic(asSaved()); }}
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-white/10 ${inMusic ? "text-emerald-400" : "text-muted-foreground"}`}
+      >
+        {inMusic ? <Check className="h-3.5 w-3.5" /> : <Music2 className="h-3.5 w-3.5" />}
+      </button>
+      <button
+        type="button"
+        title={inSfx ? "In SFX" : "Add to SFX"}
+        aria-label="Add to SFX"
+        onClick={(e) => { e.stopPropagation(); addSfx(asSaved()); }}
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-white/10 ${inSfx ? "text-emerald-400" : "text-muted-foreground"}`}
+      >
+        {inSfx ? <Check className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
+      </button>
     </div>
   );
 };

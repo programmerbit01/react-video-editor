@@ -46,6 +46,7 @@ export const NEVER_PURGE = [
   "vapp-ai-edit",              // panel prefs (position, size, model)
   "vapp-global-animation",     // animation prefs
   "vapp_videos_expanded",      // panel prefs
+  "vapp-audio-library",        // the user's curated Music bed + SFX picks (never re-derivable)
 ];
 
 export const BUILD_STAMP_KEY = "vapp_build_stamp";
