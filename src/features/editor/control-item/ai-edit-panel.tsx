@@ -378,7 +378,18 @@ export default function AiEditPanel() {
       } else if (env) {
         s.updateLast({ content: env.summary || "No changes needed.", reasoning, reasoningMs, thinkingOpen: false });
       } else {
-        s.updateLast({ content: content || "No operations produced.", reasoning, reasoningMs, thinkingOpen: false });
+        // extractOps found nothing. If the reply LOOKS like an ops JSON that didn't parse
+        // (a long pipeline plan cut off mid-output, or malformed), SAY so — otherwise it
+        // reads as "silently stopped with no error" (raw JSON dumped in the chat).
+        const looksLikeOps = /^\s*\{/.test(content || "") || /"operations"\s*:/.test(content || "");
+        s.updateLast({
+          content: looksLikeOps
+            ? "⚠️ The plan came back as cut-off / invalid JSON (too long to finish). Try again, or ask for fewer shots."
+            : content || "No operations produced.",
+          reasoning,
+          reasoningMs,
+          thinkingOpen: false,
+        });
       }
     } catch (e: any) {
       s.updateLast({ content: "⚠️ " + (e?.message || "request failed"), thinkingOpen: false });
@@ -419,6 +430,49 @@ export default function AiEditPanel() {
         });
       } catch (e: any) {
         s.updateAt(i, { genStatus: `⚠️ stock ${kind}: ${e?.message || "failed"}` });
+      }
+      return;
+    }
+
+    // ANIMATE — turn the selected image into a VIDEO (image-to-video / LTX i2v), keeping it in
+    // the SAME timeline slot. The "cheap images first, upgrade selected shots to video" flow.
+    if (g.op === "animate") {
+      const item = useStore.getState().trackItemsMap?.[g.itemId];
+      const src = item?.details?.src;
+      const disp = item?.display;
+      if (!src) {
+        s.updateAt(i, { genStatus: "⚠️ animate: no image found for that item" });
+        return;
+      }
+      try {
+        // snapshot the original image so Revert restores it
+        const cur0 = useAiEditStore.getState().messages[i]?.snapshot || {};
+        s.updateAt(i, { snapshot: { ...cur0, [g.itemId]: JSON.parse(JSON.stringify(item)) } });
+        s.updateAt(i, { genStatus: "🎞️ Animating image → video…" });
+        const { id: jobId } = await startGen({
+          kind: "video",
+          prompt: g.prompt || "subtle cinematic motion, gentle camera movement",
+          image_url: src,
+          aspect_ratio: g.aspect_ratio,
+          duration: g.duration,
+          optimize: false,
+          token: getToken(),
+        });
+        if (!jobId) throw new Error("no job id");
+        const url = await waitGen(jobId, (d) => {
+          const p = d?.progress;
+          const q = d?.queue_position;
+          s.updateAt(i, { genStatus: q != null ? `Queued #${q}…` : p != null ? `Animating ${p}%…` : "Animating…" });
+        });
+        const newId = addVideo(url, "animated");
+        // drop the new video into the image's EXACT slot, then remove the still
+        if (disp) applyOperations([{ op: "arrange", items: [{ itemId: newId, fromMs: disp.from || 0, toMs: disp.to || (disp.from || 0) + 5000 }] }]);
+        applyOperations([{ op: "delete", itemId: g.itemId }]);
+        const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
+        const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
+        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url }], genStatus: "✓ Image animated → video" });
+      } catch (e: any) {
+        s.updateAt(i, { genStatus: `⚠️ animate: ${e?.message || "failed"}` });
       }
       return;
     }
@@ -514,35 +568,151 @@ export default function AiEditPanel() {
       ),
     );
     if (!arranges.length) return;
-    s.updateAt(i, { genStatus: "🎬 Arranging into one video…" });
-    // RACE FIX: addImage/addVideo DISPATCH async — the new items are not in trackItemsMap the
-    // instant runGen resolves. Poll (up to ~5s) until the new visuals actually land, otherwise
-    // the arrange sees nothing and silently no-ops (looks like "images added but not arranged").
+    // RACE FIX: addImage/addVideo DISPATCH async — a freshly-GENERATED item is not in trackItemsMap
+    // the instant runGen resolves. Poll (up to ~5s) until the new visuals land. Only relevant when we
+    // actually generated some (a pipeline build); when arranging clips that ALREADY exist, skip the
+    // wait entirely (there is nothing pending → no 5s stall).
     let newVisual: string[] = [];
-    for (let t = 0; t < 25; t++) {
-      const map = useStore.getState().trackItemsMap || {};
-      const order = useStore.getState().trackItemIds || Object.keys(map);
-      newVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio" && !beforeVisual.has(id));
-      if (newVisual.length >= wantVisual && newVisual.length) break;
-      await new Promise((r) => setTimeout(r, 200));
+    if (gens.length) {
+      s.updateAt(i, { genStatus: "🎬 Arranging into one video…" });
+      for (let t = 0; t < 25; t++) {
+        const map = useStore.getState().trackItemsMap || {};
+        const order = useStore.getState().trackItemIds || Object.keys(map);
+        newVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio" && !beforeVisual.has(id));
+        if (newVisual.length >= wantVisual && newVisual.length) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
     }
-    // Spread the shots across the VOICEOVER length when there is one (so image cuts match the
-    // narration), else the arrange op's own totalMs.
     const map = useStore.getState().trackItemsMap || {};
     const audio: any = Object.values(map).find((it: any) => it?.type === "audio");
     const audioMs = audio?.display ? Math.max(0, (audio.display.to || 0) - (audio.display.from || 0)) : 0;
+    // Explicit-window arranges (the LLM gave exact times) apply as-is.
     for (const a of arranges) {
-      const hasExplicit = (a.items?.length || a.itemIds?.length) && !a.target;
-      if (hasExplicit) {
-        applyOperations([a]);
-      } else if (newVisual.length) {
-        const totalMs = audioMs > 1500 ? audioMs : a.totalMs || newVisual.length * 4000;
-        applyOperations([{ op: "arrange", itemIds: newVisual, totalMs }]);
-      }
+      if ((a.items?.length || a.itemIds?.length) && !a.target) applyOperations([a]);
     }
-    s.updateAt(i, {
-      genStatus: newVisual.length ? `✓ Built into one video — ${newVisual.length} shots` : "⚠️ arrange: no new visuals landed on the timeline",
-    });
+    // ── SMART "arrange all" (a CORE op — works in plain Edit mode too, not just pipelines).
+    // Targets the just-generated shots (a pipeline build) OR, when the user just says "arrange"
+    // with clips already on the timeline, ALL the visuals. Before arranging it checks it HAS what
+    // context-aware needs (a voiceover + its transcript): it TRANSCRIBES on its own if missing;
+    // spaces evenly (and says so) if there is no voiceover; then ends with a short plain-English
+    // report. The BEAT MODEL it builds (each shot's slot + the narration spoken during it) is
+    // stored on the message so animate / effects / lip-sync can read it and be context-aware too. ──
+    const arrangeAll = arranges.some((a: any) => !((a.items?.length || a.itemIds?.length) && !a.target));
+    if (arrangeAll) {
+      const order = useStore.getState().trackItemIds || Object.keys(map);
+      const allVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio");
+      const targetVisuals = gens.length ? newVisual : allVisual; // pipeline → new shots ; user "arrange" → existing clips
+      const N = targetVisuals.length;
+      console.log("[AI-Edit arrange] ▶ START", {
+        targetVisualCount: N,
+        targetVisuals,
+        fromGens: gens.length > 0,
+        audio: audio ? { srcTail: String(audio.details?.src || "").slice(-48), fromMs: audio.display?.from, toMs: audio.display?.to, audioMs } : "NONE",
+      });
+      if (!N) {
+        console.warn("[AI-Edit arrange] ✖ nothing to arrange — no visuals on the timeline");
+        s.updateAt(i, { genStatus: "⚠️ Nothing to arrange — add some images or videos to the timeline first." });
+      } else {
+        let beats: { itemId: string; fromMs: number; toMs: number; text: string }[] | null = null;
+        let note = "";
+        try {
+          if (N > 1 && audio?.details?.src) {
+            s.updateAt(i, { genStatus: "⏳ Transcribing the voiceover (needed for timing)…" });
+            // Transcription comes FIRST — the arrange WAITS for the text + timestamps. Reuse a
+            // transcript from the Captions tab if it's already there (instant); else transcribe now.
+            // Capped at 120s via Promise.race so a stuck job can NEVER hang the arrange.
+            let segs: any[] = useCaptionTranscribeStore.getState().resultsByMedia?.[audio.details.src]?.segments || [];
+            console.log("[AI-Edit arrange] cached transcript segments:", segs.length);
+            if (!segs.length) {
+              console.log("[AI-Edit arrange] no cache → calling transcribeAudio()…", { srcTail: String(audio.details.src).slice(-48), hasToken: !!getToken() });
+              const t0 = Date.now();
+              segs = (await Promise.race([
+                transcribeAudio(audio.details.src, getToken()).catch((e) => {
+                  console.error("[AI-Edit arrange] ✖ transcribeAudio REJECTED:", e);
+                  return [] as any[];
+                }),
+                new Promise<any[]>((r) => setTimeout(() => { console.warn("[AI-Edit arrange] ✖ transcribe TIMEOUT after 120s"); r([]); }, 120000)),
+              ])) as any[];
+              console.log(`[AI-Edit arrange] transcribeAudio() returned ${segs.length} segments in ${Date.now() - t0}ms`);
+              if (segs.length) {
+                try {
+                  useCaptionTranscribeStore.getState().setTranscriptResult(audio.details.src, {
+                    text: "",
+                    language: "",
+                    segment_count: segs.length,
+                    segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
+                  });
+                } catch (e) {
+                  console.warn("[AI-Edit arrange] transcript cache write failed:", e);
+                }
+              }
+            }
+            console.log("[AI-Edit arrange] segments:", segs.map((sg: any) => ({ start: sg.start, end: sg.end, text: String(sg.text || "").slice(0, 40) })));
+            if (segs.length) {
+              // EVEN time-windows across the WHOLE voiceover, each cut SNAPPED to the nearest speech
+              // boundary. Robust when there are FEWER transcript segments than shots (short audio).
+              const totalS = segs[segs.length - 1].end || audioMs / 1000 || N * 2.5;
+              const edges: number[] = Array.from(new Set(segs.flatMap((sg: any) => [sg.start, sg.end]))).sort((x, y) => x - y);
+              const snap = (t: number) => (edges.length ? edges.reduce((best, c) => (Math.abs(c - t) < Math.abs(best - t) ? c : best), t) : t);
+              const cuts = [0];
+              for (let k = 1; k < N; k++) {
+                const t = (k / N) * totalS;
+                cuts.push(Math.min(totalS - 0.3, Math.max(cuts[cuts.length - 1] + 0.4, snap(t))));
+              }
+              cuts.push(totalS);
+              beats = targetVisuals.map((id, k) => ({
+                itemId: id,
+                fromMs: Math.round(cuts[k] * 1000),
+                toMs: Math.round(cuts[k + 1] * 1000),
+                text: segs
+                  .filter((sg: any) => sg.end > cuts[k] && sg.start < cuts[k + 1])
+                  .map((sg: any) => sg.text)
+                  .join(" ")
+                  .trim(),
+              }));
+              console.log("[AI-Edit arrange] ✓ built BEATS:", beats.map((b) => ({ fromMs: b.fromMs, toMs: b.toMs, text: b.text.slice(0, 30) })));
+            } else {
+              console.warn("[AI-Edit arrange] ✖ no segments → even spacing");
+              note = "couldn't read the narration timing, so spaced them evenly";
+            }
+          } else if (!audio) {
+            console.log("[AI-Edit arrange] no audio track on the timeline → even spacing");
+            note = "no voiceover on the timeline — spaced evenly; add an audio track for narration-synced timing";
+          } else {
+            console.log("[AI-Edit arrange] single shot → no timing needed");
+          }
+        } catch (e) {
+          console.error("[AI-Edit arrange] ✖ transcription / beat-build ERROR:", e);
+          note = "hit an error reading the narration, so spaced them evenly";
+        }
+        try {
+          if (beats && beats.length === N) {
+            s.updateAt(i, { beats }); // persist the CONTEXT — animate / effects / lip-sync read this later
+            console.log("[AI-Edit arrange] applying SYNCED arrange");
+            applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
+          } else {
+            console.log("[AI-Edit arrange] applying EVEN arrange", { totalMs: audioMs > 1500 ? audioMs : N * 4000 });
+            applyOperations([{ op: "arrange", itemIds: targetVisuals, totalMs: audioMs > 1500 ? audioMs : N * 4000 }]);
+          }
+          // MOTION: subtle Ken Burns per shot (alternating) so the stills feel alive.
+          const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
+          applyOperations(targetVisuals.map((id, k) => ({ op: "edit", itemId: id, details: { kenBurns: KB[k % KB.length], kenBurnsIntensity: 14 } })));
+          console.log("[AI-Edit arrange] ✅ DONE — applied arrange + motion");
+        } catch (e) {
+          console.error("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
+          note = note || "hit an error placing the clips on the timeline";
+        }
+        // SHORT REPORT — always fires (even on error), so it never looks "stuck with no output".
+        const synced = !!(beats && beats.length === N);
+        s.updateAt(i, {
+          genStatus: synced
+            ? `✓ Arranged ${N} shot${N > 1 ? "s" : ""} across the voiceover — even cuts snapped to speech beats, with motion.`
+            : `✓ Arranged ${N} shot${N > 1 ? "s" : ""} with motion — ${note || "no voiceover, so spaced evenly"}.`,
+        });
+      }
+    } else if (newVisual.length) {
+      s.updateAt(i, { genStatus: `✓ Added ${newVisual.length} clip${newVisual.length > 1 ? "s" : ""} — say "arrange into a video" to sequence them.` });
+    }
   };
 
   // Captions — ensure a transcript (transcribe if we don't have one), then lay a
@@ -722,8 +892,8 @@ export default function AiEditPanel() {
 
   const applyMsg = (i: number, m: any) => {
     if (!m.ops?.length) return;
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");

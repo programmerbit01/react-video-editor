@@ -19,7 +19,7 @@ import { getStateManagerRef } from "../utils/state-manager-ref";
 import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct";
+  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate";
   itemId?: string;
   itemIds?: string[];
   durationMs?: number;
@@ -324,6 +324,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "arrange") return `Arrange ${op.items?.length || op.itemIds?.length || 0} items${op.totalMs ? ` over ${(op.totalMs / 1000).toFixed(1)}s` : op.items?.length ? " (smart timing)" : ""}`;
   if (op.op === "search") return `Stock ${op.kind || "image"}: "${(op.query || op.prompt || "").slice(0, 30)}" ×${op.count || 1}`;
   if (op.op === "regenerate") return `Edit image (AI): "${(op.prompt || "").slice(0, 40)}"  (${op.itemId})`;
+  if (op.op === "animate") return `🎞️ Animate image → video: "${(op.prompt || "subtle motion").slice(0, 40)}"  (${op.itemId})`;
   if (op.op === "generate") return `Generate ${op.kind || "audio"}: "${(op.text || op.prompt || "").slice(0, 40)}"`;
   if (op.op === "edit") {
     const id = op.itemId;
@@ -468,8 +469,9 @@ Supported operations:
 - Generate an IMAGE (SHORT comma-separated keyword prompt) and add it: { "op":"generate", "kind":"image", "prompt":"cinematic mountain landscape, golden hour, 85mm, sharp", "aspect_ratio":"16:9" }
 - Generate a VIDEO (LONG descriptive prompt — motion, camera, lighting) and add it: { "op":"generate", "kind":"video", "prompt":"aerial drone shot flying low over misty mountains at sunrise, slow push in, cinematic", "duration":5, "aspect_ratio":"16:9" }
 - Edit / regenerate the SELECTED image with AI (img2img — recolor, restyle, alter it): { "op":"regenerate", "itemId":"<id>", "prompt":"the same image but tinted deep red" }   (for images ONLY; "make it red" on an image = this)
+- ANIMATE the SELECTED image into a VIDEO (image-to-video — bring a still to life with subtle motion, keeps it in the SAME timeline slot): { "op":"animate", "itemId":"<id>", "prompt":"gentle camera push-in, hair moving in the wind" }   (use when the user says "animate", "make it move", "bring it to life", "turn this into video"; the motion prompt is short — describe the MOTION, not the scene)
 - Arrange / sequence items to BUILD A VIDEO (the audio is NEVER re-timed). CRITICAL: media you create with generate/search in THIS SAME response does NOT have an id yet — you CANNOT reference it by id. Pick the right form:
-    • You just generated/searched new media and want them ALL in one video → { "op":"arrange", "target":"all", "totalMs": 30000 }. The editor arranges every visual item (in creation order) across totalMs AFTER generation finishes. ALWAYS use this for requests like "generate X, Y, Z and arrange into one video" — include the generate/search ops PLUS this one arrange op.
+    • Sequence media into ONE video — whether you just generated/searched them OR they ALREADY EXIST on the timeline (user says "arrange", "make a video from these", "sequence them") → { "op":"arrange", "target":"all", "totalMs": 30000 }. The editor places EVERY visual across the video AND, if there is a voiceover, it TRANSCRIBES the audio and SYNCS each shot to the narration automatically — you do NOT compute the times. Use this for "generate X,Y,Z and arrange into one video" (add the generate ops PLUS this one) and for "arrange these clips" (just this one op).
     • Arranging items that ALREADY EXIST in the PROJECT TIMELINE above (ids known) — SMART (importance + script order): { "op":"arrange", "items":[ {"itemId":"id1","fromMs":0,"toMs":2000}, {"itemId":"id2","fromMs":2000,"toMs":5000} ] } — give KEY images more time, ORDER by narration match.
     • Or equal split of existing ids: { "op":"arrange", "itemIds":["id1","id2"], "totalMs": 5000 }
 - Search STOCK footage/photos (Pexels) and add: { "op":"search", "kind":"image", "query":"snowy mountains at sunset", "count":3 }   (kind: "image" | "video")
@@ -487,7 +489,7 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 // the live timeline. No hardcoded steps — control lives entirely in the prompt.
 export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a VERTICAL (9:16) video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
 
-NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3). If they give no number, use N=6. If the request has NO story/subject at all, return "operations": [] and in "summary" ask them for the story and how many shots.
+NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3). If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut, VibeShort-style). If the request has NO story/subject at all, return "operations": [] and in "summary" ask them for the story and how many shots.
 
 BUILD IT:
 1) Decide the MAIN CHARACTER's look ONCE — face, hair, age, outfit, colour — in ~12 words. Repeat this EXACT description in EVERY shot so the same person appears throughout (change only the pose/emotion/scene).
@@ -495,7 +497,7 @@ BUILD IT:
 3) For EACH of the N shots output a generate-image op with a PHOTOREAL prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, semi-realistic, realistic skin, dramatic moody lighting, shallow depth of field, 9:16":
    { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"9:16" }
    PHOTOREAL/cinematic — NOT flat cartoon or comic-ink.
-4) Output ONE generate-audio op = the spoken narration for the whole episode. Make it LONG ENOUGH to cover all N shots — about 15 words PER shot (N×15 words):
+4) Output ONE generate-audio op = the spoken narration. Write it as ONE short sentence PER shot, IN THE SAME ORDER as the shots (sentence k describes shot k) so each image can be synced to exactly when its line is spoken. ~15 words per shot:
    { "op":"generate", "kind":"audio", "text":"…" }
 5) Output ONE arrange op: { "op":"arrange", "target":"all", "totalMs": <N × 4000> }
 
@@ -503,9 +505,9 @@ Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N image o
 
 export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a video editor. The user gives a topic. Turn it into a short faceless documentary as a JSON list of operations the editor applies to the timeline.
 
-NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=6. If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
+NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut). If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
 
-1) Output ONE generate-audio op = the narration script — real spoken sentences about the topic, LONG ENOUGH to cover all N shots (~15 words PER shot, N×15 words):
+1) Output ONE generate-audio op = the narration — ONE sentence PER shot, IN THE SAME ORDER as the image shots (sentence k describes shot k) so each visual syncs to exactly when its line is spoken. ~15 words per shot:
    { "op":"generate", "kind":"audio", "text":"…" }
 2) Output N generate-image ops, one per narration beat, each a SHORT cinematic keyword prompt relevant to what the narration says:
    { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"16:9" }

@@ -68,7 +68,12 @@ export async function POST(request: Request) {
         ...(body.image_url ? { image_url: body.image_url } : {}), // img2img (regenerate)
       };
     } else if (kind === "video") {
-      reqBody = { prompt: genPrompt, aspect_ratio: body.aspect_ratio || "16:9", duration: Math.min(20, Number(body.duration) || 5) };
+      reqBody = {
+        prompt: genPrompt,
+        aspect_ratio: body.aspect_ratio || "16:9",
+        duration: Math.min(20, Number(body.duration) || 5),
+        ...(body.image_url ? { image_url: body.image_url } : {}), // image-to-video (animate a still → LTX i2v)
+      };
     } else {
       reqBody = { prompt, model };
     }

@@ -1,3 +1,8 @@
+<!-- vApp fork — this build adds AI Edit (LLM ops on the timeline) + pipelines
+     (Comic Drama / Faceless Video), a smart context-aware `arrange`, `animate`
+     (image→video), and the shared Beat Model. See **AI_EDIT_PIPELINES.md** for
+     the goal, architecture, what's built, and the roadmap. -->
+
 <p align="center">
   <a href="https://github.com/designcombo/react-video-editor">
     <img width="150px" height="150px" src="https://cdn.designcombo.dev/combo-logo-black.png"/>

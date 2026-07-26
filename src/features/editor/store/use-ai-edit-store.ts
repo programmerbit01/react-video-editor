@@ -15,6 +15,10 @@ export interface ChatMsg {
   historyId?: string;
   genStatus?: string; // background generation status (queued #, %, ✓/⚠️)
   genPreviews?: { kind: string; url: string }[]; // generated media previews
+  // BEAT MODEL — the shared context a pipeline build produces: each shot's timeline slot +
+  // the narration spoken during it (+ neighbours are derivable by index). Arrange uses it;
+  // animate / effects / lip-sync read it so their motion/prompts are context-aware.
+  beats?: { itemId: string; fromMs: number; toMs: number; text: string }[];
 }
 
 export interface ChatModel {

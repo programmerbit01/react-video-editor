@@ -96,7 +96,10 @@ async function postUnified(base: string, token: string, stream: boolean, body: a
     .join("\n\n")
     .trim();
 
-  const overrides: Record<string, any> = { temperature: 0.2, max_tokens: 1200 };
+  // 8000, not 1200 — a pipeline (Comic Drama / Faceless) emits 12+ shots as one big ops JSON;
+  // 1200 truncated it mid-JSON so extractOps failed silently. max_tokens is a ceiling, so short
+  // edits still stop early — this only gives the long plans room to finish.
+  const overrides: Record<string, any> = { temperature: 0.2, max_tokens: 8000 };
   if (system) overrides.system = system;
   // dropdown id "litellm/GO20" → config model id "GO20"
   const model = String(body.model || "").replace(/^litellm\//, "").trim();
@@ -153,7 +156,7 @@ async function postLegacy(base: string, token: string, stream: boolean, body: an
     messages: body.messages || [],
     stream,
     temperature: 0.2,
-    max_tokens: 1200,
+    max_tokens: 8000,
   };
   if (body.reasoning_effort) upstreamBody.reasoning_effort = body.reasoning_effort;
   if (body.extra_body) upstreamBody.extra_body = body.extra_body;
