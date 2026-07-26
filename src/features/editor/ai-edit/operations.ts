@@ -43,6 +43,7 @@ export interface AiEditOp {
   startMs?: number;
   items?: { itemId: string; fromMs: number; toMs: number }[]; // explicit per-item timing (importance / script-sync)
   target?: string; // arrange "all" → sequence every visual item (for just-generated media whose ids don't exist yet)
+  consolidate?: boolean; // arrange: move the arranged visuals onto ONE video track (default true)
   // direct (one-shot auto-director: topic → script → voiceover → shots → captions):
   topic?: string;
   durationSec?: number;
@@ -145,9 +146,12 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
     // Arrange/sequence items to build a video. Two forms (audio is never re-timed):
     //  - op.items:  explicit per-item {fromMs,toMs} → importance / script-sync
     //  - op.itemIds + totalMs: equal back-to-back slices
+    // Either way the arranged VISUALS are CONSOLIDATED onto ONE video track (so they play as a
+    // single sequential row, not scattered across rows) unless op.consolidate === false.
     if (op.op === "arrange" && sm) {
       const st = sm.getState?.();
       const map = { ...(st?.trackItemsMap || {}) };
+      const arrangedIds: string[] = []; // visuals we (re)timed, in final playback order
       let changed = false;
       if (op.items?.length) {
         for (const it of op.items) {
@@ -156,6 +160,7 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
             const from = Math.max(0, Math.floor(it.fromMs || 0));
             const to = Math.max(from + 200, Math.floor(it.toMs || 0));
             map[it.itemId] = { ...item, display: { from, to } };
+            arrangedIds.push(it.itemId);
             changed = true;
           }
         }
@@ -169,11 +174,37 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
           ids.forEach((id: string, k: number) => {
             const from = start + k * per;
             map[id] = { ...map[id], display: { from, to: from + per } };
+            arrangedIds.push(id);
           });
           changed = true;
         }
       }
-      if (changed) sm.updateState({ trackItemsMap: map }, { updateHistory: true });
+      // CONSOLIDATE the arranged visuals onto ONE video track (in playback order). Track membership
+      // lives in tracks[].items (items carry no trackId), so move the ids there. This is what makes
+      // the arrange look like the clean auto-director output (one row) instead of a scatter of rows.
+      let tracks = st?.tracks;
+      if (changed && arrangedIds.length && op.consolidate !== false && Array.isArray(tracks) && tracks.length) {
+        const takesVisual = (t: any) =>
+          Array.isArray(t?.accepts) ? t.accepts.includes("image") || t.accepts.includes("video") : t?.type === "video" || t?.type === "image" || !t?.type;
+        // prefer a video track that already holds one of the arranged shots; else any video track.
+        const target =
+          tracks.find((t: any) => takesVisual(t) && (t.items || []).some((id: string) => arrangedIds.includes(id))) ||
+          tracks.find((t: any) => takesVisual(t));
+        if (target) {
+          tracks = tracks.map((t: any) => {
+            if (t.id === target.id) {
+              const keep = (t.items || []).filter((id: string) => !arrangedIds.includes(id));
+              return { ...t, items: [...keep, ...arrangedIds] }; // arranged shots, in order, at the end
+            }
+            return { ...t, items: (t.items || []).filter((id: string) => !arrangedIds.includes(id)) };
+          });
+        }
+      }
+      if (changed) {
+        const patch: Record<string, any> = { trackItemsMap: map };
+        if (Array.isArray(tracks)) patch.tracks = tracks;
+        sm.updateState(patch, { updateHistory: true });
+      }
       continue;
     }
 
@@ -470,10 +501,14 @@ Supported operations:
 - Generate a VIDEO (LONG descriptive prompt — motion, camera, lighting) and add it: { "op":"generate", "kind":"video", "prompt":"aerial drone shot flying low over misty mountains at sunrise, slow push in, cinematic", "duration":5, "aspect_ratio":"16:9" }
 - Edit / regenerate the SELECTED image with AI (img2img — recolor, restyle, alter it): { "op":"regenerate", "itemId":"<id>", "prompt":"the same image but tinted deep red" }   (for images ONLY; "make it red" on an image = this)
 - ANIMATE the SELECTED image into a VIDEO (image-to-video — bring a still to life with subtle motion, keeps it in the SAME timeline slot): { "op":"animate", "itemId":"<id>", "prompt":"gentle camera push-in, hair moving in the wind" }   (use when the user says "animate", "make it move", "bring it to life", "turn this into video"; the motion prompt is short — describe the MOTION, not the scene)
-- Arrange / sequence items to BUILD A VIDEO (the audio is NEVER re-timed). CRITICAL: media you create with generate/search in THIS SAME response does NOT have an id yet — you CANNOT reference it by id. Pick the right form:
-    • Sequence media into ONE video — whether you just generated/searched them OR they ALREADY EXIST on the timeline (user says "arrange", "make a video from these", "sequence them") → { "op":"arrange", "target":"all", "totalMs": 30000 }. The editor places EVERY visual across the video AND, if there is a voiceover, it TRANSCRIBES the audio and SYNCS each shot to the narration automatically — you do NOT compute the times. Use this for "generate X,Y,Z and arrange into one video" (add the generate ops PLUS this one) and for "arrange these clips" (just this one op).
-    • Arranging items that ALREADY EXIST in the PROJECT TIMELINE above (ids known) — SMART (importance + script order): { "op":"arrange", "items":[ {"itemId":"id1","fromMs":0,"toMs":2000}, {"itemId":"id2","fromMs":2000,"toMs":5000} ] } — give KEY images more time, ORDER by narration match.
-    • Or equal split of existing ids: { "op":"arrange", "itemIds":["id1","id2"], "totalMs": 5000 }
+- Arrange / sequence items to BUILD A VIDEO — ALWAYS this ONE form: { "op":"arrange", "target":"all" }
+    Use it whenever the user says "arrange", "make a video from these", "sequence them", or you just
+    generated/searched several clips to assemble. Do NOT compute or pass any times — the editor OWNS the
+    timing: it transcribes the voiceover, plans content-aware windows synced to the narration, places every
+    visual gap-free on ONE row, and adds motion. You NEVER emit fromMs/toMs/totalMs/itemIds for an arrange
+    (timing is a mechanic, not your decision). For "generate X,Y,Z and arrange into one video" add the
+    generate ops PLUS this single arrange op. CRITICAL: media you generate/search in THIS response has no id
+    yet — that's fine, "target":"all" needs no ids.
 - Search STOCK footage/photos (Pexels) and add: { "op":"search", "kind":"image", "query":"snowy mountains at sunset", "count":3 }   (kind: "image" | "video")
     Use "search" (stock) when the user says "stock", "find", or "footage". Use "generate" (AI) ONLY when they say "generate", "create", or "make an AI …". Keep queries relevant to the narration/topic.
 - For a DYNAMIC look, VARY the kenBurns kind across clips (alternate zoomIn / zoomOut / panLeft / panRight) — don't put the same motion on every clip.

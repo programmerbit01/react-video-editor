@@ -585,110 +585,158 @@ export default function AiEditPanel() {
     }
     const map = useStore.getState().trackItemsMap || {};
     const audio: any = Object.values(map).find((it: any) => it?.type === "audio");
-    const audioMs = audio?.display ? Math.max(0, (audio.display.to || 0) - (audio.display.from || 0)) : 0;
-    // Explicit-window arranges (the LLM gave exact times) apply as-is.
-    for (const a of arranges) {
-      if ((a.items?.length || a.itemIds?.length) && !a.target) applyOperations([a]);
-    }
-    // ── SMART "arrange all" (a CORE op — works in plain Edit mode too, not just pipelines).
-    // Targets the just-generated shots (a pipeline build) OR, when the user just says "arrange"
-    // with clips already on the timeline, ALL the visuals. Before arranging it checks it HAS what
-    // context-aware needs (a voiceover + its transcript): it TRANSCRIBES on its own if missing;
-    // spaces evenly (and says so) if there is no voiceover; then ends with a short plain-English
-    // report. The BEAT MODEL it builds (each shot's slot + the narration spoken during it) is
-    // stored on the message so animate / effects / lip-sync can read it and be context-aware too. ──
-    const arrangeAll = arranges.some((a: any) => !((a.items?.length || a.itemIds?.length) && !a.target));
-    if (arrangeAll) {
+    const audioMs = audio?.details?.src
+      ? (audio.duration || 0) || (audio.display ? Math.max(0, (audio.display.to || 0) - (audio.display.from || 0)) : 0)
+      : 0;
+    // ── SMART arrange (a CORE op — works in plain Edit mode too, not just pipelines) ──────────────
+    // The EXECUTOR owns timing, NEVER the LLM (timing is a mechanic, not a decision). Whatever the
+    // LLM emitted — target:"all", explicit itemIds, or per-item times — we IGNORE its times and
+    // (re)compute content-aware windows from the voiceover ourselves. That's why this block ALWAYS
+    // runs when there's an arrange op (so the logs + transcription + sync are never bypassed).
+    // Priority: server /api/beat-plan (VidRush transcribe→beat_plan, best) → client transcript
+    // (cached from the Captions tab, else /api/transcribe) even-windows-snapped-to-speech → even
+    // split. The result is ONE gap-free, single-track sequence spanning exactly the voiceover, plus
+    // Ken Burns and a short report. The BEAT MODEL (each shot's slot + its narration) is stored so
+    // animate / effects / lip-sync can read it and be context-aware too. ────────────────────────────
+    if (arranges.length) {
       const order = useStore.getState().trackItemIds || Object.keys(map);
       const allVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio");
-      const targetVisuals = gens.length ? newVisual : allVisual; // pipeline → new shots ; user "arrange" → existing clips
+      // Honour WHICH items the LLM/user chose (from the selection chips) — but own the TIMING.
+      const chosen = Array.from(
+        new Set(arranges.flatMap((a: any) => (a.items?.map((x: any) => x.itemId) || a.itemIds || [])).filter(Boolean)),
+      ).filter((id: string) => map[id] && (map[id] as any).type !== "audio");
+      const targetVisuals: string[] = gens.length ? newVisual : chosen.length ? chosen : allVisual;
       const N = targetVisuals.length;
       console.log("[AI-Edit arrange] ▶ START", {
         targetVisualCount: N,
         targetVisuals,
-        fromGens: gens.length > 0,
-        audio: audio ? { srcTail: String(audio.details?.src || "").slice(-48), fromMs: audio.display?.from, toMs: audio.display?.to, audioMs } : "NONE",
+        source: gens.length ? "just-generated" : chosen.length ? "selected" : "all-visuals",
+        audio: audio ? { srcTail: String(audio.details?.src || "").slice(-48), audioMs } : "NONE",
       });
       if (!N) {
         console.warn("[AI-Edit arrange] ✖ nothing to arrange — no visuals on the timeline");
         s.updateAt(i, { genStatus: "⚠️ Nothing to arrange — add some images or videos to the timeline first." });
       } else {
         let beats: { itemId: string; fromMs: number; toMs: number; text: string }[] | null = null;
+        let source = "even"; // "server" | "transcript" | "even"
         let note = "";
         try {
           if (N > 1 && audio?.details?.src) {
+            const src = String(audio.details.src);
             s.updateAt(i, { genStatus: "⏳ Planning shot timing from the voiceover…" });
-            // CONTEXT-AWARE TIMING lives on the SERVER now. /api/beat-plan → vApp /vapp/beat_plan
-            // REUSES VidRush's proven transcribe → beat_plan chain and returns EXACTLY N contiguous,
-            // speech-aligned windows (each carrying the narration spoken during it). No client
-            // transcription / even-spread — that path was fragile and could hang.
-            console.log("[AI-Edit arrange] → /api/beat-plan", {
-              srcTail: String(audio.details.src).slice(-48), shots: N, hasToken: !!getToken(),
-            });
-            const t0 = Date.now();
+            // 1 — SERVER beat-plan (content-aware; VidRush transcribe → beat_plan). Preferred.
+            //     If the server hasn't been restarted yet it 404s fast → we fall through to the
+            //     client transcript path below (which works with the LIVE /api/transcribe).
             let planBeats: any[] = [];
             try {
+              console.log("[AI-Edit arrange] → /api/beat-plan", { srcTail: src.slice(-48), shots: N });
+              const t0 = Date.now();
               const res = await fetch("/api/beat-plan", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ audio_url: audio.details.src, shots: N, token: getToken() }),
+                body: JSON.stringify({ audio_url: src, shots: N, token: getToken() }),
               });
               const data = await res.json().catch(() => ({}));
-              console.log(`[AI-Edit arrange] beat-plan returned in ${Date.now() - t0}ms`, {
-                ok: data?.ok, total_ms: data?.total_ms, segments: data?.segments,
-                beats: (data?.beats || []).length, error: data?.error,
+              console.log(`[AI-Edit arrange] beat-plan → ${res.status} in ${Date.now() - t0}ms`, {
+                ok: data?.ok, total_ms: data?.total_ms, segments: data?.segments, beats: (data?.beats || []).length, error: data?.error,
               });
               if (data?.ok && Array.isArray(data.beats) && data.beats.length) planBeats = data.beats;
-              else note = `couldn't plan timing (${data?.error || "no beats"}), so spaced them evenly`;
             } catch (e: any) {
-              console.error("[AI-Edit arrange] ✖ beat-plan fetch failed:", e);
-              note = "couldn't reach the timing service, so spaced them evenly";
+              console.warn("[AI-Edit arrange] beat-plan unavailable → client transcript:", e?.message || e);
             }
             if (planBeats.length === N) {
+              source = "server";
               beats = targetVisuals.map((id, k) => ({
                 itemId: id,
                 fromMs: Math.round(Number(planBeats[k].from_ms) || 0),
                 toMs: Math.round(Number(planBeats[k].to_ms) || 0),
                 text: String(planBeats[k].text || planBeats[k].keyword || "").trim(),
               }));
-              console.log("[AI-Edit arrange] ✓ built BEATS:", beats.map((b) => ({ fromMs: b.fromMs, toMs: b.toMs, text: b.text.slice(0, 30) })));
-            } else if (planBeats.length) {
-              console.warn(`[AI-Edit arrange] beat-plan gave ${planBeats.length} beats, expected ${N} → even spacing`);
-              note = note || "timing came back mismatched, so spaced them evenly";
+            } else {
+              // 2 — CLIENT transcript: reuse the Captions-tab transcript if present (instant), else
+              //     transcribe via the LIVE /api/transcribe (capped so it can never hang the arrange).
+              let segs: any[] = useCaptionTranscribeStore.getState().resultsByMedia?.[src]?.segments || [];
+              console.log("[AI-Edit arrange] cached transcript segments:", segs.length);
+              if (!segs.length) {
+                s.updateAt(i, { genStatus: "⏳ Transcribing the voiceover (for timing)…" });
+                console.log("[AI-Edit arrange] no cache → /api/transcribe…");
+                const t1 = Date.now();
+                segs = (await Promise.race([
+                  transcribeAudio(src, getToken()).catch((e) => {
+                    console.error("[AI-Edit arrange] ✖ transcribeAudio REJECTED:", e);
+                    return [] as any[];
+                  }),
+                  new Promise<any[]>((r) => setTimeout(() => { console.warn("[AI-Edit arrange] ✖ transcribe TIMEOUT 120s"); r([]); }, 120000)),
+                ])) as any[];
+                console.log(`[AI-Edit arrange] transcribe returned ${segs.length} segments in ${Date.now() - t1}ms`);
+                if (segs.length) {
+                  try {
+                    useCaptionTranscribeStore.getState().setTranscriptResult(src, {
+                      text: "", language: "", segment_count: segs.length,
+                      segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
+                    });
+                  } catch { /* cache best-effort */ }
+                }
+              }
+              if (segs.length) {
+                source = "transcript";
+                // EVEN windows across the whole voiceover, each cut SNAPPED to the nearest speech
+                // boundary (robust even when there are fewer segments than shots — short audio).
+                const totalS = segs[segs.length - 1].end || audioMs / 1000 || N * 2.5;
+                const edges: number[] = Array.from(new Set(segs.flatMap((sg: any) => [sg.start, sg.end]))).sort((x, y) => x - y);
+                const snap = (t: number) => (edges.length ? edges.reduce((b, c) => (Math.abs(c - t) < Math.abs(b - t) ? c : b), t) : t);
+                const cuts = [0];
+                for (let k = 1; k < N; k++) {
+                  const t = (k / N) * totalS;
+                  cuts.push(Math.min(totalS - 0.3, Math.max(cuts[cuts.length - 1] + 0.4, snap(t))));
+                }
+                cuts.push(totalS);
+                beats = targetVisuals.map((id, k) => ({
+                  itemId: id,
+                  fromMs: Math.round(cuts[k] * 1000),
+                  toMs: Math.round(cuts[k + 1] * 1000),
+                  text: segs.filter((sg: any) => sg.end > cuts[k] && sg.start < cuts[k + 1]).map((sg: any) => sg.text).join(" ").trim(),
+                }));
+              } else {
+                note = "couldn't read the narration timing, so spaced them evenly";
+              }
             }
+            if (beats) console.log(`[AI-Edit arrange] ✓ BEATS (${source}):`, beats.map((b) => ({ from: b.fromMs, to: b.toMs, text: b.text.slice(0, 28) })));
           } else if (!audio) {
-            console.log("[AI-Edit arrange] no audio track on the timeline → even spacing");
             note = "no voiceover on the timeline — spaced evenly; add an audio track for narration-synced timing";
-          } else {
-            console.log("[AI-Edit arrange] single shot → no timing needed");
+            console.log("[AI-Edit arrange] no audio → even spacing");
           }
         } catch (e) {
           console.error("[AI-Edit arrange] ✖ timing ERROR:", e);
           note = "hit an error planning the timing, so spaced them evenly";
         }
+        // FALLBACK: no content-aware beats → even, gap-free split across the voiceover (or a default).
+        if (!beats || beats.length !== N) {
+          const totalMs = audioMs > 1500 ? audioMs : N * 4000;
+          const per = Math.floor(totalMs / N);
+          beats = targetVisuals.map((id, k) => ({ itemId: id, fromMs: k * per, toMs: k === N - 1 ? totalMs : (k + 1) * per, text: "" }));
+          console.log(`[AI-Edit arrange] even fallback: ${N} × ${per}ms over ${totalMs}ms`);
+        }
         try {
-          if (beats && beats.length === N) {
-            s.updateAt(i, { beats }); // persist the CONTEXT — animate / effects / lip-sync read this later
-            console.log("[AI-Edit arrange] applying SYNCED arrange");
-            applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
-          } else {
-            console.log("[AI-Edit arrange] applying EVEN arrange", { totalMs: audioMs > 1500 ? audioMs : N * 4000 });
-            applyOperations([{ op: "arrange", itemIds: targetVisuals, totalMs: audioMs > 1500 ? audioMs : N * 4000 }]);
-          }
-          // MOTION: subtle Ken Burns per shot (alternating) so the stills feel alive.
+          s.updateAt(i, { beats }); // persist the CONTEXT — animate / effects / lip-sync read this later
+          // ONE authoritative arrange: contiguous, gap-free, all shots CONSOLIDATED onto a single
+          // video row (the executor moves them onto one track — see operations.ts arrange handler).
+          console.log("[AI-Edit arrange] applying arrange (single track, gap-free)");
+          applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
+          // MOTION: subtle Ken Burns per shot (alternating) so stills feel alive.
           const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
           applyOperations(targetVisuals.map((id, k) => ({ op: "edit", itemId: id, details: { kenBurns: KB[k % KB.length], kenBurnsIntensity: 14 } })));
-          console.log("[AI-Edit arrange] ✅ DONE — applied arrange + motion");
+          console.log("[AI-Edit arrange] ✅ DONE — arrange + motion applied");
         } catch (e) {
           console.error("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
           note = note || "hit an error placing the clips on the timeline";
         }
         // SHORT REPORT — always fires (even on error), so it never looks "stuck with no output".
-        const synced = !!(beats && beats.length === N);
+        const synced = source === "server" || source === "transcript";
         s.updateAt(i, {
           genStatus: synced
-            ? `✓ Arranged ${N} shot${N > 1 ? "s" : ""} across the voiceover — timing planned from the narration (content-aware beats), with motion.`
-            : `✓ Arranged ${N} shot${N > 1 ? "s" : ""} with motion — ${note || "no voiceover, so spaced evenly"}.`,
+            ? `✓ Arranged ${N} shot${N > 1 ? "s" : ""} across the voiceover — timing from the narration (${source === "server" ? "content-aware beats" : "synced to speech"}), one row, with motion.`
+            : `✓ Arranged ${N} shot${N > 1 ? "s" : ""} in one row with motion — ${note || "no voiceover, so spaced evenly"}.`,
         });
       }
     } else if (newVisual.length) {
