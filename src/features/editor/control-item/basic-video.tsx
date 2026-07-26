@@ -8,6 +8,8 @@ import AspectRatio from "./common/aspect-ratio";
 import { Button } from "@/components/ui/button";
 import { Crop } from "lucide-react";
 import Volume from "./common/volume";
+import VolumeEnvelope from "./common/volume-envelope";
+import { VolumeKeyframe } from "../utils/volume-envelope";
 import React, { useEffect, useState } from "react";
 import { dispatch } from "@designcombo/events";
 import { EDIT_OBJECT } from "@designcombo/state";
@@ -174,6 +176,28 @@ const BasicVideo = ({
     });
   };
 
+  const handleChangeEnvelope = (kf: VolumeKeyframe[]) => {
+    dispatch(EDIT_OBJECT, {
+      payload: {
+        [trackItem.id]: {
+          details: {
+            volumeKeyframes: kf
+          }
+        }
+      }
+    });
+
+    setProperties((prev) => {
+      return {
+        ...prev,
+        details: {
+          ...prev.details,
+          volumeKeyframes: kf
+        } as typeof prev.details
+      };
+    });
+  };
+
   const components = [
     {
       key: "crop",
@@ -211,6 +235,11 @@ const BasicVideo = ({
           <Speed
             value={properties.playbackRate ?? 1}
             onChange={handleChangeSpeed}
+          />
+          <VolumeEnvelope
+            seed={trackItem.id}
+            value={(properties.details as any).volumeKeyframes}
+            onChange={handleChangeEnvelope}
           />
           <Rounded
             onChange={(v: number) => onChangeBorderRadius(v)}

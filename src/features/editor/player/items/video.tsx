@@ -7,6 +7,7 @@ import { calculateFrames } from "../../utils/frames";
 import { OffthreadVideo, getRemotionEnvironment } from "remotion";
 import { kenBurnsTransform } from "./ken-burns";
 import { resolveAssetUrl } from "../../utils/asset-url";
+import { makeVolumeFn } from "../../utils/volume-envelope";
 
 export const Video = ({
   item,
@@ -32,6 +33,14 @@ export const Video = ({
   };
   const { durationInFrames } = calculateFrames(item.display, fps);
   const currentFrame = (frame || 0) - (item.display.from * fps) / 1000;
+
+  // Volume: a flat number, or a per-frame curve when the clip has a volume envelope.
+  const volume = makeVolumeFn({
+    keyframes: (details as any).volumeKeyframes,
+    volume: details.volume,
+    muted: options.isMuted,
+    durationInFrames: Math.max(1, Math.round(durationInFrames)),
+  });
 
   // GPU-layer promotion (will-change) only in the interactive player — during an
   // offline render it pins a full-res backing texture per clip and wastes RAM.
@@ -88,7 +97,7 @@ export const Video = ({
               // cached the clip first they simply fall back to the server poster — the player is
               // never held hostage to a frame-capture surface.
               // Harmless during headless render (CORS doesn't apply there); R2 sends ACAO:*.
-              volume={options.isMuted ? 0 : (details.volume ?? 100) / 100}
+              volume={volume}
               style={{
                 width: "100%",
                 height: "100%",

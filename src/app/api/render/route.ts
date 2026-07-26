@@ -16,6 +16,7 @@ import { ensureCached, cacheFilePath } from "@/utils/asset-cache-store";
 import { publicPath } from "@/utils/server-paths";
 import { readJsonBody } from "@/utils/request-body";
 import { generateTextOverlay } from "./text-overlay";
+import { atempoChain, buildFfmpegVolumeExpr, safeRate } from "@/features/editor/utils/volume-envelope";
 
 const execFileAsync = promisify(execFile);
 
@@ -1156,14 +1157,22 @@ async function runExport(
       const kb = buildKenBurnsFilter(seg.entry.item.details, dur, outW, outH);
       fp.push(`[0:v]${kb ?? `scale=${outW}:${outH}`},setsar=1${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
     } else if (seg.entry) {
+      const rate = safeRate(seg.entry.item.playbackRate);
+      const rateStr = (Math.round(rate * 1000) / 1000).toString();
       const trimFrom = Math.max(0, Number(seg.entry.item.trim?.from ?? 0) / 1000);
-      a.push("-ss", trimFrom.toFixed(3), "-t", dur.toFixed(3), "-i", seg.entry.path);
+      // Speed: read `dur*rate` source seconds and compress them into `dur` output seconds via
+      // setpts=(PTS-STARTPTS)/rate. The render used to ignore playbackRate entirely (plain
+      // setpts=PTS-STARTPTS), so a clip slowed/sped in the editor still exported at 1×. The clip's
+      // audio gets the matching atempo in the audio mix below, so picture and sound stay in sync.
+      const inLen = dur * rate;
+      a.push("-ss", trimFrom.toFixed(3), "-t", inLen.toFixed(3), "-i", seg.entry.path);
       // Ken Burns on video too (a slow punch-in): same filter, lighter supersample. zoompan resets
       // its own timeline, so setpts must come AFTER it, not before, or the pan freezes.
       const kbv = buildKenBurnsFilter(seg.entry.item.details, dur, outW, outH, true);
+      const sp = rate !== 1 ? `/${rateStr}` : "";
       fp.push(kbv
-        ? `[0:v]${kbv},setpts=PTS-STARTPTS${getFadeFilters(seg.entry.item, 0, dur)}[v]`
-        : `[0:v]scale=${outW}:${outH},setsar=1,setpts=PTS-STARTPTS${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
+        ? `[0:v]${kbv},setpts=(PTS-STARTPTS)${sp}${getFadeFilters(seg.entry.item, 0, dur)}[v]`
+        : `[0:v]scale=${outW}:${outH},setsar=1,setpts=(PTS-STARTPTS)${sp}${getFadeFilters(seg.entry.item, 0, dur)}[v]`);
     } else {
       a.push("-f", "lavfi", "-t", dur.toFixed(3), "-i", `color=black:s=${outW}x${outH}:r=${DEFAULT_FPS}`);
       fp.push(`[0:v]setsar=1[v]`);
@@ -1333,13 +1342,24 @@ async function runExport(
       const item = e.item;
       const dFrom = Math.max(0, Number(item.display?.from ?? 0) / 1000);
       const dTo = Math.max(dFrom + 0.1, Number(item.display?.to ?? 0) / 1000);
+      const dur = dTo - dFrom;
       const trimFrom = Math.max(0, Number(item.trim?.from ?? 0) / 1000);
       const trackId = itemTrackMap[item.id] ?? "";
       const vol = mutedSet.has(trackId) ? 0 : Math.max(0, Number(item.details?.volume ?? 100) / 100);
       const delayMs = Math.round(dFrom * 1000);
+      // Speed: read `dur*rate` source seconds (atrim) and compress to `dur` via an atempo chain,
+      // matching the video segment's setpts so a sped/slowed clip's audio stays in sync — this used
+      // to be ignored (atrim read only `dur` seconds at 1×). rate=1 → atempoChain() returns "".
+      const rate = safeRate(item.playbackRate);
+      const atrimEnd = trimFrom + dur * rate;
+      const tempo = atempoChain(rate);
+      // Volume: a flat constant, or — when the clip has a volume envelope — a time-varying
+      // expression over t (clip-local seconds after atempo, 0..dur) with the master gain baked in.
+      const volExpr = vol > 0 ? buildFfmpegVolumeExpr((item.details as any)?.volumeKeyframes, vol, dur) : null;
+      const volFilter = volExpr ? `volume=volume='${volExpr}':eval=frame` : `volume=${vol}`;
       aa.push("-i", e.path);
-      af.push(`[${i}:a]atrim=start=${trimFrom.toFixed(3)}:end=${(trimFrom + (dTo - dFrom)).toFixed(3)},asetpts=PTS-STARTPTS,` +
-        `volume=${vol},adelay=${delayMs}|${delayMs},aformat=channel_layouts=stereo:sample_rates=48000[a${i}]`);
+      af.push(`[${i}:a]atrim=start=${trimFrom.toFixed(3)}:end=${atrimEnd.toFixed(3)},asetpts=PTS-STARTPTS${tempo},` +
+        `${volFilter},adelay=${delayMs}|${delayMs},aformat=channel_layouts=stereo:sample_rates=48000[a${i}]`);
       labels.push(`a${i}`);
     });
     af.push(labels.length === 1
