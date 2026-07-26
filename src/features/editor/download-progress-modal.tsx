@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
-const DownloadProgressModal = () => {
+const DownloadProgressModal = ({ projectName }: { projectName?: string }) => {
   const { progress, displayProgressModal, minimizedProgressModal, output, error, exporting, exportRunId, metrics, report, actions } =
     useDownloadState();
   const isCompleted = progress === 100 && !!output;
@@ -30,6 +30,55 @@ const DownloadProgressModal = () => {
   const [copied, setCopied] = useState(false);
   const startRef = useRef<number | null>(null);
   const finalRef = useRef<number>(0);
+  const [dlPct, setDlPct] = useState<number | null>(null); // 0-100 while the file streams to disk, null otherwise
+  const [dlDone, setDlDone] = useState(false);
+
+  // Filename from the saved project name (falls back to "video"); sanitized, single .mp4.
+  const dlName = (projectName || "").replace(/\.mp4$/i, "").replace(/[^\w.\- ]+/g, "_").trim() || "video";
+
+  // Stream the export to disk WITH visible progress instead of a silent full fetch. R2 sends a
+  // Content-Length, so we can show "Downloading… X%" — the render being "Done" while the file
+  // quietly downloaded for another ~30s is exactly what read as "it stopped / errored". Direct
+  // R2, no proxy. Falls back to the plain download() on any stream/read error.
+  const downloadWithProgress = async (url: string, filename: string) => {
+    setDlDone(false);
+    setDlPct(0);
+    try {
+      const res = await fetch(url);
+      const total = Number(res.headers.get("content-length")) || 0;
+      const reader = res.body?.getReader();
+      let blob: Blob;
+      if (!reader || !total) {
+        blob = await res.blob();
+      } else {
+        const chunks: BlobPart[] = [];
+        let recv = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            recv += value.length;
+            setDlPct(Math.min(99, Math.round((recv / total) * 100)));
+          }
+        }
+        blob = new Blob(chunks, { type: "video/mp4" });
+      }
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = /\.mp4$/i.test(filename) ? filename : `${filename}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objUrl), 2000);
+      setDlPct(null);
+      setDlDone(true);
+    } catch {
+      setDlPct(null);
+      download(url, filename); // fallback: the original silent path still saves the file
+    }
+  };
 
   useEffect(() => {
     startRef.current = Date.now();
@@ -37,6 +86,8 @@ const DownloadProgressModal = () => {
     setElapsed(0);
     setAutoDownloaded(false);
     setCopied(false);
+    setDlPct(null);
+    setDlDone(false);
   }, [exportRunId]);
 
   useEffect(() => {
@@ -64,12 +115,12 @@ const DownloadProgressModal = () => {
   useEffect(() => {
     if (isCompleted && output?.url && !autoDownloaded) {
       setAutoDownloaded(true);
-      download(output.url, "untitled.mp4");
+      downloadWithProgress(output.url, dlName);
     }
   }, [isCompleted, output]);
 
   const handleDownload = async () => {
-    if (output?.url) await download(output.url, "untitled.mp4");
+    if (output?.url) await downloadWithProgress(output.url, dlName);
   };
 
   const handleCopy = async () => {
@@ -179,10 +230,17 @@ const DownloadProgressModal = () => {
 
           {isCompleted && (
             <>
-              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                <CircleCheckIcon className="h-4 w-4 text-green-500" />
-                Saved to your Downloads{finalRef.current > 0 ? ` · ${fmt(finalRef.current)}` : ""}
-              </div>
+              {dlPct !== null ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Downloading to your device… {dlPct}%
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <CircleCheckIcon className="h-4 w-4 text-green-500" />
+                  Saved to your Downloads{finalRef.current > 0 ? ` · ${fmt(finalRef.current)}` : ""}
+                </div>
+              )}
 
               {shareUrl ? (
                 // The video is already on R2 — show its link directly. No "Download again" (it

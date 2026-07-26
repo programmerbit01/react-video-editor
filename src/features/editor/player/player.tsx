@@ -1,7 +1,74 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Composition from "./composition";
 import { Player as RemotionPlayer, PlayerRef } from "@remotion/player";
 import useStore from "../store/use-store";
+
+// Warm ONE media url in the background: a throwaway hidden preload element downloads it (range
+// requests, NO crossOrigin so it fills the SAME cache entry the no-cors player streams from).
+// Resolves when the browser has buffered enough to play through, or on error/timeout — never
+// rejects, never touches the visible player.
+function warmMedia(src: string): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const isAudio = /\.(mp3|wav|m4a|aac|ogg|opus)(\?|#|$)/i.test(src);
+    const el = document.createElement(isAudio ? "audio" : "video") as HTMLMediaElement;
+    el.muted = true;
+    (el as HTMLVideoElement).playsInline = true;
+    el.preload = "auto";
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { el.removeAttribute("src"); el.load(); } catch {}
+      resolve();
+    };
+    const timer = setTimeout(done, 60000); // cap per item so a slow/dead url can't stall the queue
+    el.addEventListener("canplaythrough", done, { once: true });
+    el.addEventListener("error", done, { once: true });
+    try { el.src = src; el.load(); } catch { done(); }
+  });
+}
+
+// Background media-warmer. When clips land on the timeline (e.g. AI Edit auto-adds a whole
+// generated video), quietly pre-download them so the FIRST playthrough doesn't stall or go
+// silent. Warms ONE at a time — AUDIO first (it's small and its silence reads as "the app is
+// broken"), then video — via a single-worker queue, so it never saturates a slow CDN pipe the
+// way the old blob prefetch did. It NEVER blocks playback: these are throwaway hidden elements
+// filling the shared cache while the player keeps streaming independently. Renders nothing.
+const MediaWarmer = () => {
+  const { trackItemsMap } = useStore();
+  const warmed = useRef<Set<string>>(new Set());
+  const queue = useRef<string[]>([]);
+  const active = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  const srcs = useMemo(() => {
+    const items = Object.values(trackItemsMap || {}) as any[];
+    const pick = (t: string) =>
+      items.filter((i) => i?.type === t && i?.details?.src).map((i) => String(i.details.src));
+    return [...new Set([...pick("audio"), ...pick("video")])]; // audio urls first
+  }, [trackItemsMap]);
+
+  useEffect(() => {
+    for (const s of srcs) {
+      if (!warmed.current.has(s) && !queue.current.includes(s)) queue.current.push(s);
+    }
+    if (active.current || !queue.current.length) return;
+    active.current = true;
+    (async () => {
+      while (queue.current.length && alive.current) {
+        const src = queue.current.shift()!;
+        if (warmed.current.has(src)) continue;
+        warmed.current.add(src);
+        await warmMedia(src);
+      }
+      active.current = false;
+    })();
+  }, [srcs]);
+
+  return null;
+};
 
 const Player = () => {
   const playerRef = useRef<PlayerRef>(null);
@@ -44,6 +111,7 @@ const Player = () => {
 
   return (
     <div className="relative h-full w-full">
+      <MediaWarmer />
       <RemotionPlayer
         ref={playerRef}
         component={Composition}

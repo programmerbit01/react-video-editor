@@ -381,7 +381,7 @@ export default function Navbar({
             <Icons.redo width={20} />
           </Button>
         </div>
-        <DownloadProgressModal />
+        <DownloadProgressModal projectName={title || projectName} />
       </div>
 
       {/* Center: editable title + saved-projects dropdown arrow + save button */}
