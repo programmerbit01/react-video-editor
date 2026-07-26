@@ -1061,8 +1061,24 @@ export default function AiEditPanel() {
     // the arranged clips (an empty timeline earlier would have made them no-ops).
     if (postEffects.length) {
       try {
-        elog(`[AI-Edit arrange] applying ${postEffects.length} post-effect(s): ${postEffects.map((o: any) => o.op).join(", ")}`);
+        // WAIT for the arrange's Ken Burns to fully COMMIT first. designcombo's EDIT_OBJECT is async
+        // and captures the state at dispatch time; firing the transition's EDIT_OBJECT immediately
+        // after the motion's makes it write back a PRE-MOTION base → details.kenBurns is CLOBBERED
+        // (the readback showed MISSING → "only transitions, no zoom"). Poll until the motion lands.
+        let kbOk = false;
+        for (let t = 0; t < 24; t++) {
+          const m = useStore.getState().trackItemsMap || {};
+          if (Object.values(m).some((it: any) => it?.type === "image" && (it as any)?.details?.kenBurns && (it as any).details.kenBurns !== "off")) { kbOk = true; break; }
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        elog(`[POST-EFFECTS] motion committed=${kbOk} → applying: ${postEffects.map((o: any) => o.op).join(", ")}`);
         applyOperations(postEffects);
+        // readback again so the log proves motion survived the transition
+        setTimeout(() => {
+          const rm = useStore.getState().trackItemsMap || {};
+          const imgs = Object.values(rm).filter((it: any) => it?.type === "image");
+          elog(`[POST-EFFECTS READBACK] kenBurns still set on ${imgs.filter((it: any) => it?.details?.kenBurns && it.details.kenBurns !== "off").length}/${imgs.length} images`);
+        }, 400);
       } catch (e) {
         elog("[AI-Edit arrange] ✖ post-effects ERROR:", e);
       }
