@@ -39,6 +39,11 @@ const getToken = () => {
   return new URLSearchParams(window.location.search).get("token") || "";
 };
 
+// The last pipeline (Comic Drama / Faceless) request text — so the arrange can pass the user's own
+// direction ("punchy zoom-ins", "slow holds", "hard cuts") into match_shots, which decides motion +
+// pacing. Without this, only the Vibe preset drives motion; with it, the PROMPT drives it too.
+let _lastPipelineRequest = "";
+
 // Tee AI-Edit logs to the console AND to the vApp (logs/vapp_editor.log) so the whole
 // generate → arrange trace is readable server-side. Batched (flushes every ~500ms).
 let _elogBuf: string[] = [];
@@ -502,6 +507,7 @@ export default function AiEditPanel() {
   const runPrompt = async (text: string) => {
     if (!text.trim() || s.busy) return;
     _work = new AbortController(); // Stop button aborts this
+    if (s.pipeline) _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction
     const ctx = selectionContext(chips);
     s.addMessage({ role: "user", content: text });
     s.addMessage({ role: "assistant", content: "", reasoning: "", thinkingOpen: true });
@@ -918,7 +924,10 @@ export default function AiEditPanel() {
               const shotLines = shots.map((sh, k) => `${k + 1}. id="${sh.id}" desc="${sh.desc || "(unknown)"}"`).join("\n");
               const vst = useAiEditStore.getState();
               const vibeLine = [...VIBES, ...vst.customVibes].find((v) => v.id === vst.vibe)?.style || "";
-              const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free; also give each a MOTION):\n${shotLines}\n\nTotal audio: ${totalMs} ms${vibeLine ? `\n\nSTYLE / VIBE: ${vibeLine}` : ""}`;
+              // The user's own words drive motion + pace too — "punchy zoom-ins", "slow holds",
+              // "hard fast cuts" in the prompt reach match_shots (not just the Vibe preset).
+              const styleLine = [vibeLine, _lastPipelineRequest].filter(Boolean).join(". ").slice(0, 300);
+              const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free; also give each a MOTION):\n${shotLines}\n\nTotal audio: ${totalMs} ms${styleLine ? `\n\nSTYLE / DIRECTION: ${styleLine}` : ""}`;
               elog("[AI-Edit arrange] → match_shots (relevancy)", { described, N });
               const tM = Date.now();
               const outRaw = await llmText("match_shots", input, getToken());
