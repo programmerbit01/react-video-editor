@@ -106,8 +106,11 @@ export function addImage(src: string, name: string, fromMs = 0, durationMs = 500
 
 export function addVideo(src: string, name: string): string {
   const id = nanoid();
+  const prompt = String(name || "").trim();
   dispatch(ADD_VIDEO, {
-    payload: { id, type: "video", name: (name || "video").slice(0, 40), details: { src } },
+    // metadata.prompt survives the reducer (name is normalised away) → the arrange's relevancy match
+    // knows what this VIDEO depicts, same as images. (vApp media.meta also has it as a fallback.)
+    payload: { id, type: "video", name: (prompt || "video").slice(0, 40), details: { src }, ...(prompt ? { metadata: { prompt: prompt.slice(0, 200) } } : {}) },
     options: { resourceId: "main", scaleMode: "fit" },
   });
   return id;
@@ -550,9 +553,10 @@ BUILD IT:
 3) For EACH of the N shots output a generate-image op with a PHOTOREAL prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, semi-realistic, realistic skin, dramatic moody lighting, shallow depth of field, 9:16":
    { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"9:16" }
    PHOTOREAL/cinematic — NOT flat cartoon or comic-ink.
-4) Output ONE generate-audio op = the spoken narration. Write it as ONE short sentence PER shot, IN THE SAME ORDER as the shots (sentence k describes shot k) so each image can be synced to exactly when its line is spoken. ~15 words per shot:
+4) Output ONE generate-audio op = the spoken narration (ONE sentence PER shot, IN THE SAME ORDER — sentence k describes shot k — so each image syncs to WHEN its line is spoken):
    { "op":"generate", "kind":"audio", "text":"…" }
-5) Output ONE arrange op: { "op":"arrange", "target":"all", "totalMs": <N × 4000> }
+   AUDIO IS KING: the final video length = THIS voiceover's length (the editor fits every shot to it). So write ENOUGH words. If the user names a target duration, HIT it at ~2.5 words/second (20s ≈ 50 words, 30s ≈ 75, 45s ≈ 110, 60s ≈ 150), spread across the N shots. If no duration is given, ~12-15 words per shot. NEVER a single short line for a multi-shot video.
+5) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
 
 Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N image ops, then the audio op, then the arrange op… ] }`;
 
@@ -560,11 +564,12 @@ export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a vide
 
 NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut). If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
 
-1) Output ONE generate-audio op = the narration — ONE sentence PER shot, IN THE SAME ORDER as the image shots (sentence k describes shot k) so each visual syncs to exactly when its line is spoken. ~15 words per shot:
+1) Output ONE generate-audio op = the narration (ONE sentence PER shot, IN THE SAME ORDER — sentence k describes shot k — so each visual syncs to WHEN its line is spoken):
    { "op":"generate", "kind":"audio", "text":"…" }
+   AUDIO IS KING: the final video length = THIS voiceover's length (the editor fits every shot to it). So write ENOUGH words. If the user names a target duration, HIT it at ~2.5 words/second (20s ≈ 50 words, 30s ≈ 75, 45s ≈ 110, 60s ≈ 150), spread across the N shots. If no duration is given, ~12-15 words per shot. NEVER a single short line for a multi-shot video.
 2) Output N generate-image ops, one per narration beat, each a SHORT cinematic keyword prompt relevant to what the narration says:
    { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"16:9" }
-3) Output ONE arrange op: { "op":"arrange", "target":"all", "totalMs": <N × 4000> }
+3) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
 
 Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N image ops, the arrange op… ] }`;
 

@@ -23,8 +23,8 @@ export async function GET(request: Request) {
       clearTimeout(kill);
     }
     const d = await r.json().catch(() => ({}));
-    return NextResponse.json({ ok: true, prompt: String(d?.prompt || "").trim() });
+    return NextResponse.json({ ok: true, prompt: String(d?.prompt || "").trim(), duration_ms: Number(d?.duration_ms) || 0 });
   } catch {
-    return NextResponse.json({ ok: true, prompt: "" }); // fail-open — arrange still works without it
+    return NextResponse.json({ ok: true, prompt: "", duration_ms: 0 }); // fail-open — arrange still works without it
   }
 }

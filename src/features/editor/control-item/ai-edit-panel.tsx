@@ -555,20 +555,28 @@ export default function AiEditPanel() {
       } else {
         let newId = "";
         if (label === "audio") {
-          // Read the REAL voiceover length so the clip isn't the hardcoded 5s — and so the
-          // images can be arranged to MATCH it (no gap / no playback jump). Fallback 5s.
-          const durMs = await new Promise<number>((resolve) => {
-            try {
-              const a = document.createElement("audio");
-              a.preload = "metadata";
-              a.onloadedmetadata = () => resolve(Math.round((a.duration || 0) * 1000) || 0);
-              a.onerror = () => resolve(0);
-              setTimeout(() => resolve(0), 8000);
-              a.src = url;
-            } catch {
-              resolve(0);
-            }
-          });
+          // AUDIO IS KING → the voiceover clip must be its REAL length (not a hardcoded 5s) so the
+          // images arrange to MATCH it. Prefer the vApp record's meta.duration (server, no CORS, no
+          // download); else the browser <audio> probe; else 5s. This is the authoritative length.
+          let durMs = 0;
+          try {
+            const mr = await fetch(withEditorBase(`/api/media-meta?url=${encodeURIComponent(url)}&token=${encodeURIComponent(getToken())}`));
+            durMs = Number((await mr.json().catch(() => ({})))?.duration_ms) || 0;
+          } catch { /* fall through to browser probe */ }
+          if (durMs < 500) {
+            durMs = await new Promise<number>((resolve) => {
+              try {
+                const a = document.createElement("audio");
+                a.preload = "metadata";
+                a.onloadedmetadata = () => resolve(Math.round((a.duration || 0) * 1000) || 0);
+                a.onerror = () => resolve(0);
+                setTimeout(() => resolve(0), 8000);
+                a.src = url;
+              } catch {
+                resolve(0);
+              }
+            });
+          }
           newId = addAudio(url, g.text || "voiceover", 0, durMs > 500 ? durMs : 5000);
         } else if (label === "image") newId = addImage(url, g.prompt || g.text || "image");
         else if (label === "video") newId = addVideo(url, g.prompt || g.text || "video");
@@ -609,15 +617,22 @@ export default function AiEditPanel() {
     // actually generated some (a pipeline build); when arranging clips that ALREADY exist, skip the
     // wait entirely (there is nothing pending → no 5s stall).
     let newVisual: string[] = [];
+    // AUDIO IS KING: if this build generated a voiceover, the arrange MUST wait for it to land on the
+    // timeline (ADD_AUDIO dispatches async too) — else the arrange sees "no voiceover", falls to an
+    // even N×4s split, and the video length has nothing to do with the audio. Wait for BOTH.
+    const wantAudio = gens.some((g) => g.kind === "audio");
     if (gens.length) {
       s.updateAt(i, { genStatus: "🎬 Arranging into one video…" });
-      for (let t = 0; t < 25; t++) {
+      for (let t = 0; t < 40; t++) {
         const map = useStore.getState().trackItemsMap || {};
         const order = useStore.getState().trackItemIds || Object.keys(map);
         newVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio" && !beforeVisual.has(id));
-        if (newVisual.length >= wantVisual && newVisual.length) break;
+        const audioLanded = !wantAudio || Object.values(map).some((it: any) => it?.type === "audio");
+        if (newVisual.length >= wantVisual && newVisual.length && audioLanded) break;
         await new Promise((r) => setTimeout(r, 200));
       }
+      if (wantAudio && !Object.values(useStore.getState().trackItemsMap || {}).some((it: any) => it?.type === "audio"))
+        console.warn("[AI-Edit arrange] ⚠️ voiceover was generated but never landed on the timeline (addAudio failed?)");
     }
     const map = useStore.getState().trackItemsMap || {};
     const audio: any = Object.values(map).find((it: any) => it?.type === "audio");
@@ -686,7 +701,11 @@ export default function AiEditPanel() {
                 } catch { /* cache best-effort */ }
               }
             }
-            const totalMs = Math.round((segs.length ? segs[segs.length - 1].end : 0) * 1000) || audioMs || N * 4000;
+            // AUDIO IS KING: span the FULL voiceover. Use the larger of the audio clip's real length
+            // (from meta.duration) and the last spoken word, so the video never ends before the audio
+            // (trailing music/silence stays covered) — within the ~2-4% the durations naturally differ.
+            const speechEnd = Math.round((segs.length ? segs[segs.length - 1].end : 0) * 1000);
+            const totalMs = Math.max(speechEnd, audioMs) || N * 4000;
             const said = (fromMs: number, toMs: number) =>
               segs.filter((sg: any) => sg.end * 1000 > fromMs && sg.start * 1000 < toMs).map((sg: any) => sg.text).join(" ").trim();
             // STEP 2 — RELEVANCY (the main win). Each image's description → the LLM `match_shots`

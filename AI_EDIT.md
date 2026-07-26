@@ -32,8 +32,11 @@ automated MCP pipeline will later drive end‑to‑end.
 | **Prompt optimization** — image/video generate prompts auto‑rewritten model‑friendly via `/vapp/llm` (`optimize_image`/`optimize_video`) before generating; ✨ shown, fail‑open, `AI_GENERATE_OPTIMIZE=0` to disable | ✅ |
 | **Stock search** (Pexels) image/video | ✅ |
 | **Image edit** (AI img2img regenerate — "make it red") | ✅ |
-| **Smart arrange** — importance weighting + build a whole video from one prompt (`target:"all"`) | ✅ |
+| **Smart arrange** — the EXECUTOR owns timing (never the LLM); build a whole video from one prompt (`target:"all"`) | ✅ |
+| **Content-aware RELEVANCY** — each shot matched to the narration MOMENT it depicts + reordered by relevance (LLM `match_shots`, using each image's prompt from `metadata.prompt`/vApp `media.meta`) | ✅ |
 | **Exact script‑sync** — transcribe voiceover → place each image WHEN it's spoken | ✅ |
+| **Category rows** — arrange groups images→one row, videos→another (above audio); captions stay glued under the audio (arrange only touches image/video) | ✅ |
+| **Audio is king** — video length = the voiceover length; arrange waits for the audio to land + spans its real `meta.duration`; pipelines write the script to the requested seconds (~2.5 words/s) | ✅ |
 | **Context‑awareness** — knows the narration topic (generates relevant media, not literal words) | ✅ |
 | History + **inline revert**, **Auto/Ask** mode, streaming + thinking toggles, gen previews | ✅ |
 | Transcribe pipeline (word/segment highlight) + **persists across refresh** | ✅ |
