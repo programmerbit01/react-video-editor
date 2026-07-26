@@ -87,7 +87,7 @@ function translateVappLlmSse(upstreamBody: ReadableStream<Uint8Array>): Readable
 // (the panel sends OPS_SYSTEM_PROMPT as the system message + extractOps parses the reply),
 // so we pass that system prompt via overrides.system (overrides win over the config row)
 // and hand the model's text straight back. No change to operations.ts.
-async function postUnified(base: string, token: string, stream: boolean, body: any) {
+async function postUnified(base: string, token: string, stream: boolean, body: any, signal?: AbortSignal) {
   const messages: any[] = Array.isArray(body.messages) ? body.messages : [];
   const system = messages.find((m) => m?.role === "system")?.content || "";
   const input = messages
@@ -117,6 +117,7 @@ async function postUnified(base: string, token: string, stream: boolean, body: a
     method: "POST",
     headers,
     body: JSON.stringify(reqBody),
+    signal, // client Stop → abort the vApp LLM stream
   });
 
   if (stream) {
@@ -147,7 +148,7 @@ async function postUnified(base: string, token: string, stream: boolean, body: a
 }
 
 // Legacy path (AI_EDIT_USE_VAPP_LLM=0): raw vApp POST /v1/chat/completions.
-async function postLegacy(base: string, token: string, stream: boolean, body: any) {
+async function postLegacy(base: string, token: string, stream: boolean, body: any, signal?: AbortSignal) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -165,6 +166,7 @@ async function postLegacy(base: string, token: string, stream: boolean, body: an
     method: "POST",
     headers,
     body: JSON.stringify(upstreamBody),
+    signal, // client Stop → abort the vApp LLM stream
   });
 
   if (stream) {
@@ -201,9 +203,10 @@ export async function POST(request: Request) {
     const base = DEFAULT_VAPP_BASE.replace(/\/+$/, "");
     const token = String(body.token || "").replace(/^Bearer\s+/i, "").trim();
     const stream = body.stream === true;
+    // Forward the client's abort (Stop button) to the vApp so the LLM stream is actually cut server-side.
     return USE_VAPP_LLM
-      ? await postUnified(base, token, stream, body)
-      : await postLegacy(base, token, stream, body);
+      ? await postUnified(base, token, stream, body, request.signal)
+      : await postLegacy(base, token, stream, body, request.signal);
   } catch (error) {
     console.error("[ai-edit]", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

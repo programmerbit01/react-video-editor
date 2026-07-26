@@ -66,16 +66,23 @@ function elog(...args: any[]) {
   }, 500);
 }
 
+// Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
+// SSE fetch closes → the SERVER stops the LLM stream too (a TRUE stop). Generation jobs are NOT
+// stopped — they run in parallel on the vApp queue (good) and can't be pulled back anyway.
+let _work: AbortController | null = null;
+
 let _aiPositionSet = false;
 
 async function runChat(
   payload: Record<string, any>,
-  onDelta: (p: { content: string; reasoning: string }) => void
+  onDelta: (p: { content: string; reasoning: string }) => void,
+  signal?: AbortSignal
 ): Promise<{ content: string; reasoning: string }> {
   const res = await fetch(withEditorBase("/api/ai-edit"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal, // Stop → aborts this fetch → the SSE closes → the server stops the LLM stream
   });
   const ctype = res.headers.get("content-type") || "";
   if (!payload.stream || ctype.includes("application/json")) {
@@ -443,6 +450,7 @@ export default function AiEditPanel() {
 
   const runPrompt = async (text: string) => {
     if (!text.trim() || s.busy) return;
+    _work = new AbortController(); // Stop button aborts this
     const ctx = selectionContext(chips);
     s.addMessage({ role: "user", content: text });
     s.addMessage({ role: "assistant", content: "", reasoning: "", thinkingOpen: true });
@@ -509,7 +517,7 @@ export default function AiEditPanel() {
       const { content, reasoning } = await runChat(payload, (p) => {
         if (p.content && !firstContentAt) firstContentAt = Date.now();
         s.updateLast({ content: p.content, reasoning: p.reasoning });
-      });
+      }, _work?.signal);
       const reasoningMs = reasoning ? (firstContentAt || Date.now()) - t0 : undefined;
       const env = extractOps(content);
       if (env && env.operations?.length) {
@@ -537,10 +545,19 @@ export default function AiEditPanel() {
         });
       }
     } catch (e: any) {
-      s.updateLast({ content: "⚠️ " + (e?.message || "request failed"), thinkingOpen: false });
+      const stopped = e?.name === "AbortError" || _work?.signal.aborted;
+      s.updateLast({ content: stopped ? "⏹ Stopped." : "⚠️ " + (e?.message || "request failed"), thinkingOpen: false });
     } finally {
       s.setBusy(false);
     }
+  };
+
+  // TRUE stop: abort the in-flight LLM request → its SSE fetch closes → the server stops streaming.
+  // (Generation jobs already queued keep running in parallel — by design.)
+  const stopWork = () => {
+    _work?.abort();
+    s.setBusy(false);
+    elog("[AI-Edit] ⏹ user stopped the LLM request");
   };
 
   // One generate op, run in the BACKGROUND (not awaited) so the chat stays free.
@@ -1582,12 +1599,12 @@ export default function AiEditPanel() {
                     ))}
                   </select>
                   <button
-                    onClick={send}
-                    disabled={s.busy || !s.input.trim()}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-600 text-white transition hover:bg-sky-500 disabled:opacity-40"
-                    title="Send"
+                    onClick={s.busy ? stopWork : send}
+                    disabled={!s.busy && !s.input.trim()}
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white transition disabled:opacity-40 ${s.busy ? "bg-red-600 hover:bg-red-500" : "bg-sky-600 hover:bg-sky-500"}`}
+                    title={s.busy ? "Stop the AI" : "Send"}
                   >
-                    {s.busy ? "…" : "↑"}
+                    {s.busy ? "■" : "↑"}
                   </button>
                 </div>
               </div>
