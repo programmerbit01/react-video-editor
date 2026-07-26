@@ -645,7 +645,7 @@ export default function AiEditPanel() {
 
   // Run generations (background), THEN any arrange — generated items only get ids
   // once created, so an "arrange all" must wait until they're on the timeline.
-  const runBuild = async (i: number, gens: any[], arranges: any[]) => {
+  const runBuild = async (i: number, gens: any[], arranges: any[], postEffects: any[] = []) => {
     // Snapshot the visuals that exist BEFORE we generate, so we can arrange ONLY the new ones.
     const mapBefore = useStore.getState().trackItemsMap || {};
     const beforeVisual = new Set(Object.keys(mapBefore).filter((id) => (mapBefore[id] as any)?.type !== "audio"));
@@ -857,6 +857,16 @@ export default function AiEditPanel() {
     } else if (newVisual.length) {
       s.updateAt(i, { genStatus: `✓ Added ${newVisual.length} clip${newVisual.length > 1 ? "s" : ""} — say "arrange into a video" to sequence them.` });
     }
+    // POST-EFFECTS (transitions / target:"all" edits) — run AFTER the shots are placed, so they hit
+    // the arranged clips (an empty timeline earlier would have made them no-ops).
+    if (postEffects.length) {
+      try {
+        elog(`[AI-Edit arrange] applying ${postEffects.length} post-effect(s): ${postEffects.map((o: any) => o.op).join(", ")}`);
+        applyOperations(postEffects);
+      } catch (e) {
+        elog("[AI-Edit arrange] ✖ post-effects ERROR:", e);
+      }
+    }
   };
 
   // Captions — ensure a transcript (transcribe if we don't have one), then lay a
@@ -1042,9 +1052,17 @@ export default function AiEditPanel() {
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");
 
+    // POST-EFFECTS: transitions + "target:all/selected" edits target the shots the build produces, so
+    // when this message also generates/arranges, they must run AFTER the arrange (not on an empty
+    // timeline). A plain edit ("add a transition to these clips") has no build → applies immediately.
+    const willBuild = gens.length || arranges.length;
+    const isPostEffect = (o: any) => o.op === "transition" || (o.op === "edit" && (o.target === "all" || o.target === "selected"));
+    const postEffects = willBuild ? sync.filter(isPostEffect) : [];
+    const immediateSync = willBuild ? sync.filter((o: any) => !isPostEffect(o)) : sync;
+
     // sync ops apply immediately
-    const snapshot = captureSnapshot(sync, trackItemsMap);
-    const { addedIds } = applyOperations(sync);
+    const snapshot = captureSnapshot(immediateSync, trackItemsMap);
+    const { addedIds } = applyOperations(immediateSync);
     for (const id of addedIds) snapshot[id] = null;
 
     const now = new Date();
@@ -1052,8 +1070,8 @@ export default function AiEditPanel() {
     s.updateAt(i, { applied: true, snapshot, historyId });
     s.addHistory({ id: historyId, time: now.toLocaleTimeString(), summary: m.content || "Applied edit", ops: m.ops, snapshot });
 
-    // generation (+ deferred arrange) + captions run in the background — chat stays free
-    if (gens.length || arranges.length) runBuild(i, gens, arranges);
+    // generation (+ deferred arrange + post-effects) + captions run in the background — chat stays free
+    if (willBuild) runBuild(i, gens, arranges, postEffects);
     if (captionOps.length) runCaptions(i, captionOps);
     for (const d of directs) runDirect(i, d);
   };

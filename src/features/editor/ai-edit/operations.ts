@@ -19,7 +19,7 @@ import { getStateManagerRef } from "../utils/state-manager-ref";
 import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate";
+  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate";
   itemId?: string;
   itemIds?: string[];
   durationMs?: number;
@@ -252,29 +252,60 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
       continue;
     }
 
-    if (op.op === "edit" && op.itemId) {
+    // A short fade IN+OUT on each target clip = a smooth transition between cuts (editable
+    // animations — no fragile cross-clip transition objects). target:"all" → every visual.
+    if (op.op === "transition") {
+      const st = sm?.getState?.();
+      const map = st?.trackItemsMap || {};
+      const ids = resolveTargets(op, st).filter((id) => map[id] && (map[id].type === "image" || map[id].type === "video"));
+      if (ids.length) {
+        const anim = { in: fadeComposition(0, 1, "fadeIn"), out: fadeComposition(1, 0, "fadeOut") };
+        dispatch(EDIT_OBJECT, { payload: Object.fromEntries(ids.map((id) => [id, { animations: anim }])) });
+      }
+      continue;
+    }
+
+    // EDIT — kenBurns / opacity / volume / speed / text / duration. Now targets ONE item
+    // (op.itemId), MANY (op.itemIds), or EVERY visual (op.target:"all") in a SINGLE op — so
+    // "add Ken Burns to every clip" applies to ALL of them, not just the last few.
+    if (op.op === "edit" && (op.itemId || op.itemIds?.length || op.target)) {
+      const st = sm?.getState?.();
+      const map = st?.trackItemsMap || {};
+      const ids = resolveTargets(op, st).filter((id) => map[id]);
+      if (!ids.length) continue;
       const editPayload: Record<string, any> = {};
       if (op.details && Object.keys(op.details).length) editPayload.details = op.details;
       if (op.playbackRate != null) editPayload.playbackRate = op.playbackRate;
       if (Object.keys(editPayload).length) {
-        dispatch(EDIT_OBJECT, { payload: { [op.itemId]: editPayload } });
+        dispatch(EDIT_OBJECT, { payload: Object.fromEntries(ids.map((id) => [id, editPayload])) });
       }
       if (op.durationMs != null && sm) {
-        const s = sm.getState?.();
-        const item = s?.trackItemsMap?.[op.itemId];
-        if (item) {
-          const from = item.display?.from ?? 0;
-          const to = from + Math.max(100, op.durationMs);
-          const map = {
-            ...s.trackItemsMap,
-            [op.itemId]: { ...item, display: { ...(item.display || {}), from, to } },
-          };
-          sm.updateState({ trackItemsMap: map }, { updateHistory: true });
+        const m = { ...map };
+        for (const id of ids) {
+          const item = m[id];
+          if (item) {
+            const from = item.display?.from ?? 0;
+            m[id] = { ...item, display: { ...(item.display || {}), from, to: from + Math.max(100, op.durationMs) } };
+          }
         }
+        sm.updateState({ trackItemsMap: m }, { updateHistory: true });
       }
     }
   }
   return { addedIds };
+}
+
+// Which items an op targets: explicit itemId / itemIds, or target:"all" (every image+video) /
+// target:"selected" (the current timeline selection). Used by edit + transition so ONE op can hit
+// every clip.
+function resolveTargets(op: AiEditOp, st: any): string[] {
+  const map = st?.trackItemsMap || {};
+  const isVisual = (id: string) => { const ty = map[id]?.type; return ty === "image" || ty === "video"; };
+  if (op.target === "all") return Object.keys(map).filter(isVisual);
+  if (op.target === "selected") return (st?.activeIds || []).filter((id: string) => map[id]);
+  if (op.itemIds?.length) return op.itemIds.filter((id: string) => map[id]);
+  if (op.itemId) return [op.itemId];
+  return [];
 }
 
 // ── selection helpers ─────────────────────────────────────────────────────────
@@ -377,6 +408,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "delete") return `Delete  (${(op.itemIds || [op.itemId]).filter(Boolean).join(", ")})`;
   if (op.op === "add") return `Add ${op.type || "text"}: "${op.text || ""}"`;
   if (op.op === "fade") return `Fade ${op.mode || "both"}  (${op.itemId})`;
+  if (op.op === "transition") return `Transitions (fade)${op.target === "all" ? " on all clips" : op.itemIds?.length ? ` ×${op.itemIds.length}` : ""}`;
   if (op.op === "captions") return `Add word-synced captions`;
   if (op.op === "direct") return `🎬 Make a video: "${(op.topic || op.prompt || "").slice(0, 40)}"${op.durationSec ? ` (~${op.durationSec}s)` : ""}`;
   if (op.op === "arrange") return `Arrange ${op.items?.length || op.itemIds?.length || 0} items${op.totalMs ? ` over ${(op.totalMs / 1000).toFixed(1)}s` : op.items?.length ? " (smart timing)" : ""}`;
@@ -385,7 +417,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "animate") return `🎞️ Animate image → video: "${(op.prompt || "subtle motion").slice(0, 40)}"  (${op.itemId})`;
   if (op.op === "generate") return `Generate ${op.kind || "audio"}: "${(op.text || op.prompt || "").slice(0, 40)}"`;
   if (op.op === "edit") {
-    const id = op.itemId;
+    const id = op.target === "all" ? "all clips" : op.target === "selected" ? "selection" : op.itemIds?.length ? `${op.itemIds.length} clips` : op.itemId;
     const d = op.details || {};
     if (op.durationMs != null) return `Set duration → ${op.durationMs / 1000}s  (${id})`;
     if (d.kenBurns) return `Motion → ${KB_LABEL[d.kenBurns] || d.kenBurns}  (${id})`;
@@ -514,6 +546,9 @@ Supported operations:
     { "op":"edit", "itemId":"<id>", "details": { "kenBurns": "zoomIn", "kenBurnsIntensity": 12 } }
     kenBurns is ONE of: "zoomIn","zoomOut","panLeft","panRight","panUp","panDown","zoomInPanLeft","zoomInPanRight".
     kenBurnsIntensity is 1-40 (subtle→strong; ~12 for a noticeable zoom). To remove motion use "off".
+- APPLY TO EVERY CLIP AT ONCE — for "add zoom / Ken Burns / a fade to ALL / every clip", emit ONE op
+  with "target":"all" (NEVER one op per clip — that skips clips): { "op":"edit", "target":"all", "details": { "kenBurns": "zoomIn", "kenBurnsIntensity": 12 } }. "target":"selected" = the current selection; or "itemIds":[…] for a specific set. Works for any edit (kenBurns, opacity, speed, durationMs).
+- Transition (a smooth fade between cuts): { "op":"transition", "target":"all" }  (or "itemId"/"itemIds"). Use for "add transitions / smooth cuts / crossfade". For a HARD-cut / fast style, do NOT add transitions.
 - Fade in / out:  { "op":"fade", "itemId":"<id>", "mode":"both" }   (mode: "in" | "out" | "both")
 - Duration (seconds -> ms): { "op":"edit", "itemId":"<id>", "durationMs": 3000 }
 - Opacity 0-100:  { "op":"edit", "itemId":"<id>", "details": { "opacity": 50 } }
@@ -556,15 +591,18 @@ NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3
 BUILD IT:
 1) Decide the MAIN CHARACTER's look ONCE — face, hair, age, outfit, colour — in ~12 words. Repeat this EXACT description in EVERY shot so the same person appears throughout (change only the pose/emotion/scene).
 2) Plan N SHOTS, each one dramatic beat, ordered start → cliffhanger.
-3) For EACH of the N shots output a generate-image op with a PHOTOREAL prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, semi-realistic, realistic skin, dramatic moody lighting, shallow depth of field, 9:16":
-   { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"9:16" }
+3) For EACH of the N shots output a generate op with a PHOTOREAL prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, semi-realistic, realistic skin, dramatic moody lighting, shallow depth of field, 9:16":
+   image shot: { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"9:16" }
    PHOTOREAL/cinematic — NOT flat cartoon or comic-ink.
+   VIDEO SHOTS: if the user asks for some video clips (e.g. "2 videos of 4s, 6s"), make those shots
+   { "op":"generate", "kind":"video", "prompt":"…describe the MOTION/action…", "duration":<their seconds>, "aspect_ratio":"9:16" } and SPREAD them at the most DYNAMIC/action beats (a chase, a reveal, a turn) INTERSPERSED among the image shots — do NOT put all the videos at the end. The narration sentence order still = the shot order.
 4) Output ONE generate-audio op = the spoken narration (ONE sentence PER shot, IN THE SAME ORDER — sentence k describes shot k — so each image syncs to WHEN its line is spoken):
    { "op":"generate", "kind":"audio", "text":"…" }
    AUDIO IS KING: the final video length = THIS voiceover's length (the editor fits every shot to it). So write ENOUGH words. If the user names a target duration, HIT it at ~2.5 words/second (20s ≈ 50 words, 30s ≈ 75, 45s ≈ 110, 60s ≈ 150), spread across the N shots. If no duration is given, ~12-15 words per shot. NEVER a single short line for a multi-shot video.
 5) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
+6) STYLE + EFFECTS = the user's call. Honor any STYLE they name (noir, fast-paced, romantic, gritty…) in the prompts AND pacing, the same way you honor shot count + duration. The arrange already adds Ken Burns motion; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for a HARD-cut / fast style add nothing. Only add effect ops the style calls for — never clutter.
 
-Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N image ops, then the audio op, then the arrange op… ] }`;
+Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N shot ops (image/video interspersed), the audio op, the arrange op, then any effect op… ] }`;
 
 export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a video editor. The user gives a topic. Turn it into a short faceless documentary as a JSON list of operations the editor applies to the timeline.
 
@@ -573,11 +611,14 @@ NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no n
 1) Output ONE generate-audio op = the narration (ONE sentence PER shot, IN THE SAME ORDER — sentence k describes shot k — so each visual syncs to WHEN its line is spoken):
    { "op":"generate", "kind":"audio", "text":"…" }
    AUDIO IS KING: the final video length = THIS voiceover's length (the editor fits every shot to it). So write ENOUGH words. If the user names a target duration, HIT it at ~2.5 words/second (20s ≈ 50 words, 30s ≈ 75, 45s ≈ 110, 60s ≈ 150), spread across the N shots. If no duration is given, ~12-15 words per shot. NEVER a single short line for a multi-shot video.
-2) Output N generate-image ops, one per narration beat, each a SHORT cinematic keyword prompt relevant to what the narration says:
-   { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"16:9" }
+2) Output N generate ops, one per narration beat, each RELEVANT to what that line says:
+   image shot: { "op":"generate", "kind":"image", "prompt":"…SHORT cinematic keywords…", "aspect_ratio":"16:9" }
+   VIDEO SHOTS: if the user asks for some video clips (e.g. "2 videos of 5s"), make those shots
+   { "op":"generate", "kind":"video", "prompt":"…describe the MOTION…", "duration":<their seconds>, "aspect_ratio":"16:9" } and SPREAD them at the most dynamic beats INTERSPERSED among the images — do NOT put all videos at the end.
 3) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
+4) STYLE + EFFECTS = the user's call. Honor any STYLE they name (documentary, punchy, dark…) in the prompts + pacing. The arrange adds Ken Burns; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for hard/fast cuts add nothing.
 
-Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N image ops, the arrange op… ] }`;
+Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N shot ops (image/video interspersed), the arrange op, then any effect op… ] }`;
 
 // Shown in the AI-Edit composer dropdown (top → bottom).
 export const PIPELINES: { id: string; label: string }[] = [
