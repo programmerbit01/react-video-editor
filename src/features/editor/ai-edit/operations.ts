@@ -132,6 +132,22 @@ export function setSelection(ids: string[]): void {
   dispatch(LAYER_SELECTION, { payload: { activeIds: ids } });
 }
 
+// Apply DIFFERENT Ken Burns per item in ONE EDIT_OBJECT dispatch. N separate edit dispatches race in
+// designcombo's async reducer and only the LAST sticks (why the drama arrange's motion landed on just
+// the last image); one dispatch with a per-id payload applies to ALL. Returns the {id:kenBurns} map
+// applied (for logging).
+export function applyMotionBatch(items: { id: string; kenBurns: string; intensity?: number }[]): Record<string, string> {
+  const payload: Record<string, any> = {};
+  const applied: Record<string, string> = {};
+  for (const it of items) {
+    if (!it?.id) continue;
+    payload[it.id] = { details: { kenBurns: it.kenBurns, kenBurnsIntensity: it.intensity ?? 18 } };
+    applied[it.id] = it.kenBurns;
+  }
+  if (Object.keys(payload).length) dispatch(EDIT_OBJECT, { payload });
+  return applied;
+}
+
 // Apply SYNC ops (everything except `generate`, which is async and handled by the
 // panel). Returns ids created by add ops so the caller can record them for revert.
 export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {

@@ -8,6 +8,7 @@ import useCaptionTranscribeStore from "../captions/transcribe-store";
 import { addCaptions } from "../captions/builder";
 import {
   applyOperations,
+  applyMotionBatch,
   addAudio,
   addImage,
   addVideo,
@@ -254,6 +255,23 @@ function serializedAdd(label: string, doAdd: () => string): Promise<string> {
   });
   _addChain = run.then(() => {}, () => {});
   return run;
+}
+
+// DEDUP a double-fired build (autoApply + a stray Apply / re-render) — a 2nd runBuild re-transcribes
+// and re-arranges, clobbering the good result (the log showed a 2nd transcribe timing out 100s after
+// the 1st finished). Same build signature within 12s → skip.
+let _lastBuildKey = "";
+let _lastBuildAt = 0;
+function buildIsDuplicate(gens: any[], arranges: any[]): boolean {
+  const key = JSON.stringify({
+    g: (gens || []).map((g) => `${g.op}:${g.kind || ""}:${String(g.prompt || g.text || g.query || "").slice(0, 24)}`),
+    a: (arranges || []).length,
+  });
+  const now = Date.now();
+  if (key === _lastBuildKey && now - _lastBuildAt < 12000) return true;
+  _lastBuildKey = key;
+  _lastBuildAt = now;
+  return false;
 }
 
 // The STT sometimes returns ONE coarse segment for the whole voiceover (e.g. continuous speech).
@@ -672,6 +690,11 @@ export default function AiEditPanel() {
   // Run generations (background), THEN any arrange — generated items only get ids
   // once created, so an "arrange all" must wait until they're on the timeline.
   const runBuild = async (i: number, gens: any[], arranges: any[], postEffects: any[] = []) => {
+    if (buildIsDuplicate(gens, arranges)) {
+      elog("[AI-Edit] runBuild DEDUP — identical build within 12s, skipping the 2nd (prevents clobber)");
+      return;
+    }
+    elog(`[AI-Edit] runBuild ▶ ${gens.length} gen(s) [${gens.map((g: any) => g.kind || g.op).join(",")}], ${arranges.length} arrange, ${postEffects.length} post-effect`);
     // Snapshot the visuals that exist BEFORE we generate, so we can arrange ONLY the new ones.
     const mapBefore = useStore.getState().trackItemsMap || {};
     const beforeVisual = new Set(Object.keys(mapBefore).filter((id) => (mapBefore[id] as any)?.type !== "audio"));
@@ -871,12 +894,13 @@ export default function AiEditPanel() {
           // video row (the executor moves them onto one track — see operations.ts arrange handler).
           elog("[AI-Edit arrange] applying arrange (single track, gap-free)");
           applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
-          // MOTION: alternating Ken Burns on the IMAGE shots (videos already move on their own) —
-          // clearly visible so a still montage feels alive.
+          // MOTION: alternating Ken Burns on the IMAGE shots (videos already move on their own), in ONE
+          // batched dispatch — N separate edit dispatches race and only the LAST sticks (that's why
+          // motion landed on just the last image before). Detailed log = which clip got which motion.
           const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
           const imgShots = targetVisuals.filter((id) => (map[id] as any)?.type === "image");
-          applyOperations(imgShots.map((id, k) => ({ op: "edit", itemId: id, details: { kenBurns: KB[k % KB.length], kenBurnsIntensity: 20 } })));
-          elog(`[AI-Edit arrange] ✅ DONE — arrange + Ken Burns on ${imgShots.length} image shot(s)`);
+          const applied = applyMotionBatch(imgShots.map((id, k) => ({ id, kenBurns: KB[k % KB.length], intensity: 20 })));
+          elog(`[AI-Edit arrange] ✅ DONE — Ken Burns on ${imgShots.length} image shot(s):`, Object.fromEntries(Object.entries(applied).map(([id, kb]) => [id.slice(0, 6), kb])));
         } catch (e) {
           elog("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
           note = note || "hit an error placing the clips on the timeline";
@@ -1049,16 +1073,11 @@ export default function AiEditPanel() {
       }
       snap();
 
-      // 6. Arrange to exact beat windows + subtle alternating Ken Burns
+      // 6. Arrange to exact beat windows + alternating Ken Burns (ONE batched dispatch, else N
+      //    dispatches race and only the last sticks).
       if (items.length) {
         applyOperations([{ op: "arrange", items }] as any);
-        applyOperations(
-          items.map((it, k) => ({
-            op: "edit",
-            itemId: it.itemId,
-            details: { kenBurns: k % 2 ? "zoomOut" : "zoomIn", kenBurnsIntensity: 16 },
-          })) as any
-        );
+        applyMotionBatch(items.map((it, k) => ({ id: it.itemId, kenBurns: k % 2 ? "zoomOut" : "zoomIn", intensity: 18 })));
       }
 
       // 7. Captions
@@ -1085,7 +1104,8 @@ export default function AiEditPanel() {
     // runBuilds re-transcribe + re-arrange and CLOBBER each other (the log showed a 2nd arrange whose
     // transcribe timed out after the 1st already finished). Claim the message synchronously; once
     // applied, never again.
-    if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger)"); return; }
+    elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
+    if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
     const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "arrange", "captions", "direct"].includes(o.op));
     const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate"].includes(o.op));
@@ -1103,6 +1123,8 @@ export default function AiEditPanel() {
 
     // sync ops apply immediately
     const snapshot = captureSnapshot(immediateSync, trackItemsMap);
+    if (immediateSync.length)
+      elog(`[AI-Edit] applying ${immediateSync.length} edit(s):`, immediateSync.map((o: any) => `${o.op}${o.target ? `→${o.target}` : o.itemIds?.length ? `→${o.itemIds.length} items` : o.itemId ? `→${String(o.itemId).slice(0, 6)}` : ""}${o.details?.kenBurns ? ` kb=${o.details.kenBurns}` : ""}${o.details?.opacity != null ? ` opacity=${o.details.opacity}` : ""}`));
     const { addedIds } = applyOperations(immediateSync);
     for (const id of addedIds) snapshot[id] = null;
 
