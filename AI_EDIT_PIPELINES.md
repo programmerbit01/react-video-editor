@@ -24,11 +24,13 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
   pipeline swaps the system prompt; the LLM emits `generate`/`arrange` ops that build on the live
   timeline. (`operations.ts` prompts, `store` `pipeline` state, `ai-edit-panel.tsx` dropdown.)
 - **Smart `arrange` core op** (works in Edit mode too): targets the just-generated shots OR, when
-  the user says "arrange" over existing clips, ALL the visuals. **Transcribes the voiceover FIRST**
-  (waits for text+timestamps; reuses the Captions-tab transcript if present; 120s Promise.race cap
-  so it can never hang), spreads shots **evenly across the voiceover, cuts snapped to speech
-  boundaries** (robust for short audio — no bunching), applies **Ken Burns motion**, and ends with
-  a **short plain-English report**. Builds the beat model.
+  the user says "arrange" over existing clips, ALL the visuals. **Timing is planned SERVER-SIDE** —
+  the arrange calls `/api/beat-plan` → vApp `/vapp/beat_plan`, which **REUSES VidRush's proven
+  transcribe → `beat_plan` chain** and returns EXACTLY N contiguous, **content-aware, speech-aligned**
+  windows (each carrying the narration spoken during it). The old client-side transcribe + even-spread
+  was fragile (could hang, dumb even split) — deleted in favour of this reuse. Then applies **Ken
+  Burns motion** and ends with a **short plain-English report**. Builds the beat model (each shot's
+  slot + its narration) so animate / effects / lip-sync stay context-aware.
 - **`animate` op** — turn a selected image into a VIDEO (image-to-video / LTX i2v), keeping it in
   the SAME timeline slot. The "cheap images first → upgrade selected shots to video" flow.
 - **i2v support** in `/api/ai-generate` (video accepts `image_url`).
@@ -45,6 +47,8 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
 - `src/features/editor/store/use-ai-edit-store.ts` — `pipeline` state + `beats` (the context) on each message.
 - `src/app/api/ai-generate/route.ts` — i2v; audio model `eleven-multilingual-v2`.
 - `src/app/api/ai-edit/route.ts` — max_tokens.
+- `src/app/api/beat-plan/route.ts` — thin proxy → vApp `/vapp/beat_plan` (context-aware shot timing;
+  reuses VidRush's transcribe → beat_plan; server-side so the editor never transcribes on the client).
 
 ## Roadmap (each = a core op, tested in Edit, then reused by pipelines)
 - **Category-wise tracks** — visuals sequential (image/video rows, non-overlapping) + audio parallel
@@ -55,8 +59,11 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
   match so placement is by MEANING, not just even time. (Pipeline shots are already order-relevant.)
 
 ## Known / in-progress
-- The in-arrange transcription path is being hardened (logs added to trace why it can stall / not
-  reach the arrange). Detailed `[AI-Edit arrange]` console logs report exactly where it stops.
+- Arrange timing is now **reuse, not reinvent** — the editor delegates to the server's `beat_plan`
+  (the same intelligence VidRush uses), instead of the old fragile client transcribe + even-spread.
+  Detailed `[AI-Edit arrange]` console logs still report each step (request → beats → apply / errors).
+- Next: `/vapp/beat_plan` audio must be a fetchable URL (R2/generated/uploaded) — a local blob/data
+  URL can't be transcribed server-side; those fall back to even spacing with a clear note.
 
 Build: `npm run build`; the user restarts the editor. Requires the vApp backend (`/api/ai-*` →
 vApp `/vapp/llm` + `/api/v1/*`).
