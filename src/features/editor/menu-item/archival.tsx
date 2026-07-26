@@ -145,6 +145,12 @@ export const Archival = () => {
       return;
     }
     const durMs = (item.details.duration || 5) * 1000;
+    // Pass real dims (default to 1080p when the source didn't provide them — e.g. an IA item
+    // whose metadata lacked width/height) so the clip is NEVER 0×0. A 0-size clip rendered
+    // invisible until its (slow) media loaded, which is exactly why an IA click looked like it
+    // "missed" and users clicked again.
+    const w = Number(item.details.width) || 1920;
+    const h = Number(item.details.height) || 1080;
     dispatch(ADD_ITEMS, {
       payload: {
         trackItems: [
@@ -154,8 +160,8 @@ export const Archival = () => {
             display: { from: 0, to: item.type === "image" ? 5000 : durMs },
             details:
               item.type === "image"
-                ? { src: item.details.src, kenBurns: "zoomIn" }
-                : { src: item.details.src },
+                ? { src: item.details.src, width: w, height: h, kenBurns: "zoomIn" }
+                : { src: item.details.src, width: w, height: h },
             metadata,
           },
         ],
@@ -314,7 +320,8 @@ const MediaTile = ({
   const draggableData = {
     id: generateId(),
     type: item.type,
-    details: { src: item.details.src, ...(item.type === "image" ? { kenBurns: "zoomIn" } : {}) },
+    // width/height so a DRAGGED-in clip lands at its real size (default 1080p) — never 0×0.
+    details: { src: item.details.src, width: Number(item.details.width) || 1920, height: Number(item.details.height) || 1080, ...(item.type === "image" ? { kenBurns: "zoomIn" } : {}) },
     preview: item.preview,
     metadata: {
       source_name: item.source_name,
@@ -325,6 +332,15 @@ const MediaTile = ({
   };
   const isVideo = item.type === "video";
   const [hovering, setHovering] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const onAddClick = () => {
+    setAdding(true);
+    handleAdd(item);
+    // handleAdd dispatches instantly; the clip's media then loads in the player/timeline (an
+    // Internet-Archive url can be slow to fetch). A brief spinner confirms the click landed —
+    // the same feedback the vApp media tiles give.
+    window.setTimeout(() => setAdding(false), 1100);
+  };
   const ar = aspectLabel(item.details?.width, item.details?.height);
   const dur = isVideo ? durationLabel(item.details?.duration) : "";
   // Bottom label is now the media TITLE, not the license. License + author stay in the
@@ -333,7 +349,7 @@ const MediaTile = ({
   return (
     <Draggable data={draggableData} renderCustomPreview={<div style={style} />} shouldDisplayPreview={shouldDisplayPreview}>
       <div
-        onClick={() => handleAdd(item)}
+        onClick={onAddClick}
         onMouseEnter={() => isVideo && setHovering(true)}
         onMouseLeave={() => setHovering(false)}
         title={`${item.title || "Untitled"}\n${item.source_name} · ${item.author} · ${item.license}${ar ? ` · ${ar}` : ""}${dur ? ` · ${dur}` : ""}`}
@@ -373,6 +389,11 @@ const MediaTile = ({
         <span className="absolute bottom-0 left-0 right-0 z-10 truncate bg-black/60 px-1 py-0.5 pr-7 text-[9px] text-white/85">
           {bottomLabel}
         </span>
+        {adding && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-md bg-black/55">
+            <Loader2 className="h-5 w-5 animate-spin text-white" />
+          </div>
+        )}
       </div>
     </Draggable>
   );
@@ -380,9 +401,15 @@ const MediaTile = ({
 
 const SoundRow = ({ item, handleAdd }: { item: MediaItem; handleAdd: (i: MediaItem) => void }) => {
   const dur = item.details.duration || 0;
+  const [adding, setAdding] = useState(false);
+  const onAddClick = () => {
+    setAdding(true);
+    handleAdd(item);
+    window.setTimeout(() => setAdding(false), 1100);
+  };
   return (
     <div
-      onClick={() => handleAdd(item)}
+      onClick={onAddClick}
       title={`${item.source_name} · ${item.author} · ${item.license}`}
       className="flex items-center gap-2 rounded-md bg-background hover:bg-white/5 px-2 py-1.5 cursor-pointer"
     >
@@ -394,6 +421,7 @@ const SoundRow = ({ item, handleAdd }: { item: MediaItem; handleAdd: (i: MediaIt
           {dur ? ` · ${dur}s` : ""}
         </div>
       </div>
+      {adding && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/80" />}
     </div>
   );
 };

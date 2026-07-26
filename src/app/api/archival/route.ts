@@ -176,29 +176,47 @@ async function fromWikimedia(q: string, type: MediaType, n: number): Promise<Nor
 
 // Find a directly-playable file URL inside an Internet Archive item (video/audio).
 // Matches by file extension OR the IA `format` field (more reliable).
-async function iaFileUrl(identifier: string, exts: string[], fmtKeys: string[]): Promise<string> {
+type IaFile = { src: string; width: number; height: number; duration: number };
+const _EMPTY_IA: IaFile = { src: "", width: 0, height: 0, duration: 0 };
+// archive.org `length` is a duration — sometimes seconds ("30.5"), sometimes "M:SS" / "H:MM:SS".
+const iaLength = (v: unknown): number => {
+  if (v == null) return 0;
+  const s = String(v).trim();
+  if (s.includes(":")) return s.split(":").map((p) => Number(p) || 0).reduce((a, p) => a * 60 + p, 0);
+  return Math.round(Number(s) || 0);
+};
+
+// Find a directly-playable file inside an Internet Archive item AND its width/height/duration
+// (the file objects in the item metadata usually carry them). Returning dims fixes two things:
+// the tile can show aspect/duration badges, and the DROPPED clip lands at its real size + length
+// instead of 0×0 — a 0×0 clip rendered invisible until its (slow) media loaded, so the click
+// looked like it "missed" and users clicked again.
+async function iaFileInfo(identifier: string, exts: string[], fmtKeys: string[]): Promise<IaFile> {
   try {
     const r = await fetch(`https://archive.org/metadata/${identifier}`, {
       headers: { "User-Agent": UA, Accept: "application/json" }, signal: timeoutSignal(),
     });
-    if (!r.ok) return "";
+    if (!r.ok) return _EMPTY_IA;
     const d = await r.json();
     const files: any[] = Array.isArray(d?.files) ? d.files : [];
+    const pick = (f: any): IaFile => ({
+      src: `https://archive.org/download/${identifier}/${encodeURIComponent(f.name)}`,
+      width: Math.round(Number(f?.width || 0)) || 0,
+      height: Math.round(Number(f?.height || 0)) || 0,
+      duration: iaLength(f?.length),
+    });
     // Pass 1: extension match (in priority order, e.g. mp4 before ogv).
     for (const ext of exts) {
       const f = files.find((f) => String(f?.name || "").toLowerCase().endsWith(ext));
-      if (f) return `https://archive.org/download/${identifier}/${encodeURIComponent(f.name)}`;
+      if (f) return pick(f);
     }
     // Pass 2: format-field match (h.264 / MPEG4 / VBR MP3 / Ogg ...).
-    const f2 = files.find((f) => {
-      const fmt = String(f?.format || "").toLowerCase();
-      return fmtKeys.some((k) => fmt.includes(k));
-    });
-    if (f2) return `https://archive.org/download/${identifier}/${encodeURIComponent(f2.name)}`;
+    const f2 = files.find((f) => fmtKeys.some((k) => String(f?.format || "").toLowerCase().includes(k)));
+    if (f2) return pick(f2);
   } catch {
     /* skip */
   }
-  return "";
+  return _EMPTY_IA;
 }
 
 async function fromArchive(q: string, type: MediaType, n: number): Promise<NormItem[]> {
@@ -236,12 +254,12 @@ async function fromArchive(q: string, type: MediaType, n: number): Promise<NormI
     : ["mp3", "ogg", "flac", "wav", "m4a"];
   const resolved = await Promise.all(
     docs.map(async (x) => {
-      const src = await iaFileUrl(x.identifier, exts, fmtKeys);
-      if (!src) return null;
+      const f = await iaFileInfo(x.identifier, exts, fmtKeys);
+      if (!f.src) return null;
       return {
         id: `archive_${x.identifier}`,
         type: type === "video" ? "video" : "audio",
-        details: { src, width: 0, height: 0 },
+        details: { src: f.src, width: f.width, height: f.height, duration: f.duration },
         preview: `https://archive.org/services/img/${x.identifier}`,
         source_name: "Internet Archive",
         source_url: `https://archive.org/details/${x.identifier}`,

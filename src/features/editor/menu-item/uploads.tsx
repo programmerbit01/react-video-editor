@@ -1,6 +1,6 @@
 import { ADD_AUDIO, ADD_IMAGE, ADD_VIDEO } from "@designcombo/state";
 import { dispatch } from "@designcombo/events";
-import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause, AlertCircle } from "lucide-react";
+import { Music, Loader2, UploadIcon, Upload, RefreshCw, Play, Pause, AlertCircle, LayoutGrid } from "lucide-react";
 import { generateId } from "@designcombo/timeline";
 import { Button } from "@/components/ui/button";
 import useUploadStore from "../store/use-upload-store";
@@ -64,9 +64,11 @@ const normalizeServerMedia = (it: any) => {
     record_id: it?.record_id || "",
     prompt: it?.prompt || "",
     poster: meta.poster || it?.poster || "", // stored R2 poster (instant, no client capture)
-    width: Number(meta.width) || 0,
-    height: Number(meta.height) || 0,
-    duration: Number(meta.duration) || 0, // seconds
+    // /vapp/user/media surfaces these top-level (like poster); some shapes nest them in meta.
+    // Read both so a tile shows aspect/duration and the add path skips its probe.
+    width: Number(it?.width) || Number(meta.width) || 0,
+    height: Number(it?.height) || Number(meta.height) || 0,
+    duration: Number(it?.duration) || Number(meta.duration) || 0, // seconds
     source: it?.type || "", // vApp `type` = input | output (source dimension)
   };
   if (it?.stt && typeof it.stt === "object") entry.stt = it.stt;
@@ -651,6 +653,29 @@ const VideoThumb = ({ src, serverPoster }: { src: string; serverPoster?: string 
   );
 };
 
+// Aspect-ratio + duration badge helpers — same buckets the Stock/archival tiles use, so a vApp
+// media tile reads "16:9" / "0:06" at a glance. Dimensions + duration come from the record's
+// stored meta (item.width/height/duration), so no probe is needed.
+const _COMMON_RATIOS: [string, number][] = [
+  ["9:16", 9 / 16], ["16:9", 16 / 9], ["1:1", 1], ["4:5", 4 / 5], ["5:4", 5 / 4],
+  ["3:4", 3 / 4], ["4:3", 4 / 3], ["2:3", 2 / 3], ["3:2", 3 / 2], ["21:9", 21 / 9], ["9:21", 9 / 21],
+];
+const aspectLabel = (w?: number, h?: number): string => {
+  if (!w || !h || w <= 0 || h <= 0) return "";
+  const r = w / h;
+  let best = _COMMON_RATIOS[0], bestErr = Infinity;
+  for (const c of _COMMON_RATIOS) {
+    const err = Math.abs(r - c[1]) / c[1];
+    if (err < bestErr) { bestErr = err; best = c; }
+  }
+  return best[0];
+};
+const durationLabel = (secs?: number): string => {
+  const s = Math.round(Number(secs) || 0);
+  if (s <= 0) return "";
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
 const Thumb = ({ item }: { item: any }) => {
   // Use direct CDN URL for display — faster, no proxy hop, HTML tags don't need CORS
   const src = getDisplaySrc(item);
@@ -743,6 +768,9 @@ const UploadGridItem = memo(({
     }
   };
 
+  const arLabel = isAudio(item) ? "" : aspectLabel(Number(item.width) || 0, Number(item.height) || 0);
+  const durLabel = (isVideo(item) || isAudio(item)) ? durationLabel(Number(item.duration) || 0) : "";
+
   return (
     <div className="flex flex-col gap-1 items-center">
       <Draggable
@@ -767,6 +795,12 @@ const UploadGridItem = memo(({
         title={adding ? "Adding to timeline…" : "Drag to place, or click to add"}
       >
         <Thumb item={item} />
+        {arLabel && (
+          <span className="pointer-events-none absolute top-1 left-1 z-10 rounded bg-black/65 px-1 py-0.5 text-[9px] font-medium leading-none text-white/90">{arLabel}</span>
+        )}
+        {durLabel && (
+          <span className="pointer-events-none absolute bottom-1 right-1 z-10 rounded bg-black/65 px-1 py-0.5 text-[9px] font-medium leading-none text-white/90">{durLabel}</span>
+        )}
         {adding && (
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/55 backdrop-blur-[1px]">
             <Loader2 className="w-5 h-5 text-white animate-spin" />
@@ -831,6 +865,18 @@ export const Uploads = () => {
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
   const [addingId, setAddingId] = useState<string | null>(null); // item being added → timeline (spinner + re-click guard)
   const [mediaFilter, setMediaFilter] = useState<"all" | "image" | "video" | "audio" | "uploads">("all");
+  // Tiles-per-row — the user can shrink the grid to 2 cols to see media bigger, or 4 to see more.
+  // Persisted so it sticks across sessions. (grid-cols is set via inline style so Tailwind's
+  // purge can't drop a dynamic class.)
+  const [gridCols, setGridCols] = useState<number>(() => {
+    const v = typeof window !== "undefined" ? Number(localStorage.getItem("vapp_media_cols")) : 0;
+    return v >= 2 && v <= 4 ? v : 3;
+  });
+  const cycleCols = () => setGridCols((c) => {
+    const next = c >= 4 ? 2 : c + 1;
+    try { localStorage.setItem("vapp_media_cols", String(next)); } catch {}
+    return next;
+  });
 
   const ensureImageMeta = async (item: any): Promise<CachedMediaMeta> => {
     const src = getDisplaySrc(item);
@@ -1246,6 +1292,15 @@ export const Uploads = () => {
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
           </Button>
+          <Button
+            variant="outline"
+            className="cursor-pointer px-3"
+            onClick={cycleCols}
+            title={`Tile size — ${gridCols} per row (click to change)`}
+          >
+            <LayoutGrid className="w-4 h-4" />
+            <span className="ml-1 text-xs tabular-nums">{gridCols}</span>
+          </Button>
         </div>
 
         {/* Filter — All / Image / Video / Audio + Uploads (the user's own inputs) */}
@@ -1317,7 +1372,7 @@ export const Uploads = () => {
 
         {/* Media grid */}
         {!loading && allItems.length > 0 && (
-          <div className="grid grid-cols-3 gap-2 pb-2">
+          <div className="grid gap-2 pb-2" style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }}>
             {allItems.map((item, idx) => (
               <TileErrorBoundary key={item.id || `item-${idx}`}>
                 <UploadGridItem
