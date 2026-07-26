@@ -83,16 +83,20 @@ export function addAudio(src: string, name: string, fromMs = 0, durationMs = 500
 
 export function addImage(src: string, name: string, fromMs = 0, durationMs = 5000): string {
   const id = nanoid();
+  const prompt = String(name || "").trim();
   dispatch(ADD_ITEMS, {
     payload: {
       trackItems: [
         {
           id,
           type: "image",
-          name: (name || "image").slice(0, 40),
+          name: (prompt || "image").slice(0, 40),
           display: { from: fromMs, to: fromMs + durationMs },
+          // The ADD_ITEMS reducer normalises `name` → "image" and strips extra `details.*` keys, so a
+          // generated image's PROMPT (what it depicts) would be lost — and the arrange's relevancy
+          // match reads it. `metadata` IS preserved through the reducer, so stash the prompt there.
           details: { src },
-          metadata: {},
+          metadata: prompt ? { prompt: prompt.slice(0, 200) } : {},
         },
       ],
     },
@@ -143,20 +147,22 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
       continue;
     }
 
-    // Arrange/sequence items to build a video. Two forms (audio is never re-timed):
+    // Arrange/sequence items to build a video. Two forms (only IMAGE/VIDEO are re-timed — captions,
+    // text and audio are NEVER touched):
     //  - op.items:  explicit per-item {fromMs,toMs} → importance / script-sync
     //  - op.itemIds + totalMs: equal back-to-back slices
-    // Either way the arranged VISUALS are CONSOLIDATED onto ONE video track (so they play as a
-    // single sequential row, not scattered across rows) unless op.consolidate === false.
+    // The arranged visuals are then CONSOLIDATED into CATEGORY ROWS: all images on one row, all
+    // videos on another (clean, grouped — not scattered), unless op.consolidate === false.
     if (op.op === "arrange" && sm) {
       const st = sm.getState?.();
       const map = { ...(st?.trackItemsMap || {}) };
+      const isVisualItem = (it: any) => it && (it.type === "image" || it.type === "video");
       const arrangedIds: string[] = []; // visuals we (re)timed, in final playback order
       let changed = false;
       if (op.items?.length) {
         for (const it of op.items) {
           const item = map[it.itemId];
-          if (item && item.type !== "audio") {
+          if (isVisualItem(item)) {
             const from = Math.max(0, Math.floor(it.fromMs || 0));
             const to = Math.max(from + 200, Math.floor(it.toMs || 0));
             map[it.itemId] = { ...item, display: { from, to } };
@@ -165,7 +171,7 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
           }
         }
       } else if (op.itemIds?.length) {
-        const ids = op.itemIds.filter((id) => map[id] && map[id].type !== "audio");
+        const ids = op.itemIds.filter((id) => isVisualItem(map[id]));
         if (ids.length) {
           const durOf = (id: string) => Math.max(0, (map[id].display?.to ?? 0) - (map[id].display?.from ?? 0));
           const total = op.totalMs || ids.reduce((a: number, id: string) => a + durOf(id), 0) || ids.length * 3000;
@@ -179,26 +185,38 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
           changed = true;
         }
       }
-      // CONSOLIDATE the arranged visuals onto ONE video track (in playback order). Track membership
-      // lives in tracks[].items (items carry no trackId), so move the ids there. This is what makes
-      // the arrange look like the clean auto-director output (one row) instead of a scatter of rows.
+      // CATEGORY-ROW CONSOLIDATION. Track membership lives in tracks[].items (items carry no
+      // trackId). Group images onto ONE image row and videos onto ANOTHER, above the audio; leave
+      // audio / captions / sfx / music rows alone; prune the visual rows we vacated so the timeline
+      // ends up clean (like the auto-director output), not a scatter of half-empty rows.
       let tracks = st?.tracks;
       if (changed && arrangedIds.length && op.consolidate !== false && Array.isArray(tracks) && tracks.length) {
-        const takesVisual = (t: any) =>
+        const accepts = (t: any) =>
           Array.isArray(t?.accepts) ? t.accepts.includes("image") || t.accepts.includes("video") : t?.type === "video" || t?.type === "image" || !t?.type;
-        // prefer a video track that already holds one of the arranged shots; else any video track.
-        const target =
-          tracks.find((t: any) => takesVisual(t) && (t.items || []).some((id: string) => arrangedIds.includes(id))) ||
-          tracks.find((t: any) => takesVisual(t));
-        if (target) {
-          tracks = tracks.map((t: any) => {
-            if (t.id === target.id) {
-              const keep = (t.items || []).filter((id: string) => !arrangedIds.includes(id));
-              return { ...t, items: [...keep, ...arrangedIds] }; // arranged shots, in order, at the end
-            }
-            return { ...t, items: (t.items || []).filter((id: string) => !arrangedIds.includes(id)) };
-          });
-        }
+        const origHeld = (t: any, ids: string[]) =>
+          ((st.tracks.find((o: any) => o.id === t.id)?.items) || []).some((id: string) => ids.includes(id));
+        const imgs = arrangedIds.filter((id) => map[id]?.type === "image");
+        const vids = arrangedIds.filter((id) => map[id]?.type === "video");
+        const working: any[] = tracks.map((t: any) => ({ ...t, items: (t.items || []).filter((id: string) => !arrangedIds.includes(id)) }));
+        const usedTrackIds = new Set<string>();
+        const assign = (ids: string[], label: string) => {
+          if (!ids.length) return;
+          let track =
+            working.find((t) => accepts(t) && !usedTrackIds.has(t.id) && origHeld(t, ids)) ||
+            working.find((t) => accepts(t) && !usedTrackIds.has(t.id) && !t.items.length) ||
+            working.find((t) => accepts(t) && !usedTrackIds.has(t.id));
+          if (!track) {
+            track = { id: `vtrack-${label}-${nanoid(6)}`, type: "video", name: label === "image" ? "Images" : "Videos", accepts: ["video", "image"], items: [], magnetic: false, static: false, metadata: {} };
+            const audioIdx = working.findIndex((t) => t.type === "audio" || (Array.isArray(t.accepts) && t.accepts.includes("audio")));
+            if (audioIdx >= 0) working.splice(audioIdx, 0, track); else working.unshift(track);
+          }
+          usedTrackIds.add(track.id);
+          track.items = [...track.items, ...ids]; // arranged shots in playback order
+        };
+        assign(imgs, "image");
+        assign(vids, "video");
+        // prune visual rows we emptied (keep audio/caption/etc even if empty)
+        tracks = working.filter((t) => t.items.length > 0 || !accepts(t));
       }
       if (changed) {
         const patch: Record<string, any> = { trackItemsMap: map };

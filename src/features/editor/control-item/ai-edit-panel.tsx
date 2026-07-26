@@ -191,6 +191,42 @@ async function llmText(task: string, input: string, token: string): Promise<stri
   }
 }
 
+// Parse the match_shots LLM output → contiguous, gap-free windows in the LLM's relevance ORDER.
+// FOOLPROOF: keeps only the given target ids, every id exactly once, forces coverage [0, totalMs].
+// Returns null if the output can't be trusted (missing/extra ids) → caller falls back.
+function normalizeShotWindows(
+  raw: string,
+  targetIds: string[],
+  totalMs: number
+): { id: string; from_ms: number; to_ms: number }[] | null {
+  let t = (raw || "").trim();
+  if (t.startsWith("```")) t = t.replace(/^```[a-z]*\n?/i, "").replace(/```$/,"").trim();
+  const i = t.indexOf("{"), j = t.lastIndexOf("}");
+  if (i < 0 || j <= i) return null;
+  let obj: any;
+  try { obj = JSON.parse(t.slice(i, j + 1)); } catch { return null; }
+  const arr: any[] = Array.isArray(obj?.shots) ? obj.shots : Array.isArray(obj) ? obj : [];
+  const seen = new Set<string>();
+  const clean = arr
+    .filter((s) => s && targetIds.includes(String(s.id)) && !seen.has(String(s.id)) && (seen.add(String(s.id)), true))
+    .map((s) => ({ id: String(s.id), from_ms: Math.max(0, Math.floor(Number(s.from_ms) || 0)) }))
+    .sort((a, b) => a.from_ms - b.from_ms);
+  // every target id must be accounted for — if the LLM dropped any, bail (don't silently lose shots)
+  if (clean.length !== targetIds.length) return null;
+  // force contiguous, gap-free coverage of [0, totalMs] in the relevance order
+  const out: { id: string; from_ms: number; to_ms: number }[] = [];
+  const per = Math.max(300, Math.floor(totalMs / targetIds.length));
+  for (let k = 0; k < clean.length; k++) {
+    const from = k === 0 ? 0 : out[k - 1].to_ms;
+    let to = k === clean.length - 1 ? totalMs : Math.max(from + per, clean[k + 1]?.from_ms || from + per);
+    to = Math.min(to, totalMs - (clean.length - 1 - k) * 300);
+    if (to <= from) to = Math.min(totalMs, from + per);
+    out.push({ id: clean[k].id, from_ms: from, to_ms: to });
+  }
+  out[out.length - 1].to_ms = totalMs;
+  return out;
+}
+
 export default function AiEditPanel() {
   const s = useAiEditStore();
   const { activeIds, trackItemsMap } = useStore();
@@ -600,12 +636,16 @@ export default function AiEditPanel() {
     // animate / effects / lip-sync can read it and be context-aware too. ────────────────────────────
     if (arranges.length) {
       const order = useStore.getState().trackItemIds || Object.keys(map);
-      const allVisual = order.filter((id: string) => map[id] && (map[id] as any).type !== "audio");
+      // "visual" = image/video ONLY — NEVER caption/text/audio. (A caption counted as a shot is why
+      // the caption chip used to get dragged onto the image row and re-timed. Captions live on their
+      // own track under the audio, glued by useCaptionSync — arrange must never touch them.)
+      const isVisual = (id: string) => { const ty = (map[id] as any)?.type; return ty === "image" || ty === "video"; };
+      const allVisual = order.filter(isVisual);
       // Honour WHICH items the LLM/user chose (from the selection chips) — but own the TIMING.
       const chosen = Array.from(
         new Set(arranges.flatMap((a: any) => (a.items?.map((x: any) => x.itemId) || a.itemIds || [])).filter(Boolean)),
-      ).filter((id: string) => map[id] && (map[id] as any).type !== "audio");
-      const targetVisuals: string[] = gens.length ? newVisual : chosen.length ? chosen : allVisual;
+      ).filter(isVisual);
+      const targetVisuals: string[] = gens.length ? newVisual.filter(isVisual) : chosen.length ? chosen : allVisual;
       const N = targetVisuals.length;
       console.log("[AI-Edit arrange] ▶ START", {
         targetVisualCount: N,
@@ -623,84 +663,91 @@ export default function AiEditPanel() {
         try {
           if (N > 1 && audio?.details?.src) {
             const src = String(audio.details.src);
-            s.updateAt(i, { genStatus: "⏳ Planning shot timing from the voiceover…" });
-            // 1 — SERVER beat-plan (content-aware; VidRush transcribe → beat_plan). Preferred.
-            //     If the server hasn't been restarted yet it 404s fast → we fall through to the
-            //     client transcript path below (which works with the LIVE /api/transcribe).
-            let planBeats: any[] = [];
-            try {
-              console.log("[AI-Edit arrange] → /api/beat-plan", { srcTail: src.slice(-48), shots: N });
-              const t0 = Date.now();
-              const res = await fetch("/api/beat-plan", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ audio_url: src, shots: N, token: getToken() }),
-              });
-              const data = await res.json().catch(() => ({}));
-              console.log(`[AI-Edit arrange] beat-plan → ${res.status} in ${Date.now() - t0}ms`, {
-                ok: data?.ok, total_ms: data?.total_ms, segments: data?.segments, beats: (data?.beats || []).length, error: data?.error,
-              });
-              if (data?.ok && Array.isArray(data.beats) && data.beats.length) planBeats = data.beats;
-            } catch (e: any) {
-              console.warn("[AI-Edit arrange] beat-plan unavailable → client transcript:", e?.message || e);
-            }
-            if (planBeats.length === N) {
-              source = "server";
-              beats = targetVisuals.map((id, k) => ({
-                itemId: id,
-                fromMs: Math.round(Number(planBeats[k].from_ms) || 0),
-                toMs: Math.round(Number(planBeats[k].to_ms) || 0),
-                text: String(planBeats[k].text || planBeats[k].keyword || "").trim(),
-              }));
-            } else {
-              // 2 — CLIENT transcript: reuse the Captions-tab transcript if present (instant), else
-              //     transcribe via the LIVE /api/transcribe (capped so it can never hang the arrange).
-              let segs: any[] = useCaptionTranscribeStore.getState().resultsByMedia?.[src]?.segments || [];
-              console.log("[AI-Edit arrange] cached transcript segments:", segs.length);
-              if (!segs.length) {
-                s.updateAt(i, { genStatus: "⏳ Transcribing the voiceover (for timing)…" });
-                console.log("[AI-Edit arrange] no cache → /api/transcribe…");
-                const t1 = Date.now();
-                segs = (await Promise.race([
-                  transcribeAudio(src, getToken()).catch((e) => {
-                    console.error("[AI-Edit arrange] ✖ transcribeAudio REJECTED:", e);
-                    return [] as any[];
-                  }),
-                  new Promise<any[]>((r) => setTimeout(() => { console.warn("[AI-Edit arrange] ✖ transcribe TIMEOUT 120s"); r([]); }, 120000)),
-                ])) as any[];
-                console.log(`[AI-Edit arrange] transcribe returned ${segs.length} segments in ${Date.now() - t1}ms`);
-                if (segs.length) {
-                  try {
-                    useCaptionTranscribeStore.getState().setTranscriptResult(src, {
-                      text: "", language: "", segment_count: segs.length,
-                      segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
-                    });
-                  } catch { /* cache best-effort */ }
-                }
-              }
+            s.updateAt(i, { genStatus: "⏳ Reading the voiceover…" });
+            // STEP 1 — TRANSCRIPT (timed narration). Reuse the Captions-tab transcript if present
+            // (instant), else the LIVE /api/transcribe (capped so it can never hang the arrange).
+            let segs: any[] = useCaptionTranscribeStore.getState().resultsByMedia?.[src]?.segments || [];
+            console.log("[AI-Edit arrange] cached transcript segments:", segs.length);
+            if (!segs.length) {
+              s.updateAt(i, { genStatus: "⏳ Transcribing the voiceover…" });
+              console.log("[AI-Edit arrange] no cache → /api/transcribe…");
+              const t1 = Date.now();
+              segs = (await Promise.race([
+                transcribeAudio(src, getToken()).catch((e) => { console.error("[AI-Edit arrange] ✖ transcribe REJECTED:", e); return [] as any[]; }),
+                new Promise<any[]>((r) => setTimeout(() => { console.warn("[AI-Edit arrange] ✖ transcribe TIMEOUT 120s"); r([]); }, 120000)),
+              ])) as any[];
+              console.log(`[AI-Edit arrange] transcribe returned ${segs.length} segments in ${Date.now() - t1}ms`);
               if (segs.length) {
-                source = "transcript";
-                // EVEN windows across the whole voiceover, each cut SNAPPED to the nearest speech
-                // boundary (robust even when there are fewer segments than shots — short audio).
-                const totalS = segs[segs.length - 1].end || audioMs / 1000 || N * 2.5;
-                const edges: number[] = Array.from(new Set(segs.flatMap((sg: any) => [sg.start, sg.end]))).sort((x, y) => x - y);
-                const snap = (t: number) => (edges.length ? edges.reduce((b, c) => (Math.abs(c - t) < Math.abs(b - t) ? c : b), t) : t);
-                const cuts = [0];
-                for (let k = 1; k < N; k++) {
-                  const t = (k / N) * totalS;
-                  cuts.push(Math.min(totalS - 0.3, Math.max(cuts[cuts.length - 1] + 0.4, snap(t))));
-                }
-                cuts.push(totalS);
-                beats = targetVisuals.map((id, k) => ({
-                  itemId: id,
-                  fromMs: Math.round(cuts[k] * 1000),
-                  toMs: Math.round(cuts[k + 1] * 1000),
-                  text: segs.filter((sg: any) => sg.end > cuts[k] && sg.start < cuts[k + 1]).map((sg: any) => sg.text).join(" ").trim(),
-                }));
-              } else {
-                note = "couldn't read the narration timing, so spaced them evenly";
+                try {
+                  useCaptionTranscribeStore.getState().setTranscriptResult(src, {
+                    text: "", language: "", segment_count: segs.length,
+                    segments: segs.map((x: any) => ({ start: x.start, end: x.end, text: x.text, words: x.words })),
+                  });
+                } catch { /* cache best-effort */ }
               }
             }
+            const totalMs = Math.round((segs.length ? segs[segs.length - 1].end : 0) * 1000) || audioMs || N * 4000;
+            const said = (fromMs: number, toMs: number) =>
+              segs.filter((sg: any) => sg.end * 1000 > fromMs && sg.start * 1000 < toMs).map((sg: any) => sg.text).join(" ").trim();
+            // STEP 2 — RELEVANCY (the main win). Each image's description → the LLM `match_shots`
+            // task places each shot at the narration MOMENT it's about (coins→"fortune",
+            // gun→"weapon", fire→"burn") — content-aware, NOT an even split, and reorders by
+            // relevance. Description source: metadata.prompt (generated images carry their prompt
+            // here — ADD_ITEMS strips `name`→"image" but preserves metadata), else vApp media.meta
+            // (for images this session didn't generate — one /api/media-meta lookup by url).
+            const clean = (v: any) => {
+              const raw = String(v || "").trim().replace(/\s+/g, " ");
+              return /^(image|video|stock|audio|untitled|clip)?$/i.test(raw) ? "" : raw.slice(0, 120);
+            };
+            const localDesc = (id: string) => {
+              const it: any = map[id];
+              return clean(it?.metadata?.prompt) || clean(it?.details?.prompt) || clean(it?.metadata?.description) || clean(it?.name);
+            };
+            const shots = targetVisuals.map((id) => ({ id, desc: localDesc(id) }));
+            // fill any missing descriptions from vApp media.meta (existing/uploaded images), in parallel
+            const missing = shots.filter((sh) => !sh.desc && map[sh.id]?.details?.src);
+            if (missing.length) {
+              console.log(`[AI-Edit arrange] fetching ${missing.length} description(s) from vApp meta…`);
+              await Promise.all(missing.map(async (sh) => {
+                try {
+                  const r = await fetch(withEditorBase(`/api/media-meta?url=${encodeURIComponent(String(map[sh.id].details.src))}&token=${encodeURIComponent(getToken())}`));
+                  const d = await r.json().catch(() => ({}));
+                  sh.desc = clean(d?.prompt);
+                } catch { /* fail-open */ }
+              }));
+            }
+            const described = shots.filter((sh) => sh.desc).length;
+            if (segs.length && described >= 2) {
+              s.updateAt(i, { genStatus: "🧠 Matching each shot to what the narration says…" });
+              const narration = segs.map((sg: any) => `[${(sg.start || 0).toFixed(1)}-${(sg.end || 0).toFixed(1)}] ${String(sg.text || "").trim()}`).join("\n");
+              const shotLines = shots.map((sh, k) => `${k + 1}. id="${sh.id}" desc="${sh.desc || "(unknown)"}"`).join("\n");
+              const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free):\n${shotLines}\n\nTotal audio: ${totalMs} ms`;
+              console.log("[AI-Edit arrange] → match_shots (relevancy)", { described, N });
+              const tM = Date.now();
+              const outRaw = await llmText("match_shots", input, getToken());
+              const win = normalizeShotWindows(outRaw, targetVisuals, totalMs);
+              console.log(`[AI-Edit arrange] match_shots in ${Date.now() - tM}ms`, { usable: !!win, raw: (outRaw || "").slice(0, 160) });
+              if (win) {
+                source = "match";
+                beats = win.map((w) => ({ itemId: w.id, fromMs: w.from_ms, toMs: w.to_ms, text: said(w.from_ms, w.to_ms) }));
+              } else {
+                console.warn("[AI-Edit arrange] match_shots output unusable → transcript even-snap");
+              }
+            } else {
+              console.log("[AI-Edit arrange] relevancy skipped", { segs: segs.length, described, why: !segs.length ? "no transcript" : "shots have no descriptions" });
+            }
+            // STEP 3 — transcript EVEN-SNAP (selection order) when relevancy didn't produce beats.
+            if (!beats && segs.length) {
+              source = "transcript";
+              const totalS = totalMs / 1000;
+              const edges: number[] = Array.from(new Set(segs.flatMap((sg: any) => [sg.start, sg.end]))).sort((x, y) => x - y);
+              const snap = (t: number) => (edges.length ? edges.reduce((b, c) => (Math.abs(c - t) < Math.abs(b - t) ? c : b), t) : t);
+              const cuts = [0];
+              for (let k = 1; k < N; k++) { const t = (k / N) * totalS; cuts.push(Math.min(totalS - 0.3, Math.max(cuts[cuts.length - 1] + 0.4, snap(t)))); }
+              cuts.push(totalS);
+              beats = targetVisuals.map((id, k) => ({ itemId: id, fromMs: Math.round(cuts[k] * 1000), toMs: Math.round(cuts[k + 1] * 1000), text: said(Math.round(cuts[k] * 1000), Math.round(cuts[k + 1] * 1000)) }));
+            }
+            if (!beats && !segs.length) note = "couldn't read the narration timing, so spaced them evenly";
             if (beats) console.log(`[AI-Edit arrange] ✓ BEATS (${source}):`, beats.map((b) => ({ from: b.fromMs, to: b.toMs, text: b.text.slice(0, 28) })));
           } else if (!audio) {
             note = "no voiceover on the timeline — spaced evenly; add an audio track for narration-synced timing";
@@ -732,11 +779,11 @@ export default function AiEditPanel() {
           note = note || "hit an error placing the clips on the timeline";
         }
         // SHORT REPORT — always fires (even on error), so it never looks "stuck with no output".
-        const synced = source === "server" || source === "transcript";
+        const synced = source === "match" || source === "transcript";
         s.updateAt(i, {
           genStatus: synced
-            ? `✓ Arranged ${N} shot${N > 1 ? "s" : ""} across the voiceover — timing from the narration (${source === "server" ? "content-aware beats" : "synced to speech"}), one row, with motion.`
-            : `✓ Arranged ${N} shot${N > 1 ? "s" : ""} in one row with motion — ${note || "no voiceover, so spaced evenly"}.`,
+            ? `✓ Arranged ${N} shot${N > 1 ? "s" : ""} — ${source === "match" ? "each placed WHEN the narration talks about it (content-matched)" : "timing synced to the voiceover"}, with motion.`
+            : `✓ Arranged ${N} shot${N > 1 ? "s" : ""} with motion — ${note || "no voiceover, so spaced evenly"}.`,
         });
       }
     } else if (newVisual.length) {
