@@ -1028,25 +1028,26 @@ export default function AiEditPanel() {
         // MIN DURATIONS: images ≥2s, VIDEOS ≥3s (videos are motion — give them priority). A shot below
         // its floor steals time from the shots that have slack (the longest first), keeping the whole
         // sequence contiguous + spanning the same total. Kills the "1s flickery b-roll" look.
-        {
-          const total = beats[beats.length - 1].toMs;
+        if (beats) {
+          const bts = beats;
+          const total = bts[bts.length - 1].toMs;
           const minFor = (id: string) => ((map[id] as any)?.type === "video" ? 3000 : 2000);
-          const mins = beats.map((b) => minFor(b.itemId));
-          let durs = beats.map((b) => b.toMs - b.fromMs);
+          const mins = bts.map((b) => minFor(b.itemId));
+          let durs = bts.map((b) => b.toMs - b.fromMs);
           const sumMin = mins.reduce((a, b) => a + b, 0);
           if (sumMin >= total) {
             durs = mins.map((m) => (m / sumMin) * total); // can't fit all floors → scale proportionally
           } else {
             let deficit = 0;
             for (let k = 0; k < durs.length; k++) if (durs[k] < mins[k]) { deficit += mins[k] - durs[k]; durs[k] = mins[k]; }
-            let slack = durs.reduce((a, d, k) => a + Math.max(0, d - mins[k]), 0);
+            const slack = durs.reduce((a, d, k) => a + Math.max(0, d - mins[k]), 0);
             if (deficit > 0 && slack > 0) for (let k = 0; k < durs.length && deficit > 0.5; k++) {
               const give = Math.min(Math.max(0, durs[k] - mins[k]), deficit * (Math.max(0, durs[k] - mins[k]) / slack));
               durs[k] -= give;
             }
           }
           let cur = 0;
-          beats = beats.map((b, k) => { const from = cur; const to = k === beats.length - 1 ? total : Math.round(from + durs[k]); cur = to; return { ...b, fromMs: from, toMs: Math.max(from + 300, to) }; });
+          beats = bts.map((b, k) => { const from = cur; const to = k === bts.length - 1 ? total : Math.round(from + durs[k]); cur = to; return { ...b, fromMs: from, toMs: Math.max(from + 300, to) }; });
           beats[beats.length - 1].toMs = total;
           elog(`[MIN DURATIONS] enforced img≥2s / vid≥3s → ${beats.map((b) => `${b.itemId.slice(0, 6)}:${b.toMs - b.fromMs}ms`).join(" | ")}`);
         }
