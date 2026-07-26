@@ -25,19 +25,22 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
   timeline. (`operations.ts` prompts, `store` `pipeline` state, `ai-edit-panel.tsx` dropdown.)
 - **Smart `arrange` core op** (works in Edit mode too): targets the just-generated shots OR, when
   the user says "arrange" over existing clips, the SELECTED / ALL visuals. **The executor OWNS the
-  timing — never the LLM** (timing is a mechanic, not a decision). This is the key fix: previously,
-  if the LLM emitted an explicit-times arrange, `runBuild` applied it directly and the smart block
-  (transcribe + beat-plan + every log) was bypassed → "no logs, not context-aware, scattered rows".
-  Now the arrange ALWAYS computes content-aware windows itself, in priority order:
-  1. **server** `/api/beat-plan` → vApp `/vapp/beat_plan` (REUSES VidRush's transcribe → `beat_plan`;
-     exactly N contiguous, speech-aligned windows). Preferred; needs the :8091 restart to be live.
-  2. **client transcript** — reuse the Captions-tab transcript if present (instant), else the LIVE
-     `/api/transcribe`; then even windows **snapped to speech boundaries**. Works with NO server change.
-  3. **even split** — gap-free, when there's no voiceover.
-  It then **consolidates all shots onto ONE video row** (contiguous, gap-free → timeline total = the
-  voiceover length, no black tail), applies alternating **Ken Burns motion**, and ends with a short
-  report. Builds the beat model (each shot's slot + its narration) so animate / effects / lip-sync
-  stay context-aware. The LLM only emits `{op:"arrange","target":"all"}` — no times.
+  timing — never the LLM** (timing is a mechanic, not a decision). The LLM only emits
+  `{op:"arrange","target":"all"}` (no times). Flow:
+  1. **Transcript** — reuse the Captions-tab transcript if present (instant), else the LIVE
+     `/api/transcribe`. Capped so it can't hang.
+  2. **RELEVANCY (the win)** — each shot's DESCRIPTION (`metadata.prompt` for generated images —
+     ADD_ITEMS strips `name`→"image" but preserves `metadata`; else vApp `media.meta` via
+     `/api/media-meta`) + the timed narration → LLM task **`match_shots`** places each image at the
+     narration MOMENT it depicts (fortune image first, weapon mid, burn last) and **reorders by
+     relevance**. `normalizeShotWindows` forces contiguous/gap-free coverage. All live — no restart.
+  3. **transcript even-snap** (selection order) if descriptions are missing; **even split** if no
+     voiceover.
+  Then it **consolidates into CATEGORY ROWS** — images on ONE row, videos on another (per-type
+  tracks, above audio; vacated rows pruned) — contiguous & gap-free (timeline total = voiceover,
+  no black tail), applies alternating **Ken Burns**, and reports. **Captions/text are NEVER touched**
+  (arrange = image/video only), so they stay glued under the audio. Builds the beat model (each
+  shot's slot + its narration) so animate / effects / lip-sync stay context-aware.
 - **`animate` op** — turn a selected image into a VIDEO (image-to-video / LTX i2v), keeping it in
   the SAME timeline slot. The "cheap images first → upgrade selected shots to video" flow.
 - **i2v support** in `/api/ai-generate` (video accepts `image_url`).
