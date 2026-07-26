@@ -59,6 +59,8 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
 - `src/app/api/ai-edit/route.ts` — max_tokens.
 - `src/app/api/beat-plan/route.ts` — thin proxy → vApp `/vapp/beat_plan` (context-aware shot timing;
   reuses VidRush's transcribe → beat_plan; server-side so the editor never transcribes on the client).
+- `src/app/api/media-meta/route.ts` — vApp `media.meta` (prompt for relevancy + real duration for audio-is-king).
+- `src/app/api/editor-log/route.ts` — ships the `[AI-Edit …]` trace to `logs/vapp_editor.log` (server-readable).
 
 ## Roadmap (each = a core op, tested in Edit, then reused by pipelines)
 - **Category-wise tracks** — visuals sequential (image/video rows, non-overlapping) + audio parallel
@@ -68,18 +70,39 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
 - **Content-match arrange** — for ARBITRARY images (not made for the narration), an LLM/embedding
   match so placement is by MEANING, not just even time. (Pipeline shots are already order-relevant.)
 
-## Known / in-progress
-- Arrange timing is now **executor-owned + reuse, not reinvent**: the editor prefers the server's
-  `beat_plan` (same intelligence VidRush uses), with a client-transcript fallback so it also works
-  BEFORE the :8091 restart. Detailed `[AI-Edit arrange]` console logs report each step (beat-plan
-  request/status → transcript segments → beats(source) → apply / errors) — never silent again.
-- Verified: server resample logic (contiguous / gap-free / exactly N windows, content-aware) and the
-  executor consolidation live in the browser — 3 scattered rows → 1 row, uneven content-aware widths,
-  gap-free, timeline total = the voiceover.
-- Note: server `beat_plan` (path 1) needs the audio to be a fetchable URL (R2 / generated / uploaded);
-  a local blob/data URL can't be transcribed server-side and falls to the client path (2).
-- Restart needed: `/vapp/beat_plan` is a NEW Python endpoint → restart :8091 to enable the content-aware
-  SERVER path. Until then the arrange still works content-aware via the client transcript path.
+## Status — WORKING end-to-end (production-verified)
+A full Comic Drama build (10 shots = 8 images + 2 videos, 40s voiceover) generates, lands, and
+arranges into one synced 51s timeline — audio on its own row, images grouped, content-matched,
+motion applied. The pieces that got it foolproof:
+- **Executor owns timing** — the arrange ALWAYS computes content-aware windows (LLM never passes
+  times). Relevancy via `match_shots` (each shot → the narration moment it depicts). Audio-is-king:
+  video length = the voiceover.
+- **`addAudio` minimal payload** — passing `display` made designcombo's `ADD_AUDIO` silently drop the
+  clip ("no voiceover on the timeline"); the reducer computes the real duration itself.
+- **serializedAdd() mutex** — THE fix for "clips landed then vanished / 2/4 visuals". Concurrent
+  `ADD_ITEMS`/`ADD_AUDIO` (async; ADD_AUDIO loads the audio ~13s first) did read-modify-write on
+  `trackItemsMap` and clobbered each other. Now each add runs — and is awaited to land — before the
+  next. Generation stays parallel; only the mutation is serialized.
+- **Auth** — gen + transcribe routes send the token as BOTH `Bearer` (session) and `x-api-key`
+  (vk-… API keys); vApp `/api/v1` accepts a vk- key only via x-api-key.
+- **Server-readable trace** — `elog()` tees every `[AI-Edit …]` line (incl. per-add item counts) to
+  `logs/vapp_editor.log` via `/api/editor-log` → `/vapp/editor_log`.
+
+Restart needed after pulling: `:8091` (new `/vapp/editor_log`, `/vapp/media/meta`, `/vapp/beat_plan`)
++ editor rebuild. Test only on a PRODUCTION build — `next dev` (Turbopack HMR) duplicates the store
+module and gives false `waitForItem` timeouts.
+
+## Roadmap / open (discussed, not yet built)
+- **Effects as core ops** — `transition` (fade/slide), smarter `kenBurns`, fast-cuts: the LLM emits
+  effect ops (context-aware) that call the SAME editable edit ops; executor applies a default so it's
+  never bare; user can change any of it. (Today the arrange applies alternating Ken Burns only.)
+- **Interleave video shots** — the LLM currently tends to place video shots LAST; prompt it to put
+  them at dramatic beats among the images.
+- **"apply to ALL items" gap** — an edit like "add Ken Burns to every clip" sometimes skips middle
+  items (LLM emits ops for only the last few) — make the executor apply to all when target = all.
+- **User-controlled style + effects** — the prompt already takes shots/duration; extend it so the
+  user can dictate script STYLE and effect intensity the same way.
+- **music bed (acestep) + sfx** rows, **lipsync** (video↔audio).
 
 Build: `npm run build`; the user restarts the editor. Requires the vApp backend (`/api/ai-*` →
 vApp `/vapp/llm` + `/api/v1/*`).
