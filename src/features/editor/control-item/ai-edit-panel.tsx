@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import useAiEditStore from "../store/use-ai-edit-store";
 import useStore from "../store/use-store";
 import { dispatch } from "@designcombo/events";
@@ -353,6 +353,23 @@ export default function AiEditPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Elapsed-time counter — runs the whole time the AI is WORKING (LLM streaming OR the build /
+  // generation / arrange is still in progress), shown in the header; turns off when everything is done.
+  const lastMsg = s.messages[s.messages.length - 1];
+  const genActive = !!lastMsg?.genStatus && !/^\s*[✓⚠⏹]/.test(lastMsg.genStatus);
+  const working = s.busy || genActive;
+  const [elapsed, setElapsed] = useState(0);
+  const workStartRef = useRef(0);
+  useEffect(() => {
+    if (working) {
+      if (!workStartRef.current) workStartRef.current = Date.now();
+      const t = setInterval(() => setElapsed(Math.round((Date.now() - workStartRef.current) / 1000)), 500);
+      return () => clearInterval(t);
+    }
+    workStartRef.current = 0;
+    setElapsed(0);
+  }, [working]);
 
   // Close the settings popover on any click outside it (except the gear toggle, which
   // handles its own open/close). Was sticking open until the gear was clicked again.
@@ -1221,7 +1238,14 @@ export default function AiEditPanel() {
             ))}
           </div>
           <span className="text-[11px] font-medium text-foreground">✦ AI Edit</span>
-          {chips.length > 0 && <span className="text-[11px] text-muted-foreground">{chips.length} selected</span>}
+          {working ? (
+            <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-[1px] text-[10px] font-medium tabular-nums text-sky-600">
+              <span className="h-[6px] w-[6px] animate-pulse rounded-full bg-sky-500" />
+              {elapsed}s
+            </span>
+          ) : (
+            chips.length > 0 && <span className="text-[11px] text-muted-foreground">{chips.length} selected</span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
