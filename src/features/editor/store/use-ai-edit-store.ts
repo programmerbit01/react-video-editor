@@ -59,6 +59,7 @@ interface AiEditState {
   model: string;
   pipeline: string; // "" = normal Edit ; "comic_drama" | "faceless_video" = pipeline mode (swaps the system prompt)
   vibe: string; // "" = none ; a VIBE preset id (fast_drama / cinematic / …) — injects a style phrase into the prompt + timing
+  customVibes: { id: string; label: string; style: string }[]; // user-added presets (persisted)
   models: ChatModel[];
   history: HistoryEntry[];
   transcript: { key: string; segments: { start: number; end: number; text: string }[] } | null;
@@ -86,6 +87,9 @@ interface AiEditState {
   setModel: (m: string) => void;
   setPipeline: (v: string) => void;
   setVibe: (v: string) => void;
+  addCustomVibe: (label: string, style: string) => string;
+  updateCustomVibe: (id: string, label: string, style: string) => void;
+  removeCustomVibe: (id: string) => void;
   setModels: (m: ChatModel[]) => void;
   setTranscript: (t: { key: string; segments: { start: number; end: number; text: string }[] } | null) => void;
   addHistory: (e: HistoryEntry) => void;
@@ -118,6 +122,7 @@ const useAiEditStore = create<AiEditState>()(
   model: "",
   pipeline: "",
   vibe: "",
+  customVibes: [],
   models: [],
   history: [],
   transcript: null,
@@ -155,6 +160,15 @@ const useAiEditStore = create<AiEditState>()(
   setModel: (m) => set({ model: m }),
   setPipeline: (v) => set({ pipeline: v }),
   setVibe: (v) => set({ vibe: v }),
+  addCustomVibe: (label, style) => {
+    const id = "custom_" + Math.random().toString(36).slice(2, 9);
+    set((st) => ({ customVibes: [...st.customVibes, { id, label: label.trim() || "Custom", style: style.trim() }], vibe: id }));
+    return id;
+  },
+  updateCustomVibe: (id, label, style) =>
+    set((st) => ({ customVibes: st.customVibes.map((v) => (v.id === id ? { ...v, label: label.trim() || v.label, style: style.trim() } : v)) })),
+  removeCustomVibe: (id) =>
+    set((st) => ({ customVibes: st.customVibes.filter((v) => v.id !== id), vibe: st.vibe === id ? "" : st.vibe })),
   setModels: (m) => set({ models: m }),
   setTranscript: (t) => set({ transcript: t }),
   addHistory: (e) => set((st) => ({ history: [e, ...st.history] })),
@@ -174,6 +188,7 @@ const useAiEditStore = create<AiEditState>()(
         autoApply: st.autoApply,
         model: st.model,
         vibe: st.vibe,
+        customVibes: st.customVibes,
       }),
       // The panel opens by DEFAULT now — force it EXPANDED on load so a STALE persisted
       // "collapsed" state can never leave it opened but blank (header only, no chat body).

@@ -26,7 +26,6 @@ import {
   PIPELINES,
   PIPELINE_PROMPTS,
   VIBES,
-  vibeStyle,
 } from "../ai-edit/operations";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
@@ -374,6 +373,28 @@ export default function AiEditPanel() {
   const working = s.busy || genActive;
   const [elapsed, setElapsed] = useState(0);
   const workStartRef = useRef(0);
+
+  // Vibe presets (built-in + user's custom, persisted). The dropdown lets you pick, add, edit, delete.
+  const allVibes = [...VIBES, ...s.customVibes];
+  const vibeStyleOf = (id: string) => allVibes.find((v) => v.id === id)?.style || "";
+  const curVibe = allVibes.find((v) => v.id === s.vibe);
+  const [vibeMenuOpen, setVibeMenuOpen] = useState(false);
+  const [vibeEdit, setVibeEdit] = useState<{ id: string; label: string; style: string } | null>(null);
+  const vibeMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!vibeMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!vibeMenuRef.current?.contains(e.target as Node)) { setVibeMenuOpen(false); setVibeEdit(null); }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [vibeMenuOpen]);
+  const saveVibe = () => {
+    if (!vibeEdit) return;
+    if (vibeEdit.id === "new") s.addCustomVibe(vibeEdit.label, vibeEdit.style);
+    else s.updateCustomVibe(vibeEdit.id, vibeEdit.label, vibeEdit.style);
+    setVibeEdit(null);
+  };
   useEffect(() => {
     if (working) {
       if (!workStartRef.current) workStartRef.current = Date.now();
@@ -535,7 +556,7 @@ export default function AiEditPanel() {
           role: "user",
           // A Vibe preset appends its style phrase so the pipeline plans the script + look to it.
           content: s.pipeline
-            ? `${text}${vibeStyle(s.vibe) ? `\n\nSTYLE / VIBE: ${vibeStyle(s.vibe)}.` : ""}`
+            ? `${text}${vibeStyleOf(s.vibe) ? `\n\nSTYLE / VIBE: ${vibeStyleOf(s.vibe)}.` : ""}`
             : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
         },
       ],
@@ -895,7 +916,8 @@ export default function AiEditPanel() {
               s.updateAt(i, { genStatus: "🧠 Matching each shot to what the narration says…" });
               const narration = segs.map((sg: any) => `[${(sg.start || 0).toFixed(1)}-${(sg.end || 0).toFixed(1)}] ${String(sg.text || "").trim()}`).join("\n");
               const shotLines = shots.map((sh, k) => `${k + 1}. id="${sh.id}" desc="${sh.desc || "(unknown)"}"`).join("\n");
-              const vibeLine = vibeStyle(useAiEditStore.getState().vibe);
+              const vst = useAiEditStore.getState();
+              const vibeLine = [...VIBES, ...vst.customVibes].find((v) => v.id === vst.vibe)?.style || "";
               const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free; also give each a MOTION):\n${shotLines}\n\nTotal audio: ${totalMs} ms${vibeLine ? `\n\nSTYLE / VIBE: ${vibeLine}` : ""}`;
               elog("[AI-Edit arrange] → match_shots (relevancy)", { described, N });
               const tM = Date.now();
@@ -1644,25 +1666,76 @@ export default function AiEditPanel() {
                       </option>
                     ))}
                   </select>
-                  {/* Vibe preset — one-click look & pace (a style phrase injected into the plan +
-                      timing). Shown when a pipeline builds a whole video. Selected value is visible. */}
+                  {/* Vibe preset — compact custom dropdown: built-in + your own presets (add / edit /
+                      delete, saved in localStorage). A style phrase injected into the plan + timing. */}
                   {s.pipeline && (
-                    <select
-                      value={s.vibe}
-                      onChange={(e) => s.setVibe(e.target.value)}
-                      className={`h-7 max-w-[116px] truncate rounded-lg border px-1.5 text-[10px] outline-none ${
-                        s.vibe
-                          ? "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300"
-                          : "border-border bg-background text-muted-foreground"
-                      }`}
-                      title="Vibe — look & pace preset"
-                    >
-                      {VIBES.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.id ? v.label : "🎨 Vibe"}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative" ref={vibeMenuRef}>
+                      <button
+                        type="button"
+                        onClick={() => setVibeMenuOpen((o) => !o)}
+                        className={`flex h-7 max-w-[120px] items-center gap-1 truncate rounded-lg border px-1.5 text-[10px] outline-none ${
+                          s.vibe
+                            ? "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300"
+                            : "border-border bg-background text-muted-foreground"
+                        }`}
+                        title="Vibe — look & pace preset"
+                      >
+                        <span className="truncate">{curVibe && s.vibe ? curVibe.label : "🎨 Vibe"}</span>
+                        <span className="opacity-60">▾</span>
+                      </button>
+                      {vibeMenuOpen && (
+                        <div className="absolute bottom-full right-0 z-50 mb-1 max-h-[260px] w-[200px] overflow-auto rounded-lg border border-border bg-background p-1 shadow-xl">
+                          {allVibes.map((v) => {
+                            const custom = v.id.startsWith("custom_");
+                            return (
+                              <div key={v.id || "none"} className="group flex items-center rounded-md hover:bg-muted/60">
+                                <button
+                                  type="button"
+                                  onClick={() => { s.setVibe(v.id); setVibeMenuOpen(false); setVibeEdit(null); }}
+                                  className={`flex-1 truncate px-2 py-1 text-left text-[11px] ${s.vibe === v.id ? "font-medium text-amber-600 dark:text-amber-300" : "text-foreground"}`}
+                                >
+                                  {v.id ? v.label : "None"}
+                                  {!v.id && <span className="text-muted-foreground"> · default</span>}
+                                </button>
+                                {custom && (
+                                  <>
+                                    <button type="button" title="Edit" onClick={() => setVibeEdit({ id: v.id, label: v.label, style: v.style })} className="px-1 text-[11px] text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100">✎</button>
+                                    <button type="button" title="Delete" onClick={() => s.removeCustomVibe(v.id)} className="px-1 pr-1.5 text-[11px] text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100">🗑</button>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                          <div className="my-1 border-t border-border" />
+                          {vibeEdit ? (
+                            <div className="flex flex-col gap-1 p-1">
+                              <input
+                                autoFocus
+                                value={vibeEdit.label}
+                                onChange={(e) => setVibeEdit({ ...vibeEdit, label: e.target.value })}
+                                placeholder="Name (e.g. 🌧️ Rainy Noir)"
+                                className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:border-amber-500/60"
+                              />
+                              <textarea
+                                value={vibeEdit.style}
+                                onChange={(e) => setVibeEdit({ ...vibeEdit, style: e.target.value })}
+                                placeholder="Style / pace, e.g. dark rainy noir, slow moody holds, cold blue grade"
+                                rows={2}
+                                className="resize-none rounded border border-border bg-background px-1.5 py-1 text-[11px] outline-none focus:border-amber-500/60"
+                              />
+                              <div className="flex justify-end gap-1">
+                                <button type="button" onClick={() => setVibeEdit(null)} className="rounded px-2 py-[2px] text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
+                                <button type="button" onClick={saveVibe} disabled={!vibeEdit.label.trim() || !vibeEdit.style.trim()} className="rounded bg-amber-600 px-2 py-[2px] text-[10px] text-white hover:bg-amber-500 disabled:opacity-40">Save</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button type="button" onClick={() => setVibeEdit({ id: "new", label: "", style: "" })} className="w-full rounded-md px-2 py-1 text-left text-[11px] text-sky-600 hover:bg-muted/60">
+                              + Add preset
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   )}
                   <button
                     onClick={s.busy ? stopWork : send}
