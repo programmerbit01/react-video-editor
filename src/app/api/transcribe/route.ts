@@ -32,7 +32,8 @@ export async function POST(request: Request) {
     }
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers.Authorization = `Bearer ${token}`;
+    // Bearer (session) + x-api-key (vk-… API key) so both auth styles work.
+    if (token) { headers.Authorization = `Bearer ${token}`; headers["x-api-key"] = token; }
 
     const transcribeResponse = await fetch(`${baseUrl}/vapp/transcribe`, {
       method: "POST",

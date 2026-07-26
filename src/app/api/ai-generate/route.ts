@@ -79,7 +79,9 @@ export async function POST(request: Request) {
     }
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers.Authorization = `Bearer ${token}`;
+    // Send the token as BOTH Bearer (session tokens) and x-api-key (vk-… API keys) — the vApp's
+    // /api/v1 accepts a vk- key only via x-api-key, so a Bearer-only header 401s for API-key users.
+    if (token) { headers.Authorization = `Bearer ${token}`; headers["x-api-key"] = token; }
 
     const startRes = await fetch(`${base}/api/v1/${model}`, {
       method: "POST",
