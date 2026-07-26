@@ -44,21 +44,32 @@ const getToken = () => {
 // pacing. Without this, only the Vibe preset drives motion; with it, the PROMPT drives it too.
 let _lastPipelineRequest = "";
 
-// Tee AI-Edit logs to the console AND to the vApp (logs/vapp_editor.log) so the whole
-// generate → arrange trace is readable server-side. Batched (flushes every ~500ms).
+// Tee AI-Edit logs to the console AND to the vApp (logs/vapp_editor.log) so the WHOLE
+// prompt → plan → gen → transcribe → match → arrange → effects trace is readable server-side.
+// The file version is ANSI-COLORED by stage (view with `tail -f logs/vapp_editor.log`), so each
+// stage stands out; the console version is plain. Batched (flushes every ~500ms).
+const A = { reset: "\x1b[0m", gray: "\x1b[90m", red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m", blue: "\x1b[34m", magenta: "\x1b[35m", cyan: "\x1b[36m", bold: "\x1b[1m" };
+function stageColor(body: string): string {
+  if (/━━━|NEW GEN/.test(body)) return A.bold + A.cyan;
+  if (/✖|ERROR|TIMEOUT|failed|MISSING|unusable/i.test(body)) return A.red;
+  if (/match_shots|relevancy|BEATS|weight|pace/i.test(body)) return A.magenta;
+  if (/transcrib|refined|segments/i.test(body)) return A.green;
+  if (/\bgen\b|Generating|landed|\+image|\+video|\+audio|GEN REQ|GEN RET/i.test(body)) return A.yellow;
+  if (/arrange|motion|Ken Burns|kenBurns|DONE|post-effect|transition/i.test(body)) return A.blue;
+  if (/PROMPT|SYSTEM|SCRIPT|PLAN|LLM|request/i.test(body)) return A.cyan;
+  return A.gray;
+}
 let _elogBuf: string[] = [];
 let _elogTimer: any = null;
 function elog(...args: any[]) {
   const stamp = new Date().toISOString().slice(11, 23);
-  const line =
-    `[${stamp}] ` +
-    args
-      .map((a) => (typeof a === "string" ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()))
-      .join(" ");
+  const body = args
+    .map((a) => (typeof a === "string" ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()))
+    .join(" ");
   // eslint-disable-next-line no-console
-  console.log(line);
+  console.log(`[${stamp}] ${body}`);
   if (typeof window === "undefined") return;
-  _elogBuf.push(line);
+  _elogBuf.push(`${A.gray}[${stamp}]${A.reset} ${stageColor(body)}${body}${A.reset}`); // colored for the file
   if (_elogTimer) return;
   _elogTimer = setTimeout(() => {
     const lines = _elogBuf;
@@ -275,6 +286,9 @@ function serializedAdd(label: string, doAdd: () => string): Promise<string> {
 // the 1st finished). Same build signature within 12s → skip.
 let _lastBuildKey = "";
 let _lastBuildAt = 0;
+// A concurrent arrange for the SAME audio would re-transcribe + re-arrange and CLOBBER the first
+// (the log's 2nd transcribe timing out 100s later). This lock skips a 2nd arrange of the same audio.
+const _arrangeLock = new Map<string, number>();
 function buildIsDuplicate(gens: any[], arranges: any[]): boolean {
   const key = JSON.stringify({
     g: (gens || []).map((g) => `${g.op}:${g.kind || ""}:${String(g.prompt || g.text || g.query || "").slice(0, 24)}`),
@@ -519,7 +533,11 @@ export default function AiEditPanel() {
   const runPrompt = async (text: string) => {
     if (!text.trim() || s.busy) return;
     _work = new AbortController(); // Stop button aborts this
-    if (s.pipeline) _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction
+    _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction (edit + pipeline)
+    const vibeNow = [...VIBES, ...s.customVibes].find((v) => v.id === s.vibe);
+    elog(`━━━━━━━━━━ NEW GEN ━━━━━━━━━━  mode=${s.pipeline || "edit"}  vibe=${vibeNow?.label || "none"}  model=${s.model}`);
+    elog(`[PROMPT] ${text}`);
+    if (vibeNow?.style) elog(`[VIBE STYLE] ${vibeNow.style}`);
     const ctx = selectionContext(chips);
     s.addMessage({ role: "user", content: text });
     s.addMessage({ role: "assistant", content: "", reasoning: "", thinkingOpen: true });
@@ -583,6 +601,7 @@ export default function AiEditPanel() {
       payload.reasoning_effort = "low";
       payload.extra_body = { think: false };
     }
+    elog(`[LLM REQ] system=${s.pipeline ? PIPELINES.find((p) => p.id === s.pipeline)?.label : "edit assistant"} · task=editor_edit · in="${String(payload.messages[1].content).replace(/\s+/g, " ").slice(0, 160)}…"`);
     const t0 = Date.now();
     let firstContentAt = 0;
     try {
@@ -591,8 +610,13 @@ export default function AiEditPanel() {
         s.updateLast({ content: p.content, reasoning: p.reasoning });
       }, _work?.signal);
       const reasoningMs = reasoning ? (firstContentAt || Date.now()) - t0 : undefined;
+      elog(`[LLM RET] in ${Date.now() - t0}ms · ${content.length} chars`);
       const env = extractOps(content);
       if (env && env.operations?.length) {
+        elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
+        const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
+        if (aud?.text) elog(`[SCRIPT] ${String(aud.text).replace(/\s+/g, " ")}`);
+        env.operations.filter((o: any) => o.op === "generate" && o.kind !== "audio").forEach((o: any, k: number) => elog(`[GEN PROMPT ${k + 1}] ${o.kind}: ${String(o.prompt || o.text || "").replace(/\s+/g, " ").slice(0, 140)}`));
         s.updateLast({ content: env.summary || "Proposed edit ready.", reasoning, reasoningMs, thinkingOpen: false, ops: env.operations });
         // Auto mode: apply immediately without asking
         if (useAiEditStore.getState().autoApply) {
@@ -855,6 +879,13 @@ export default function AiEditPanel() {
         source: gens.length ? "just-generated" : chosen.length ? "selected" : "all-visuals",
         audio: audio ? { srcTail: String(audio.details?.src || "").slice(-48), audioMs } : "NONE",
       });
+      const alockKey = String(audio?.details?.src || "no-audio");
+      const alockPrev = _arrangeLock.get(alockKey);
+      if (alockPrev && Date.now() - alockPrev < 150000) {
+        elog(`[AI-Edit arrange] ⏭ SKIP — an arrange for this audio is already running (double-fire, ${Math.round((Date.now() - alockPrev) / 1000)}s ago)`);
+        return;
+      }
+      _arrangeLock.set(alockKey, Date.now());
       if (!N) {
         elog("[AI-Edit arrange] ✖ nothing to arrange — no visuals on the timeline");
         s.updateAt(i, { genStatus: "⚠️ Nothing to arrange — add some images or videos to the timeline first." });
@@ -940,11 +971,14 @@ export default function AiEditPanel() {
               // "hard fast cuts" in the prompt reach match_shots (not just the Vibe preset).
               const styleLine = [vibeLine, _lastPipelineRequest].filter(Boolean).join(". ").slice(0, 300);
               const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free; also give each a MOTION):\n${shotLines}\n\nTotal audio: ${totalMs} ms${styleLine ? `\n\nSTYLE / DIRECTION: ${styleLine}` : ""}`;
-              elog("[AI-Edit arrange] → match_shots (relevancy)", { described, N });
+              elog(`[MATCH REQ] ${N} shots, total=${totalMs}ms, direction="${styleLine.slice(0, 80)}"`);
+              shots.forEach((sh, k) => elog(`[MATCH SHOT ${k + 1}] ${sh.id.slice(0, 6)} desc="${sh.desc || "(none)"}"`));
               const tM = Date.now();
               const outRaw = await llmText("match_shots", input, getToken());
               const win = normalizeShotWindows(outRaw, targetVisuals, totalMs);
-              elog(`[AI-Edit arrange] match_shots in ${Date.now() - tM}ms`, { usable: !!win, raw: (outRaw || "").slice(0, 160) });
+              elog(`[MATCH RET] in ${Date.now() - tM}ms · usable=${!!win}`);
+              if (win) elog(`[MATCH WINDOWS] ${win.map((w) => `${w.id.slice(0, 6)}:${w.from_ms}-${w.to_ms}(${w.to_ms - w.from_ms}ms,${w.motion || "?"})`).join(" | ")}`);
+              else elog(`[MATCH RAW] ${(outRaw || "").slice(0, 200)}`);
               if (win) {
                 source = "match";
                 beats = win.map((w) => ({ itemId: w.id, fromMs: w.from_ms, toMs: w.to_ms, text: said(w.from_ms, w.to_ms), motion: w.motion }));
@@ -999,7 +1033,14 @@ export default function AiEditPanel() {
           };
           const imgShots = targetVisuals.filter((id) => (map[id] as any)?.type === "image");
           const applied = applyMotionBatch(imgShots.map((id, k) => { const mv = motionOf(id, k); return { id, kenBurns: mv.kb, intensity: mv.intensity }; }));
-          elog(`[AI-Edit arrange] ✅ DONE — motion on ${imgShots.length} image shot(s) [${source}]:`, Object.fromEntries(Object.entries(applied).map(([id, kb]) => [id.slice(0, 6), kb])));
+          elog(`[MOTION] applied to ${imgShots.length} image shot(s) [${source}]: ${Object.entries(applied).map(([id, kb]) => `${id.slice(0, 6)}=${kb}`).join(", ")}`);
+          // READBACK: confirm the kenBurns actually persisted on the items (if it shows here, it renders
+          // on PLAY — a paused frame at a clip's start shows scale 1.0, i.e. "no zoom" until you play).
+          setTimeout(() => {
+            const rm = useStore.getState().trackItemsMap || {};
+            elog(`[MOTION READBACK] ${imgShots.map((id) => `${id.slice(0, 6)}=${(rm[id] as any)?.details?.kenBurns || "MISSING"}@${(rm[id] as any)?.details?.kenBurnsIntensity ?? "-"}`).join(", ")}`);
+          }, 400);
+          elog("[AI-Edit arrange] ✅ DONE — arrange + motion applied");
         } catch (e) {
           elog("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
           note = note || "hit an error placing the clips on the timeline";
@@ -1012,6 +1053,7 @@ export default function AiEditPanel() {
             : `✓ Arranged ${N} shot${N > 1 ? "s" : ""} with motion — ${note || "no voiceover, so spaced evenly"}.`,
         });
       }
+      _arrangeLock.delete(alockKey); // arrange finished → allow a fresh one for this audio
     } else if (newVisual.length) {
       s.updateAt(i, { genStatus: `✓ Added ${newVisual.length} clip${newVisual.length > 1 ? "s" : ""} — say "arrange into a video" to sequence them.` });
     }
