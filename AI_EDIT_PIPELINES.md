@@ -24,13 +24,20 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
   pipeline swaps the system prompt; the LLM emits `generate`/`arrange` ops that build on the live
   timeline. (`operations.ts` prompts, `store` `pipeline` state, `ai-edit-panel.tsx` dropdown.)
 - **Smart `arrange` core op** (works in Edit mode too): targets the just-generated shots OR, when
-  the user says "arrange" over existing clips, ALL the visuals. **Timing is planned SERVER-SIDE** —
-  the arrange calls `/api/beat-plan` → vApp `/vapp/beat_plan`, which **REUSES VidRush's proven
-  transcribe → `beat_plan` chain** and returns EXACTLY N contiguous, **content-aware, speech-aligned**
-  windows (each carrying the narration spoken during it). The old client-side transcribe + even-spread
-  was fragile (could hang, dumb even split) — deleted in favour of this reuse. Then applies **Ken
-  Burns motion** and ends with a **short plain-English report**. Builds the beat model (each shot's
-  slot + its narration) so animate / effects / lip-sync stay context-aware.
+  the user says "arrange" over existing clips, the SELECTED / ALL visuals. **The executor OWNS the
+  timing — never the LLM** (timing is a mechanic, not a decision). This is the key fix: previously,
+  if the LLM emitted an explicit-times arrange, `runBuild` applied it directly and the smart block
+  (transcribe + beat-plan + every log) was bypassed → "no logs, not context-aware, scattered rows".
+  Now the arrange ALWAYS computes content-aware windows itself, in priority order:
+  1. **server** `/api/beat-plan` → vApp `/vapp/beat_plan` (REUSES VidRush's transcribe → `beat_plan`;
+     exactly N contiguous, speech-aligned windows). Preferred; needs the :8091 restart to be live.
+  2. **client transcript** — reuse the Captions-tab transcript if present (instant), else the LIVE
+     `/api/transcribe`; then even windows **snapped to speech boundaries**. Works with NO server change.
+  3. **even split** — gap-free, when there's no voiceover.
+  It then **consolidates all shots onto ONE video row** (contiguous, gap-free → timeline total = the
+  voiceover length, no black tail), applies alternating **Ken Burns motion**, and ends with a short
+  report. Builds the beat model (each shot's slot + its narration) so animate / effects / lip-sync
+  stay context-aware. The LLM only emits `{op:"arrange","target":"all"}` — no times.
 - **`animate` op** — turn a selected image into a VIDEO (image-to-video / LTX i2v), keeping it in
   the SAME timeline slot. The "cheap images first → upgrade selected shots to video" flow.
 - **i2v support** in `/api/ai-generate` (video accepts `image_url`).
@@ -59,11 +66,17 @@ now, and **animate / effects / lip-sync** read it later so their motion/prompts 
   match so placement is by MEANING, not just even time. (Pipeline shots are already order-relevant.)
 
 ## Known / in-progress
-- Arrange timing is now **reuse, not reinvent** — the editor delegates to the server's `beat_plan`
-  (the same intelligence VidRush uses), instead of the old fragile client transcribe + even-spread.
-  Detailed `[AI-Edit arrange]` console logs still report each step (request → beats → apply / errors).
-- Next: `/vapp/beat_plan` audio must be a fetchable URL (R2/generated/uploaded) — a local blob/data
-  URL can't be transcribed server-side; those fall back to even spacing with a clear note.
+- Arrange timing is now **executor-owned + reuse, not reinvent**: the editor prefers the server's
+  `beat_plan` (same intelligence VidRush uses), with a client-transcript fallback so it also works
+  BEFORE the :8091 restart. Detailed `[AI-Edit arrange]` console logs report each step (beat-plan
+  request/status → transcript segments → beats(source) → apply / errors) — never silent again.
+- Verified: server resample logic (contiguous / gap-free / exactly N windows, content-aware) and the
+  executor consolidation live in the browser — 3 scattered rows → 1 row, uneven content-aware widths,
+  gap-free, timeline total = the voiceover.
+- Note: server `beat_plan` (path 1) needs the audio to be a fetchable URL (R2 / generated / uploaded);
+  a local blob/data URL can't be transcribed server-side and falls to the client path (2).
+- Restart needed: `/vapp/beat_plan` is a NEW Python endpoint → restart :8091 to enable the content-aware
+  SERVER path. Until then the arrange still works content-aware via the client transcript path.
 
 Build: `npm run build`; the user restarts the editor. Requires the vApp backend (`/api/ai-*` →
 vApp `/vapp/llm` + `/api/v1/*`).
