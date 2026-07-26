@@ -256,6 +256,32 @@ function serializedAdd(label: string, doAdd: () => string): Promise<string> {
   return run;
 }
 
+// The STT sometimes returns ONE coarse segment for the whole voiceover (e.g. continuous speech).
+// match_shots then sees a single "[0-23s] …" line and can only EVEN-split in input order — no
+// content-awareness, no reorder (this is why a video shot stayed stuck at the end). Re-chunk by the
+// WORD timestamps (transcribe requests them) into ~2.5s phrases so each shot can land on a DISTINCT
+// narration moment. Falls back to the original segments when there's no usable word data.
+function refineSegments(raw: any[]): any[] {
+  const words: { start: number; end: number; text: string }[] = [];
+  for (const sg of raw || []) {
+    for (const w of sg?.words || []) {
+      const s = Number(w?.start), e = Number(w?.end), t = String(w?.word || "").trim();
+      if (t && Number.isFinite(s) && Number.isFinite(e) && e >= s) words.push({ start: s, end: e, text: t });
+    }
+  }
+  if (words.length < 6) return raw; // not enough word data → keep the segments as-is
+  const CHUNK = 2.5; // seconds per phrase
+  const out: { start: number; end: number; text: string }[] = [];
+  let cur: { start: number; end: number; text: string } | null = null;
+  for (const w of words) {
+    if (!cur) cur = { start: w.start, end: w.end, text: w.text };
+    else if (w.end - cur.start <= CHUNK) { cur.end = w.end; cur.text += " " + w.text; }
+    else { out.push(cur); cur = { start: w.start, end: w.end, text: w.text }; }
+  }
+  if (cur) out.push(cur);
+  return out.length >= 2 ? out : raw;
+}
+
 // Parse the match_shots LLM output → contiguous, gap-free windows in the LLM's relevance ORDER.
 // FOOLPROOF: keeps only the given target ids, every id exactly once, forces coverage [0, totalMs].
 // Returns null if the output can't be trusted (missing/extra ids) → caller falls back.
@@ -750,6 +776,13 @@ export default function AiEditPanel() {
                 } catch { /* cache best-effort */ }
               }
             }
+            // Break a coarse transcript into ~2.5s phrases (via word timestamps) so match_shots can
+            // place each shot at a DISTINCT moment + REORDER by content — not even-split one line.
+            if (segs.length) {
+              const fine = refineSegments(segs);
+              if (fine.length !== segs.length) elog(`[AI-Edit arrange] refined transcript ${segs.length} → ${fine.length} phrases (word-level)`);
+              segs = fine;
+            }
             // AUDIO IS KING: span the FULL voiceover. Use the larger of the audio clip's real length
             // (from meta.duration) and the last spoken word, so the video never ends before the audio
             // (trailing music/silence stays covered) — within the ~2-4% the durations naturally differ.
@@ -838,10 +871,12 @@ export default function AiEditPanel() {
           // video row (the executor moves them onto one track — see operations.ts arrange handler).
           elog("[AI-Edit arrange] applying arrange (single track, gap-free)");
           applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
-          // MOTION: subtle Ken Burns per shot (alternating) so stills feel alive.
+          // MOTION: alternating Ken Burns on the IMAGE shots (videos already move on their own) —
+          // clearly visible so a still montage feels alive.
           const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
-          applyOperations(targetVisuals.map((id, k) => ({ op: "edit", itemId: id, details: { kenBurns: KB[k % KB.length], kenBurnsIntensity: 14 } })));
-          elog("[AI-Edit arrange] ✅ DONE — arrange + motion applied");
+          const imgShots = targetVisuals.filter((id) => (map[id] as any)?.type === "image");
+          applyOperations(imgShots.map((id, k) => ({ op: "edit", itemId: id, details: { kenBurns: KB[k % KB.length], kenBurnsIntensity: 20 } })));
+          elog(`[AI-Edit arrange] ✅ DONE — arrange + Ken Burns on ${imgShots.length} image shot(s)`);
         } catch (e) {
           elog("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
           note = note || "hit an error placing the clips on the timeline";
@@ -1046,6 +1081,12 @@ export default function AiEditPanel() {
 
   const applyMsg = (i: number, m: any) => {
     if (!m.ops?.length) return;
+    // DOUBLE-APPLY GUARD: autoApply + a manual Apply (or a re-render) could call this twice → two
+    // runBuilds re-transcribe + re-arrange and CLOBBER each other (the log showed a 2nd arrange whose
+    // transcribe timed out after the 1st already finished). Claim the message synchronously; once
+    // applied, never again.
+    if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger)"); return; }
+    s.updateAt(i, { applied: true });
     const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "arrange", "captions", "direct"].includes(o.op));
     const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
