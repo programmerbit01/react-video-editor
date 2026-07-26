@@ -331,21 +331,33 @@ function normalizeShotWindows(
   const seen = new Set<string>();
   const clean = arr
     .filter((s) => s && targetIds.includes(String(s.id)) && !seen.has(String(s.id)) && (seen.add(String(s.id)), true))
-    .map((s) => ({ id: String(s.id), from_ms: Math.max(0, Math.floor(Number(s.from_ms) || 0)), motion: String(s.motion || "").trim() }))
+    .map((s) => ({
+      id: String(s.id),
+      from_ms: Math.max(0, Math.floor(Number(s.from_ms) || 0)),
+      to_ms: Math.max(0, Math.floor(Number(s.to_ms) || 0)),
+      motion: String(s.motion || "").trim(),
+    }))
     .sort((a, b) => a.from_ms - b.from_ms);
   // every target id must be accounted for — if the LLM dropped any, bail (don't silently lose shots)
   if (clean.length !== targetIds.length) return null;
-  // force contiguous, gap-free coverage of [0, totalMs] in the relevance order (keeps the LLM's motion)
+  // Force contiguous, gap-free coverage of [0, totalMs] — but PRESERVE the LLM's varied durations.
+  // Each window ends at the NEXT shot's from_ms (the LLM's own cut point), falling back to this shot's
+  // to_ms, then to an even split. Only a small MIN guard — do NOT flatten toward an equal share (that
+  // was the bug that made every clip the same length → boring "2020 b-roll" pacing).
+  const N = clean.length;
+  const MIN = 350;
   const out: { id: string; from_ms: number; to_ms: number; motion?: string }[] = [];
-  const per = Math.max(300, Math.floor(totalMs / targetIds.length));
-  for (let k = 0; k < clean.length; k++) {
+  for (let k = 0; k < N; k++) {
     const from = k === 0 ? 0 : out[k - 1].to_ms;
-    let to = k === clean.length - 1 ? totalMs : Math.max(from + per, clean[k + 1]?.from_ms || from + per);
-    to = Math.min(to, totalMs - (clean.length - 1 - k) * 300);
-    if (to <= from) to = Math.min(totalMs, from + per);
+    let to: number;
+    if (k === N - 1) to = totalMs;
+    else if (clean[k + 1].from_ms > from) to = clean[k + 1].from_ms; // the LLM's next cut point
+    else if (clean[k].to_ms > from) to = clean[k].to_ms; // else this shot's own end
+    else to = from + Math.floor((totalMs - from) / (N - k)); // last resort: split the remainder
+    to = Math.max(from + MIN, Math.min(to, totalMs - (N - 1 - k) * MIN));
     out.push({ id: clean[k].id, from_ms: from, to_ms: to, motion: clean[k].motion });
   }
-  out[out.length - 1].to_ms = totalMs;
+  out[N - 1].to_ms = totalMs;
   return out;
 }
 
