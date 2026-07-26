@@ -2,7 +2,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useDownloadState } from "./store/use-download-state";
 import { RenderReportRow, type RenderJob } from "./render-report";
 import { Button } from "@/components/ui/button";
-import { CircleCheckIcon, Minimize2Icon, XIcon, Loader2, CopyIcon, CheckIcon } from "lucide-react";
+import { CircleCheckIcon, Minimize2Icon, XIcon, Loader2, CopyIcon, CheckIcon, ExternalLink } from "lucide-react";
 import { DialogDescription, DialogTitle } from "@radix-ui/react-dialog";
 import { download } from "@/utils/download";
 import { useEffect, useRef, useState } from "react";
@@ -30,40 +30,38 @@ const DownloadProgressModal = ({ projectName }: { projectName?: string }) => {
   const [copied, setCopied] = useState(false);
   const startRef = useRef<number | null>(null);
   const finalRef = useRef<number>(0);
-  const [dlPct, setDlPct] = useState<number | null>(null); // 0-100 while the file streams to disk, null otherwise
+  const [dlActive, setDlActive] = useState(false); // streaming the file to disk
+  const [dlBytes, setDlBytes] = useState(0);        // bytes received so far
+  const [dlTotal, setDlTotal] = useState(0);        // Content-Length if CORS exposes it (often 0 → show MB)
   const [dlDone, setDlDone] = useState(false);
 
   // Filename from the saved project name (falls back to "video"); sanitized, single .mp4.
   const dlName = (projectName || "").replace(/\.mp4$/i, "").replace(/[^\w.\- ]+/g, "_").trim() || "video";
 
-  // Stream the export to disk WITH visible progress instead of a silent full fetch. R2 sends a
-  // Content-Length, so we can show "Downloading… X%" — the render being "Done" while the file
-  // quietly downloaded for another ~30s is exactly what read as "it stopped / errored". Direct
-  // R2, no proxy. Falls back to the plain download() on any stream/read error.
+  // Stream the export to disk WITH visible progress instead of a silent full fetch — the render
+  // being "Done" while the file quietly downloaded for another ~30s read as "it stopped/errored".
+  // The reader loop drives the progress; `Content-Length` is usually HIDDEN by CORS (not an
+  // exposed header) so `dlTotal` stays 0 and we show downloaded MB rather than a %. (The earlier
+  // version fell back to res.blob() when total was 0 → NO updates → stuck at "0%".) Direct R2, no
+  // proxy. Falls back to the plain download() on any stream/read error.
   const downloadWithProgress = async (url: string, filename: string) => {
     setDlDone(false);
-    setDlPct(0);
+    setDlActive(true);
+    setDlBytes(0);
+    setDlTotal(0);
     try {
       const res = await fetch(url);
-      const total = Number(res.headers.get("content-length")) || 0;
-      const reader = res.body?.getReader();
-      let blob: Blob;
-      if (!reader || !total) {
-        blob = await res.blob();
-      } else {
-        const chunks: BlobPart[] = [];
-        let recv = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            chunks.push(value);
-            recv += value.length;
-            setDlPct(Math.min(99, Math.round((recv / total) * 100)));
-          }
-        }
-        blob = new Blob(chunks, { type: "video/mp4" });
+      if (!res.ok || !res.body) throw new Error("download failed");
+      setDlTotal(Number(res.headers.get("content-length")) || 0);
+      const reader = res.body.getReader();
+      const chunks: BlobPart[] = [];
+      let recv = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) { chunks.push(value); recv += value.length; setDlBytes(recv); }
       }
+      const blob = new Blob(chunks, { type: "video/mp4" });
       const objUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objUrl;
@@ -72,10 +70,10 @@ const DownloadProgressModal = ({ projectName }: { projectName?: string }) => {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(objUrl), 2000);
-      setDlPct(null);
+      setDlActive(false);
       setDlDone(true);
     } catch {
-      setDlPct(null);
+      setDlActive(false);
       download(url, filename); // fallback: the original silent path still saves the file
     }
   };
@@ -86,7 +84,9 @@ const DownloadProgressModal = ({ projectName }: { projectName?: string }) => {
     setElapsed(0);
     setAutoDownloaded(false);
     setCopied(false);
-    setDlPct(null);
+    setDlActive(false);
+    setDlBytes(0);
+    setDlTotal(0);
     setDlDone(false);
   }, [exportRunId]);
 
@@ -230,10 +230,12 @@ const DownloadProgressModal = ({ projectName }: { projectName?: string }) => {
 
           {isCompleted && (
             <>
-              {dlPct !== null ? (
+              {dlActive ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Downloading to your device… {dlPct}%
+                  Downloading to your device… {dlTotal > 0
+                    ? `${Math.min(99, Math.round((dlBytes / dlTotal) * 100))}%`
+                    : `${(dlBytes / 1e6).toFixed(1)} MB`}
                 </div>
               ) : (
                 <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -254,8 +256,17 @@ const DownloadProgressModal = ({ projectName }: { projectName?: string }) => {
                       className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200"
                       onClick={(e) => (e.target as HTMLInputElement).select()}
                     />
-                    <Button variant="outline" size="sm" className="shrink-0" onClick={handleCopy}>
+                    <Button variant="outline" size="sm" className="shrink-0" title="Copy link" onClick={handleCopy}>
                       {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      title="Open in a new tab"
+                      onClick={() => { if (shareUrl) window.open(shareUrl, "_blank", "noopener,noreferrer"); }}
+                    >
+                      <ExternalLink className="size-4" />
                     </Button>
                   </div>
                   <div className="text-[11px] text-muted-foreground">
