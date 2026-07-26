@@ -642,6 +642,20 @@ export const PIPELINES: { id: string; label: string }[] = [
   { id: "faceless_video", label: "🎬 Faceless Video" },
 ];
 
+// VIBE presets — one-click "look & pace" shortcuts. Each is just a STYLE PHRASE injected into the LLM
+// prompt (script + look) AND the match_shots timing call (motion + cut pace). NOT a separate engine —
+// pure prompt sugar, so the same intelligent system drives it and the user can still type overrides.
+export const VIBES: { id: string; label: string; style: string }[] = [
+  { id: "", label: "None · default", style: "" },
+  { id: "fast_drama", label: "🔥 Fast Drama", style: "fast-paced punchy quick cuts, high tension, aggressive zoom punch-ins, short snappy shots" },
+  { id: "cinematic", label: "🎬 Cinematic", style: "slow cinematic, smooth elegant slow zoom-ins, longer holds, moody film-grade lighting" },
+  { id: "emotional", label: "💔 Emotional", style: "tender emotional, slow holds on faces, soft gentle zoom-ins, intimate unhurried pacing" },
+  { id: "action", label: "💥 Action", style: "high-energy action, hard fast cuts, kinetic aggressive punch-in zooms, relentless pace" },
+  { id: "vintage", label: "🎞️ Vintage", style: "vintage film look, warm nostalgic tone, gentle slow pans, soft grain" },
+];
+export const vibeStyle = (id: string): string => VIBES.find((v) => v.id === id)?.style || "";
+export const vibeLabel = (id: string): string => VIBES.find((v) => v.id === id)?.label || "";
+
 export const PIPELINE_PROMPTS: Record<string, string> = {
   comic_drama: COMIC_DRAMA_PROMPT,
   faceless_video: FACELESS_EDIT_PROMPT,

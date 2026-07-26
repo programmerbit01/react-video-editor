@@ -58,6 +58,7 @@ interface AiEditState {
   busy: boolean;
   model: string;
   pipeline: string; // "" = normal Edit ; "comic_drama" | "faceless_video" = pipeline mode (swaps the system prompt)
+  vibe: string; // "" = none ; a VIBE preset id (fast_drama / cinematic / …) — injects a style phrase into the prompt + timing
   models: ChatModel[];
   history: HistoryEntry[];
   transcript: { key: string; segments: { start: number; end: number; text: string }[] } | null;
@@ -84,6 +85,7 @@ interface AiEditState {
   clearChat: () => void;
   setModel: (m: string) => void;
   setPipeline: (v: string) => void;
+  setVibe: (v: string) => void;
   setModels: (m: ChatModel[]) => void;
   setTranscript: (t: { key: string; segments: { start: number; end: number; text: string }[] } | null) => void;
   addHistory: (e: HistoryEntry) => void;
@@ -115,6 +117,7 @@ const useAiEditStore = create<AiEditState>()(
   busy: false,
   model: "",
   pipeline: "",
+  vibe: "",
   models: [],
   history: [],
   transcript: null,
@@ -151,6 +154,7 @@ const useAiEditStore = create<AiEditState>()(
   clearChat: () => set({ messages: [] }),
   setModel: (m) => set({ model: m }),
   setPipeline: (v) => set({ pipeline: v }),
+  setVibe: (v) => set({ vibe: v }),
   setModels: (m) => set({ models: m }),
   setTranscript: (t) => set({ transcript: t }),
   addHistory: (e) => set((st) => ({ history: [e, ...st.history] })),
@@ -169,6 +173,7 @@ const useAiEditStore = create<AiEditState>()(
         optimizePrompt: st.optimizePrompt,
         autoApply: st.autoApply,
         model: st.model,
+        vibe: st.vibe,
       }),
       // The panel opens by DEFAULT now — force it EXPANDED on load so a STALE persisted
       // "collapsed" state can never leave it opened but blank (header only, no chat body).

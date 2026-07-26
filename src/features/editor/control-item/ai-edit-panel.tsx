@@ -25,6 +25,8 @@ import {
   OPS_SYSTEM_PROMPT,
   PIPELINES,
   PIPELINE_PROMPTS,
+  VIBES,
+  vibeStyle,
 } from "../ai-edit/operations";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
@@ -314,7 +316,7 @@ function normalizeShotWindows(
   raw: string,
   targetIds: string[],
   totalMs: number
-): { id: string; from_ms: number; to_ms: number }[] | null {
+): { id: string; from_ms: number; to_ms: number; motion?: string }[] | null {
   let t = (raw || "").trim();
   if (t.startsWith("```")) t = t.replace(/^```[a-z]*\n?/i, "").replace(/```$/,"").trim();
   const i = t.indexOf("{"), j = t.lastIndexOf("}");
@@ -325,23 +327,34 @@ function normalizeShotWindows(
   const seen = new Set<string>();
   const clean = arr
     .filter((s) => s && targetIds.includes(String(s.id)) && !seen.has(String(s.id)) && (seen.add(String(s.id)), true))
-    .map((s) => ({ id: String(s.id), from_ms: Math.max(0, Math.floor(Number(s.from_ms) || 0)) }))
+    .map((s) => ({ id: String(s.id), from_ms: Math.max(0, Math.floor(Number(s.from_ms) || 0)), motion: String(s.motion || "").trim() }))
     .sort((a, b) => a.from_ms - b.from_ms);
   // every target id must be accounted for — if the LLM dropped any, bail (don't silently lose shots)
   if (clean.length !== targetIds.length) return null;
-  // force contiguous, gap-free coverage of [0, totalMs] in the relevance order
-  const out: { id: string; from_ms: number; to_ms: number }[] = [];
+  // force contiguous, gap-free coverage of [0, totalMs] in the relevance order (keeps the LLM's motion)
+  const out: { id: string; from_ms: number; to_ms: number; motion?: string }[] = [];
   const per = Math.max(300, Math.floor(totalMs / targetIds.length));
   for (let k = 0; k < clean.length; k++) {
     const from = k === 0 ? 0 : out[k - 1].to_ms;
     let to = k === clean.length - 1 ? totalMs : Math.max(from + per, clean[k + 1]?.from_ms || from + per);
     to = Math.min(to, totalMs - (clean.length - 1 - k) * 300);
     if (to <= from) to = Math.min(totalMs, from + per);
-    out.push({ id: clean[k].id, from_ms: from, to_ms: to });
+    out.push({ id: clean[k].id, from_ms: from, to_ms: to, motion: clean[k].motion });
   }
   out[out.length - 1].to_ms = totalMs;
   return out;
 }
+
+// LLM motion word → the player's Ken Burns kind + intensity. 'punchIn' = a hard fast zoom for impact;
+// 'hold' = near-still for an emotional pause. Unknown/empty → fall back to an alternating default.
+const MOTION_MAP: Record<string, { kb: string; intensity: number }> = {
+  punchin: { kb: "zoomIn", intensity: 34 },
+  zoomin: { kb: "zoomIn", intensity: 16 },
+  zoomout: { kb: "zoomOut", intensity: 16 },
+  panleft: { kb: "panLeft", intensity: 14 },
+  panright: { kb: "panRight", intensity: 14 },
+  hold: { kb: "zoomIn", intensity: 5 },
+};
 
 export default function AiEditPanel() {
   const s = useAiEditStore();
@@ -520,7 +533,10 @@ export default function AiEditPanel() {
         { role: "system", content: PIPELINE_PROMPTS[s.pipeline] || OPS_SYSTEM_PROMPT },
         {
           role: "user",
-          content: s.pipeline ? text : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
+          // A Vibe preset appends its style phrase so the pipeline plans the script + look to it.
+          content: s.pipeline
+            ? `${text}${vibeStyle(s.vibe) ? `\n\nSTYLE / VIBE: ${vibeStyle(s.vibe)}.` : ""}`
+            : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
         },
       ],
     };
@@ -804,7 +820,7 @@ export default function AiEditPanel() {
         elog("[AI-Edit arrange] ✖ nothing to arrange — no visuals on the timeline");
         s.updateAt(i, { genStatus: "⚠️ Nothing to arrange — add some images or videos to the timeline first." });
       } else {
-        let beats: { itemId: string; fromMs: number; toMs: number; text: string }[] | null = null;
+        let beats: { itemId: string; fromMs: number; toMs: number; text: string; motion?: string }[] | null = null;
         let source = "even"; // "server" | "transcript" | "even"
         let note = "";
         try {
@@ -879,7 +895,8 @@ export default function AiEditPanel() {
               s.updateAt(i, { genStatus: "🧠 Matching each shot to what the narration says…" });
               const narration = segs.map((sg: any) => `[${(sg.start || 0).toFixed(1)}-${(sg.end || 0).toFixed(1)}] ${String(sg.text || "").trim()}`).join("\n");
               const shotLines = shots.map((sh, k) => `${k + 1}. id="${sh.id}" desc="${sh.desc || "(unknown)"}"`).join("\n");
-              const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free):\n${shotLines}\n\nTotal audio: ${totalMs} ms`;
+              const vibeLine = vibeStyle(useAiEditStore.getState().vibe);
+              const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free; also give each a MOTION):\n${shotLines}\n\nTotal audio: ${totalMs} ms${vibeLine ? `\n\nSTYLE / VIBE: ${vibeLine}` : ""}`;
               elog("[AI-Edit arrange] → match_shots (relevancy)", { described, N });
               const tM = Date.now();
               const outRaw = await llmText("match_shots", input, getToken());
@@ -887,7 +904,7 @@ export default function AiEditPanel() {
               elog(`[AI-Edit arrange] match_shots in ${Date.now() - tM}ms`, { usable: !!win, raw: (outRaw || "").slice(0, 160) });
               if (win) {
                 source = "match";
-                beats = win.map((w) => ({ itemId: w.id, fromMs: w.from_ms, toMs: w.to_ms, text: said(w.from_ms, w.to_ms) }));
+                beats = win.map((w) => ({ itemId: w.id, fromMs: w.from_ms, toMs: w.to_ms, text: said(w.from_ms, w.to_ms), motion: w.motion }));
               } else {
                 elog("[AI-Edit arrange] match_shots output unusable → transcript even-snap");
               }
@@ -928,13 +945,18 @@ export default function AiEditPanel() {
           // video row (the executor moves them onto one track — see operations.ts arrange handler).
           elog("[AI-Edit arrange] applying arrange (single track, gap-free)");
           applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
-          // MOTION: alternating Ken Burns on the IMAGE shots (videos already move on their own), in ONE
-          // batched dispatch — N separate edit dispatches race and only the LAST sticks (that's why
-          // motion landed on just the last image before). Detailed log = which clip got which motion.
+          // MOTION: DIRECTED per shot by the LLM (match_shots' `motion` = punchIn/zoomIn/hold/… fitting
+          // the dramatic beat + the Vibe) → mapped to Ken Burns kind + intensity. Falls back to an
+          // alternating default when there's no directed motion (transcript/even paths). IMAGE shots only
+          // (videos move on their own), in ONE batched dispatch (N dispatches race → only last sticks).
           const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
+          const motionOf = (itemId: string, k: number) => {
+            const m = (beats!.find((b) => b.itemId === itemId)?.motion || "").toLowerCase();
+            return MOTION_MAP[m] || { kb: KB[k % KB.length], intensity: 20 };
+          };
           const imgShots = targetVisuals.filter((id) => (map[id] as any)?.type === "image");
-          const applied = applyMotionBatch(imgShots.map((id, k) => ({ id, kenBurns: KB[k % KB.length], intensity: 20 })));
-          elog(`[AI-Edit arrange] ✅ DONE — Ken Burns on ${imgShots.length} image shot(s):`, Object.fromEntries(Object.entries(applied).map(([id, kb]) => [id.slice(0, 6), kb])));
+          const applied = applyMotionBatch(imgShots.map((id, k) => { const mv = motionOf(id, k); return { id, kenBurns: mv.kb, intensity: mv.intensity }; }));
+          elog(`[AI-Edit arrange] ✅ DONE — motion on ${imgShots.length} image shot(s) [${source}]:`, Object.fromEntries(Object.entries(applied).map(([id, kb]) => [id.slice(0, 6), kb])));
         } catch (e) {
           elog("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
           note = note || "hit an error placing the clips on the timeline";
@@ -1588,7 +1610,7 @@ export default function AiEditPanel() {
                   {s.streaming && <span className="text-[9px] text-sky-500/70">streaming</span>}
                   {!s.showThinking && <span className="text-[9px] text-muted-foreground/60">fast</span>}
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   {s.models.length > 0 && (
                     <select
                       value={s.model}
@@ -1622,6 +1644,26 @@ export default function AiEditPanel() {
                       </option>
                     ))}
                   </select>
+                  {/* Vibe preset — one-click look & pace (a style phrase injected into the plan +
+                      timing). Shown when a pipeline builds a whole video. Selected value is visible. */}
+                  {s.pipeline && (
+                    <select
+                      value={s.vibe}
+                      onChange={(e) => s.setVibe(e.target.value)}
+                      className={`h-7 max-w-[116px] truncate rounded-lg border px-1.5 text-[10px] outline-none ${
+                        s.vibe
+                          ? "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300"
+                          : "border-border bg-background text-muted-foreground"
+                      }`}
+                      title="Vibe — look & pace preset"
+                    >
+                      {VIBES.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.id ? v.label : "🎨 Vibe"}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     onClick={s.busy ? stopWork : send}
                     disabled={!s.busy && !s.input.trim()}
