@@ -555,29 +555,10 @@ export default function AiEditPanel() {
       } else {
         let newId = "";
         if (label === "audio") {
-          // AUDIO IS KING → the voiceover clip must be its REAL length (not a hardcoded 5s) so the
-          // images arrange to MATCH it. Prefer the vApp record's meta.duration (server, no CORS, no
-          // download); else the browser <audio> probe; else 5s. This is the authoritative length.
-          let durMs = 0;
-          try {
-            const mr = await fetch(withEditorBase(`/api/media-meta?url=${encodeURIComponent(url)}&token=${encodeURIComponent(getToken())}`));
-            durMs = Number((await mr.json().catch(() => ({})))?.duration_ms) || 0;
-          } catch { /* fall through to browser probe */ }
-          if (durMs < 500) {
-            durMs = await new Promise<number>((resolve) => {
-              try {
-                const a = document.createElement("audio");
-                a.preload = "metadata";
-                a.onloadedmetadata = () => resolve(Math.round((a.duration || 0) * 1000) || 0);
-                a.onerror = () => resolve(0);
-                setTimeout(() => resolve(0), 8000);
-                a.src = url;
-              } catch {
-                resolve(0);
-              }
-            });
-          }
-          newId = addAudio(url, g.text || "voiceover", 0, durMs > 500 ? durMs : 5000);
+          // AUDIO IS KING. ADD_AUDIO loads the voiceover and sets its REAL length itself, so the
+          // images arrange to MATCH it — no manual duration needed (and passing `display` used to
+          // make the reducer silently drop the clip = "no voiceover on the timeline").
+          newId = addAudio(url, g.text || "voiceover");
         } else if (label === "image") newId = addImage(url, g.prompt || g.text || "image");
         else if (label === "video") newId = addVideo(url, g.prompt || g.text || "video");
         const cur = useAiEditStore.getState().messages[i]?.snapshot || {};

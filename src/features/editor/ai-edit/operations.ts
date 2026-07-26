@@ -66,15 +66,21 @@ const fadeComposition = (from: number, to: number, name: string) => ({
 });
 
 // Add generated media to the timeline. Each returns the new item id (for revert).
-export function addAudio(src: string, name: string, fromMs = 0, durationMs = 5000): string {
+// NOTE: ADD_AUDIO must be given a MINIMAL payload (NO `display`, NO `details.volume`) — exactly like
+// the editor's own audio-add (menu-item/archival.tsx). Passing `display` makes the reducer SILENTLY
+// DROP the item (no audio track ever appears — this was the "voiceover not on the timeline" bug). The
+// reducer LOADS the audio and sets the real duration itself → the voiceover lands at its true length
+// ("audio is king"), so the fromMs/durationMs args are advisory only and not passed through.
+export function addAudio(src: string, name: string, _fromMs = 0, _durationMs = 5000): string {
   const id = nanoid();
+  const prompt = String(name || "").trim();
   dispatch(ADD_AUDIO, {
     payload: {
       id,
       type: "audio",
-      name: (name || "audio").slice(0, 40),
-      details: { src, volume: 100 },
-      display: { from: fromMs, to: fromMs + durationMs },
+      name: (prompt || "voiceover").slice(0, 40),
+      details: { src },
+      ...(prompt ? { metadata: { prompt: prompt.slice(0, 200) } } : {}),
     },
     options: {},
   });
