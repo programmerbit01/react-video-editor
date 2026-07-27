@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import useAiEditStore from "../store/use-ai-edit-store";
 import useStore from "../store/use-store";
+import { uploadVappMediaFile, getVappUploadCtx } from "@/utils/vapp-upload-client";
 import { dispatch } from "@designcombo/events";
 import { PLAYER_SEEK } from "../constants/events";
 import useCaptionTranscribeStore from "../captions/transcribe-store";
@@ -480,6 +481,46 @@ const MOTION_MAP: Record<string, { kb: string; intensity: number; dur?: number }
 export default function AiEditPanel() {
   const s = useAiEditStore();
   const { activeIds, trackItemsMap } = useStore();
+  const [refBusy, setRefBusy] = useState(false);
+  // ── Reference image (pipeline) — attached the SAME way Chat Studio's composer does: PASTE an image or
+  // an image-URL, DRAG-DROP a file, or just SELECT a timeline image. No button/chooser. A dropped/pasted
+  // file uploads to R2; a bare image URL is used directly. The reference makes every generated IMAGE shot
+  // keep one identity (img2img via vapp-image-edit). The SELECTED-clip fallback is computed at use time.
+  const REF_IMG_URL = /^https?:\/\/\S+\.(png|jpe?g|gif|webp|bmp|avif)(\?|#|$)/i;
+  const selectedRefSrc = (): string => {
+    if (!s.pipeline) return "";
+    const st = useStore.getState().trackItemsMap || {};
+    const id = (useStore.getState().activeIds || []).find((x: string) => (st[x] as any)?.type === "image");
+    return id ? String((st[id] as any)?.details?.src || "") : "";
+  };
+  const attachRefFile = async (file?: File | null) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    const ctx = getVappUploadCtx();
+    if (!ctx) { elog("[REF] no upload ctx — open the editor with a vApp token to paste/drop a file"); return; }
+    try { setRefBusy(true); const { url } = await uploadVappMediaFile(file, ctx); if (url) s.setRefImage(url); }
+    catch (err) { elog("[REF] upload failed", err); }
+    finally { setRefBusy(false); }
+  };
+  const attachRefText = (text?: string): boolean => {
+    const u = String(text || "").trim();
+    if (REF_IMG_URL.test(u)) { s.setRefImage(u); return true; }
+    return false;
+  };
+  const onComposerPaste = (e: any) => {
+    if (!s.pipeline) return;
+    for (const it of (e.clipboardData?.items || []) as any) {
+      if (it.kind === "file" && String(it.type || "").startsWith("image/")) {
+        const f = it.getAsFile(); if (f) { e.preventDefault(); attachRefFile(f); return; }
+      }
+    }
+    if (attachRefText(e.clipboardData?.getData?.("text"))) e.preventDefault(); // a bare image URL → ref, not raw text
+  };
+  const onComposerDrop = (e: any) => {
+    if (!s.pipeline) return;
+    const f = Array.from((e.dataTransfer?.files || []) as File[]).find((x) => String(x.type || "").startsWith("image/"));
+    if (f) { e.preventDefault(); attachRefFile(f); return; }
+    if (attachRefText(e.dataTransfer?.getData?.("text"))) e.preventDefault();
+  };
 
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 });
   const resizeRef = useRef({ resizing: false, startX: 0, startY: 0, originW: 0, originH: 0 });
@@ -872,13 +913,15 @@ export default function AiEditPanel() {
             if (o.op === "generate" && (o.kind === "image" || o.kind === "video")) o.optimize = true;
           });
         }
-        // REFERENCE IMAGE: if the user attached a photo, every IMAGE shot is generated FROM it
-        // (img2img via vapp-image-edit) → the same face/identity across shots. (Videos + stock skip it.)
-        if (s.pipeline && s.refImage) {
+        // REFERENCE IMAGE: an explicit attached photo (pasted/dropped/linked) OR, failing that, the
+        // timeline image the user has selected. Every IMAGE shot is then generated FROM it (img2img via
+        // vapp-image-edit) → the same face/identity across shots. (Videos + stock skip it.)
+        const refSrc = s.pipeline ? (s.refImage || selectedRefSrc()) : "";
+        if (refSrc) {
           env.operations.forEach((o: any) => {
-            if (o.op === "generate" && o.kind === "image") { o.image_url = s.refImage; o.optimize = false; } // an edit-instruction, not a fresh prompt to optimize
+            if (o.op === "generate" && o.kind === "image") { o.image_url = refSrc; o.optimize = false; } // an edit-instruction, not a fresh prompt to optimize
           });
-          elog(`[REF IMAGE] applied to image shots → ${s.refImage.slice(0, 60)}…`);
+          elog(`[REF IMAGE] applied to image shots → ${refSrc.slice(0, 60)}… (${s.refImage ? "attached" : "selected clip"})`);
         }
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
@@ -2200,19 +2243,39 @@ export default function AiEditPanel() {
 
           {/* Composer */}
           <div className="shrink-0 border-t border-border/50 p-2">
-            <div className="rounded-xl border border-border bg-muted/40 p-1.5 focus-within:border-sky-500/40">
-              {s.pipeline && s.refImage ? (
-                <div className="mb-1 flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-1.5 py-1">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={s.refImage} alt="reference" className="h-8 w-8 rounded object-cover" />
-                  <span className="text-[10px] text-violet-600 dark:text-violet-300">Reference face — every shot generated to match this</span>
-                  <button type="button" onClick={() => s.setRefImage("")} className="ml-auto px-1 text-[11px] text-muted-foreground hover:text-red-500" title="Remove the reference image">✕</button>
-                </div>
-              ) : null}
+            <div
+              className="rounded-xl border border-border bg-muted/40 p-1.5 focus-within:border-sky-500/40"
+              onDrop={onComposerDrop}
+              onDragOver={(e) => { if (s.pipeline) e.preventDefault(); }}
+            >
+              {s.pipeline ? (() => {
+                const selRef = s.refImage ? "" : selectedRefSrc();
+                const effRef = s.refImage || selRef;
+                if (!effRef && !refBusy) return null;
+                return (
+                  <div className="mb-1 flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-1.5 py-1">
+                    {refBusy && !effRef ? (
+                      <span className="text-[10px] text-violet-500">Uploading reference…</span>
+                    ) : (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={effRef} alt="reference" className="h-8 w-8 rounded object-cover" />
+                        <span className="text-[10px] text-violet-600 dark:text-violet-300">
+                          {s.refImage ? "Reference — every shot generated to match this" : "Selected clip — used as reference (deselect to change)"}
+                        </span>
+                        {s.refImage ? (
+                          <button type="button" onClick={() => s.setRefImage("")} className="ml-auto px-1 text-[11px] text-muted-foreground hover:text-red-500" title="Remove the reference image">✕</button>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                );
+              })() : null}
               <textarea
                 ref={taRef}
                 value={s.input}
                 onChange={(e) => s.setInput(e.target.value)}
+                onPaste={onComposerPaste}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -2340,27 +2403,9 @@ export default function AiEditPanel() {
                       </div>
                     )}
                   </div>
-                  {/* REFERENCE IMAGE (pipeline only) — attach a photo so every shot keeps the SAME
-                      character (img2img via vapp-image-edit). Uses a selected timeline image, else a URL. */}
-                  {s.pipeline && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const st = useStore.getState().trackItemsMap || {};
-                        const selImg = activeIds.find((id) => (st[id] as any)?.type === "image");
-                        const selSrc = selImg ? (st[selImg] as any)?.details?.src : "";
-                        if (selSrc) { s.setRefImage(selSrc); return; }
-                        const url = window.prompt("Reference image URL — a face/character EVERY shot should match (blank to clear):", s.refImage || "");
-                        if (url != null) s.setRefImage(url.trim());
-                      }}
-                      className={`flex h-7 items-center gap-1 rounded-lg border px-1.5 text-[10px] outline-none ${
-                        s.refImage ? "border-violet-500/50 bg-violet-500/15 text-violet-600 dark:text-violet-300" : "border-border bg-background text-muted-foreground"
-                      }`}
-                      title="Reference face — attach a photo (or select a timeline image) so every shot keeps the same character"
-                    >
-                      🖼 {s.refImage ? "Ref ✓" : "Ref"}
-                    </button>
-                  )}
+                  {/* REFERENCE IMAGE — no button. Attach it in the prompt area itself: paste an image
+                      or image-URL, drag-drop a file, or select a timeline image. The chip above the
+                      textarea shows the current reference (see onComposerPaste / onComposerDrop). */}
                   {/* P PRESETS — prompt snippets. Clicking one PASTES its text into the box (visible +
                       editable → it reaches the planner AND match_shots via _lastPipelineRequest).
                       Built-in + your own (add / edit / delete, localStorage). Always visible. */}
