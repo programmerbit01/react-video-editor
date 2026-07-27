@@ -1671,11 +1671,13 @@ export default function AiEditPanel() {
       }
       snap();
 
-      // 6. Arrange to exact beat windows + alternating Ken Burns (ONE batched dispatch, else N
-      //    dispatches race and only the last sticks).
+      // 6. Arrange — DELEGATE to the SAME smart arrange the pipeline + plain Edit use (runBuild). No
+      //    separate/duplicate arrange+motion path here: runBuild auto-finds the voiceover on the
+      //    timeline, re-times these shots to the narration (match_shots relevancy), applies the
+      //    length-aware Ken Burns motion AND the arranger's transition. We pass gens=[] (images already
+      //    made) + ONE arrange op over the created shots (their times are recomputed, so ids suffice).
       if (items.length) {
-        applyOperations([{ op: "arrange", items }] as any);
-        applyMotionBatch(items.map((it, k) => ({ id: it.itemId, kenBurns: k % 2 ? "zoomOut" : "zoomIn", intensity: 18 })));
+        await runBuild(i, [], [{ op: "arrange", items: items.map((it) => ({ itemId: it.itemId })) }], []);
       }
 
       // 7. Captions
