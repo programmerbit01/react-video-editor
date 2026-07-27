@@ -19,8 +19,12 @@ import { getStateManagerRef } from "../utils/state-manager-ref";
 import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate";
+  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync";
   itemId?: string;
+  // lipsync (align a talking-head video's speech to the timeline audio — client computes these):
+  display?: { from: number; to: number }; // where on the timeline the video plays (ms)
+  trim?: { from: number; to: number }; // which portion of the source video (ms)
+  mute?: boolean; // silence the video's own audio (the narration plays)
   itemIds?: string[];
   durationMs?: number;
   details?: Record<string, any>; // EDIT_OBJECT patch: kenBurns, opacity, volume, text, fontSize…
@@ -314,6 +318,25 @@ export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
         sm.updateState({ trackItemsMap: m }, { updateHistory: true });
       }
     }
+
+    // LIPSYNC — the client already computed the alignment (transcribed the video + the timeline audio,
+    // matched word-by-word); here we just APPLY it: put the video at the audio span (display), trim it
+    // to the matching footage, time-stretch to fit (playbackRate), and mute its own audio.
+    if (op.op === "lipsync" && sm && op.itemId) {
+      const st = sm.getState?.();
+      const map = { ...(st?.trackItemsMap || {}) };
+      const item = map[op.itemId];
+      if (item) {
+        map[op.itemId] = {
+          ...item,
+          ...(op.display ? { display: { from: Math.max(0, Math.floor(op.display.from)), to: Math.max(0, Math.floor(op.display.to)) } } : {}),
+          ...(op.trim ? { trim: { from: Math.max(0, Math.floor(op.trim.from)), to: Math.max(0, Math.floor(op.trim.to)) } } : {}),
+          ...(op.playbackRate ? { playbackRate: op.playbackRate } : {}),
+          ...(op.mute ? { details: { ...(item.details || {}), volume: 0 } } : {}),
+        };
+        sm.updateState({ trackItemsMap: map }, { updateHistory: true });
+      }
+    }
   }
   return { addedIds };
 }
@@ -586,6 +609,7 @@ Supported operations:
 - Generate a VIDEO (LONG descriptive prompt — motion, camera, lighting) and add it: { "op":"generate", "kind":"video", "prompt":"aerial drone shot flying low over misty mountains at sunrise, slow push in, cinematic", "duration":5, "aspect_ratio":"16:9" }
 - Edit / regenerate the SELECTED image with AI (img2img — recolor, restyle, alter it): { "op":"regenerate", "itemId":"<id>", "prompt":"the same image but tinted deep red" }   (for images ONLY; "make it red" on an image = this)
 - ANIMATE the SELECTED image into a VIDEO (image-to-video — bring a still to life with subtle motion, keeps it in the SAME timeline slot): { "op":"animate", "itemId":"<id>", "prompt":"gentle camera push-in, hair moving in the wind" }   (use when the user says "animate", "make it move", "bring it to life", "turn this into video"; the motion prompt is short — describe the MOTION, not the scene)
+- LIP-SYNC a talking-head VIDEO to the timeline audio (transcribes both, matches the spoken words, places + trims the video so its lips match the voiceover): { "op":"lipsync", "target":"selected" }  (or "itemId":"<video id>"; if nothing specified it does every video). Use when the user says "lip sync", "sync the video to the audio", "match lips", "arrange lip sync".
 - Arrange / sequence items to BUILD A VIDEO — ALWAYS this ONE form: { "op":"arrange", "target":"all" }
     Use it whenever the user says "arrange", "make a video from these", "sequence them", or you just
     generated/searched several clips to assemble. Do NOT compute or pass any times — the editor OWNS the
@@ -607,21 +631,23 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 // A "pipeline" is just a DIFFERENT system prompt fed to the SAME ops machinery: the
 // LLM plans the whole thing and emits generate/arrange ops → the editor builds it on
 // the live timeline. No hardcoded steps — control lives entirely in the prompt.
-export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a VERTICAL (9:16) video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
+export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
+
+ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "9:16" (a vertical short). Use the SAME ratio on every shot.
 
 NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3). If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut, VibeShort-style). If the request has NO story/subject at all, return "operations": [] and in "summary" ask them for the story and how many shots.
 
 BUILD IT:
 1) Decide the MAIN CHARACTER's look ONCE — face, hair, age, outfit, colour — in ~12 words. Repeat this EXACT description in EVERY shot so the same person appears throughout (change only the pose/emotion/scene).
 2) Plan N SHOTS, each one dramatic beat, ordered start → cliffhanger.
-3) For EACH of the N shots output a generate op with a PHOTOREAL prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, semi-realistic, realistic skin, dramatic moody lighting, shallow depth of field, 9:16":
-   image shot: { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"9:16" }
-   PHOTOREAL/cinematic — NOT flat cartoon or comic-ink.
+3) For EACH of the N shots output a generate op with a full prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, SEMI-photorealistic (stylised realism — NOT a flat photo, NOT cartoon/comic-ink), realistic skin, dramatic moody lighting, shallow depth of field". Repeat the EXACT character description in EVERY shot (same person throughout). Keep the SEMI-photoreal look on every shot.
+   image shot: { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"<the chosen ratio>" }
    VIDEO SHOTS: if the user asks for some video clips (e.g. "2 videos of 4s, 6s"), make those shots
-   { "op":"generate", "kind":"video", "prompt":"…describe the MOTION/action…", "duration":<their seconds>, "aspect_ratio":"9:16" } and SPREAD them at the most DYNAMIC/action beats (a chase, a reveal, a turn) INTERSPERSED among the image shots — do NOT put all the videos at the end. The narration sentence order still = the shot order.
-4) Output ONE generate-audio op = the spoken narration (ONE sentence PER shot, IN THE SAME ORDER — sentence k describes shot k — so each image syncs to WHEN its line is spoken):
-   { "op":"generate", "kind":"audio", "text":"…" }
-   AUDIO IS KING: the final video length = THIS voiceover's length (the editor fits every shot to it). So write ENOUGH words. If the user names a target duration, HIT it at ~2.5 words/second (20s ≈ 50 words, 30s ≈ 75, 45s ≈ 110, 60s ≈ 150), spread across the N shots. If no duration is given, ~12-15 words per shot. NEVER a single short line for a multi-shot video.
+   { "op":"generate", "kind":"video", "prompt":"…character + the MOTION/action + natural AMBIENT SOUND cues (waves, rain, breathing, room tone, footsteps)…", "duration":<their seconds>, "aspect_ratio":"<the chosen ratio>" } — ALWAYS put ambient-sound cues in a VIDEO prompt. SPREAD videos at the most DYNAMIC/action beats (a chase, a reveal, a turn) INTERSPERSED among the image shots — do NOT put all the videos at the end. The narration sentence order still = the shot order.
+   STOCK footage is also available — { "op":"search", "kind":"image|video", "query":"…", "count":1 } — but this is a CHARACTER story, so GENERATE character shots (stock cannot keep the same couple). Use search ONLY for a non-character establishing beat if any (a city skyline, the ocean, rain on glass).
+4) Output ONE audio op as a PLACEHOLDER — the spoken narration is written SEPARATELY (a dedicated script step) and the system inserts it. Output EXACTLY:
+   { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
+   Do NOT write the narration yourself — that is NOT your job here. Just plan the N shots in story order (shot k = the k-th beat) so they line up with the narration.
 5) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
 6) STYLE + EFFECTS = the user's call. Honor any STYLE they name (noir, fast-paced, romantic, gritty…) in the prompts AND pacing, the same way you honor shot count + duration. The arrange already adds Ken Burns motion; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for a HARD-cut / fast style add nothing. Only add effect ops the style calls for — never clutter.
 
@@ -629,19 +655,22 @@ Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N shot op
 
 export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a video editor. The user gives a topic. Turn it into a short faceless documentary as a JSON list of operations the editor applies to the timeline.
 
+ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "16:9". Use the SAME ratio on every shot.
+
 NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut). If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
 
-1) Output ONE generate-audio op = the narration (ONE sentence PER shot, IN THE SAME ORDER — sentence k describes shot k — so each visual syncs to WHEN its line is spoken):
-   { "op":"generate", "kind":"audio", "text":"…" }
-   AUDIO IS KING: the final video length = THIS voiceover's length (the editor fits every shot to it). So write ENOUGH words. If the user names a target duration, HIT it at ~2.5 words/second (20s ≈ 50 words, 30s ≈ 75, 45s ≈ 110, 60s ≈ 150), spread across the N shots. If no duration is given, ~12-15 words per shot. NEVER a single short line for a multi-shot video.
-2) Output N generate ops, one per narration beat, each RELEVANT to what that line says:
-   image shot: { "op":"generate", "kind":"image", "prompt":"…SHORT cinematic keywords…", "aspect_ratio":"16:9" }
-   VIDEO SHOTS: if the user asks for some video clips (e.g. "2 videos of 5s"), make those shots
-   { "op":"generate", "kind":"video", "prompt":"…describe the MOTION…", "duration":<their seconds>, "aspect_ratio":"16:9" } and SPREAD them at the most dynamic beats INTERSPERSED among the images — do NOT put all videos at the end.
+1) Output ONE audio op as a PLACEHOLDER — the narration is written SEPARATELY (a dedicated script step) and the system inserts it. Output EXACTLY:
+   { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
+   Do NOT write the narration yourself — that is NOT your job here. Just plan the N visuals in narration order (visual k = the k-th beat).
+2) Output N shot ops, one per narration beat, each RELEVANT to what that line says. Each shot is EITHER AI-generated OR real stock footage — pick per beat:
+   • AI image: { "op":"generate", "kind":"image", "prompt":"…vivid cinematic keywords…", "aspect_ratio":"<the chosen ratio>" }
+   • AI video: { "op":"generate", "kind":"video", "prompt":"…describe the MOTION + natural AMBIENT SOUND cues (traffic, wind, crowd, water…)…", "duration":<their seconds>, "aspect_ratio":"<the chosen ratio>" } — ALWAYS put ambient-sound cues in a VIDEO prompt
+   • STOCK footage (real-world b-roll — cities, nature, crowds, objects, places): { "op":"search", "kind":"image|video", "query":"3-5 keyword search query", "count":1 } — cheaper + real; PREFER stock for generic real-world beats, AI-generate for anything specific/stylised the search won't have.
+   SPREAD videos at the most dynamic beats INTERSPERSED among the images — do NOT put all videos at the end.
 3) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
 4) STYLE + EFFECTS = the user's call. Honor any STYLE they name (documentary, punchy, dark…) in the prompts + pacing. The arrange adds Ken Burns; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for hard/fast cuts add nothing.
 
-Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N shot ops (image/video interspersed), the arrange op, then any effect op… ] }`;
+Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N shot ops (generate OR search, image/video interspersed), the arrange op, then any effect op… ] }`;
 
 // Shown in the AI-Edit composer dropdown (top → bottom).
 export const PIPELINES: { id: string; label: string }[] = [

@@ -25,7 +25,6 @@ import {
   OPS_SYSTEM_PROMPT,
   PIPELINES,
   PIPELINE_PROMPTS,
-  VIBES,
 } from "../ai-edit/operations";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
@@ -39,10 +38,23 @@ const getToken = () => {
   return new URLSearchParams(window.location.search).get("token") || "";
 };
 
+// vApp base URL from the launch params — needed only for the superadmin director-override gate
+// (the PUT verifies the caller's role against the vApp). "" lets the server fall back to its default.
+const getBaseUrl = () => {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("baseUrl") || "";
+};
+
 // The last pipeline (Comic Drama / Faceless) request text — so the arrange can pass the user's own
 // direction ("punchy zoom-ins", "slow holds", "hard cuts") into match_shots, which decides motion +
 // pacing. Without this, only the Vibe preset drives motion; with it, the PROMPT drives it too.
 let _lastPipelineRequest = "";
+
+// Pipeline generation mode. false = the director writes FULL cinematic prompts that go straight to the
+// model (best quality — what worked). true = "director writes SHORT hints → global optimizer expands
+// each" (lighter director; flip this AND switch the director prompt back to short hints if the director
+// ever gets too heavy again). Kept as a flag so the optimizer-expand path is one edit away, not deleted.
+const PIPELINE_FORCE_OPTIMIZE = false;
 
 // Tee AI-Edit logs to the console AND to the vApp (logs/vapp_editor.log) so the WHOLE
 // prompt → plan → gen → transcribe → match → arrange → effects trace is readable server-side.
@@ -228,6 +240,40 @@ async function transcribeAudio(
   throw new Error("transcription timed out");
 }
 
+// ── LIP-SYNC helpers ──────────────────────────────────────────────────────────────────────────
+const _normWord = (w: string): string => String(w || "").toLowerCase().replace(/[^a-z0-9']/g, "");
+// Flatten a transcription into word-level tokens (ms). Falls back to an even split of a segment
+// when the model gave no per-word timestamps.
+async function transcribeWords(src: string, token: string): Promise<{ w: string; start: number; end: number }[]> {
+  const segs = await transcribeAudio(src, token);
+  const out: { w: string; start: number; end: number }[] = [];
+  for (const s of segs) {
+    if (Array.isArray(s.words) && s.words.length) {
+      for (const wd of s.words) { const w = _normWord(wd.word); if (w) out.push({ w, start: wd.start * 1000, end: wd.end * 1000 }); }
+    } else {
+      const ws = String(s.text || "").trim().split(/\s+/).filter(Boolean);
+      const dur = (s.end - s.start) / Math.max(1, ws.length);
+      ws.forEach((word, k) => { const w = _normWord(word); if (w) out.push({ w, start: (s.start + k * dur) * 1000, end: (s.start + (k + 1) * dur) * 1000 }); });
+    }
+  }
+  return out;
+}
+// Longest CONTIGUOUS run of words shared by two token arrays → the aligned index span in each.
+function longestWordMatch(a: string[], b: string[]): { aStart: number; aEnd: number; bStart: number; bEnd: number; len: number } {
+  let best = { len: 0, aEnd: -1, bEnd: -1 };
+  const dp = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = 0;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = dp[j];
+      if (a[i - 1] === b[j - 1]) { dp[j] = prev + 1; if (dp[j] > best.len) best = { len: dp[j], aEnd: i - 1, bEnd: j - 1 }; }
+      else dp[j] = 0;
+      prev = tmp;
+    }
+  }
+  return { len: best.len, aStart: best.aEnd - best.len + 1, aEnd: best.aEnd, bStart: best.bEnd - best.len + 1, bEnd: best.bEnd };
+}
+
 // Generic unified-LLM text call → /api/ai-llm → vApp /vapp/llm. Used by the auto-director
 // for the `script` + `beat_plan` tasks. Fail-open: returns "" on any error.
 async function llmText(task: string, input: string, token: string): Promise<string> {
@@ -242,6 +288,49 @@ async function llmText(task: string, input: string, token: string): Promise<stri
   } catch {
     return "";
   }
+}
+
+// Streaming twin of llmText — the same /vapp/llm task, but SSE so the caller can SHOW it typing
+// live (e.g. the script step). `onDelta` gets the full text so far each chunk. Passes `signal` so a
+// Stop aborts the upstream LLM too. Falls back to the blocking llmText on any non-stream response.
+async function llmTextStream(
+  task: string,
+  input: string,
+  token: string,
+  onDelta: (full: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  const res = await fetch(withEditorBase("/api/ai-llm"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task, input, token, stream: true }),
+    signal,
+  });
+  if (!res.ok || !res.body || !(res.headers.get("content-type") || "").includes("text/event-stream")) {
+    return llmText(task, input, token);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() || "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) continue;
+      const p = t.slice(5).trim();
+      if (p === "[DONE]") continue;
+      try {
+        const ev = JSON.parse(p);
+        if (ev?.type === "content" && ev.delta) { text += ev.delta; onDelta(text); }
+      } catch { /* keepalive / non-JSON line */ }
+    }
+  }
+  return text;
 }
 
 // Wait until a just-added item actually LANDS in the timeline map. ADD_ITEMS/ADD_AUDIO reduce
@@ -406,10 +495,99 @@ export default function AiEditPanel() {
   const workStartRef = useRef(0);
   const workEndTimerRef = useRef<any>(null);
 
-  // Vibe presets (built-in + user's custom, persisted). The dropdown lets you pick, add, edit, delete.
-  const allVibes = [...VIBES, ...s.customVibes];
-  const vibeStyleOf = (id: string) => allVibes.find((v) => v.id === id)?.style || "";
-  const curVibe = allVibes.find((v) => v.id === s.vibe);
+  // ── S/D PRESETS (Directors) — the "brain": which system prompt the planner uses ────────────────
+  // Built-in directors (Edit + the pipelines) + the user's own custom system-prompt directors
+  // (localStorage). Selecting one swaps the planner system prompt; "" = the plain Edit assistant.
+  // A SUPERADMIN can override a BUILT-IN director's prompt globally (server store, Phase 2) — those
+  // overrides ride in `dirOverrides` and win over the hardcoded defaults (fail-open to defaults).
+  const [dirOverrides, setDirOverrides] = useState<Record<string, { label?: string; systemPrompt: string }>>({});
+  const [isAdmin, setIsAdmin] = useState(false);
+  const builtinLabel = (id: string, def: string) => dirOverrides[id]?.label || def;
+  const BUILTIN_DIRECTORS = [...PIPELINES, { id: "", label: "✦ Edit / General" }].map((d) => ({ id: d.id, label: builtinLabel(d.id, d.label) }));
+  const allDirectors = [...BUILTIN_DIRECTORS, ...s.customDirectors.map((d) => ({ id: d.id, label: d.label }))];
+  const curDirector = allDirectors.find((d) => d.id === s.pipeline) || allDirectors[0];
+  // Resolve the system prompt for a director id: admin override → built-in pipeline prompt →
+  // custom prompt → the plain Edit assistant.
+  const directorPromptOf = (id: string): string => {
+    const ov = dirOverrides[id]?.systemPrompt;
+    if (ov) return ov;
+    if (!id) return OPS_SYSTEM_PROMPT;
+    return PIPELINE_PROMPTS[id] || s.customDirectors.find((d) => d.id === id)?.systemPrompt || OPS_SYSTEM_PROMPT;
+  };
+  const [dirMenuOpen, setDirMenuOpen] = useState(false);
+  const [dirEdit, setDirEdit] = useState<{ id: string; label: string; systemPrompt: string; builtin?: boolean } | null>(null);
+  const [dirErr, setDirErr] = useState("");
+  const dirMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!dirMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!dirMenuRef.current?.contains(e.target as Node)) { setDirMenuOpen(false); setDirEdit(null); setDirErr(""); }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [dirMenuOpen]);
+  // Load built-in overrides + am-I-admin once, so the dropdown shows edited prompts + the ✎ icon.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(withEditorBase("/api/admin/directors"), { cache: "no-store" });
+        const d = await r.json().catch(() => ({}));
+        if (alive && d?.overrides) setDirOverrides(d.overrides);
+      } catch { /* fail-open → built-in defaults */ }
+      const token = getToken();
+      if (!token) return;
+      try {
+        const q = new URLSearchParams({ token });
+        const bu = getBaseUrl(); if (bu) q.set("baseUrl", bu);
+        const r = await fetch(withEditorBase(`/api/admin/whoami?${q.toString()}`), { cache: "no-store" });
+        const d = await r.json().catch(() => ({}));
+        if (alive) setIsAdmin(!!d?.allowed);
+      } catch { /* not admin */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+  // Save a director: a BUILT-IN edit (admin) → PUT the global override; a custom → localStorage.
+  const saveDir = async () => {
+    if (!dirEdit) return;
+    setDirErr("");
+    if (dirEdit.builtin) {
+      try {
+        const r = await fetch(withEditorBase("/api/admin/directors"), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: dirEdit.id, label: dirEdit.label, systemPrompt: dirEdit.systemPrompt, baseUrl: getBaseUrl(), token: getToken() }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { setDirErr(d?.message || `save failed (${r.status})`); return; }
+        setDirOverrides(d.overrides || {});
+        elog(`[DIRECTOR] built-in "${dirEdit.id || "edit"}" prompt updated GLOBALLY by admin`);
+      } catch (e: any) { setDirErr(String(e?.message || e)); return; }
+    } else if (dirEdit.id === "new") s.addCustomDirector(dirEdit.label, dirEdit.systemPrompt);
+    else s.updateCustomDirector(dirEdit.id, dirEdit.label, dirEdit.systemPrompt);
+    setDirEdit(null);
+  };
+  // Admin: revert a built-in director to its hardcoded default (clears the server override).
+  const resetDir = async (id: string) => {
+    setDirErr("");
+    try {
+      const r = await fetch(withEditorBase("/api/admin/directors"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, remove: true, baseUrl: getBaseUrl(), token: getToken() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setDirErr(d?.message || `reset failed (${r.status})`); return; }
+      setDirOverrides(d.overrides || {});
+      setDirEdit(null);
+      elog(`[DIRECTOR] built-in "${id || "edit"}" reset to default by admin`);
+    } catch (e: any) { setDirErr(String(e?.message || e)); }
+  };
+
+  // ── P PRESETS (prompt snippets) — built-in + user's custom, persisted. Clicking one PASTES its
+  // text into the prompt box (visible + editable → it also reaches the planner AND match_shots via
+  // _lastPipelineRequest). Add / edit / delete for your own. (Backed by the vibe store fields.)
+  const pPresets = s.customVibes; // P PRESETS = ONLY the user's own snippets (built-in defaults removed)
   const [vibeMenuOpen, setVibeMenuOpen] = useState(false);
   const [vibeEdit, setVibeEdit] = useState<{ id: string; label: string; style: string } | null>(null);
   const vibeMenuRef = useRef<HTMLDivElement>(null);
@@ -427,6 +605,20 @@ export default function AiEditPanel() {
     else s.updateCustomVibe(vibeEdit.id, vibeEdit.label, vibeEdit.style);
     setVibeEdit(null);
   };
+  const pastePreset = (style: string) => {
+    const cur = s.input.trimEnd();
+    s.setInput(cur ? `${cur}\n${style}` : style);
+    setVibeMenuOpen(false); setVibeEdit(null);
+  };
+  // Composer auto-grow: the textarea grows with its content up to a cap (~160px), then scrolls.
+  // Runs on every input change AND external sets (P-preset paste, feature examples, resend).
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [s.input]);
   // ONE continuous timer from send → fully done. It does NOT restart on the brief idle gaps between
   // steps (LLM-done → generation-start, or between clips): a 5s grace window bridges those, so it
   // measures the WHOLE run start→end. When done it FREEZES the total (badge stays "✓ 45s") until the
@@ -542,11 +734,9 @@ export default function AiEditPanel() {
   const runPrompt = async (text: string) => {
     if (!text.trim() || s.busy) return;
     _work = new AbortController(); // Stop button aborts this
-    _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction (edit + pipeline)
-    const vibeNow = [...VIBES, ...s.customVibes].find((v) => v.id === s.vibe);
-    elog(`━━━━━━━━━━ NEW GEN ━━━━━━━━━━  mode=${s.pipeline || "edit"}  vibe=${vibeNow?.label || "none"}  model=${s.model}`);
+    _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction (any P-preset style is now IN this text)
+    elog(`━━━━━━━━━━ NEW GEN ━━━━━━━━━━  director=${curDirector?.label || "edit"}  model=${s.model}`);
     elog(`[PROMPT] ${text}`);
-    if (vibeNow?.style) elog(`[VIBE STYLE] ${vibeNow.style}`);
     const ctx = selectionContext(chips);
     s.addMessage({ role: "user", content: text });
     s.addMessage({ role: "assistant", content: "", reasoning: "", thinkingOpen: true });
@@ -587,6 +777,34 @@ export default function AiEditPanel() {
       }
     }
 
+    // ── PIPELINE PRE-STEP: write the SCRIPT first, in its OWN focused request ──────────────────
+    // The narration is the SOUL of the video, and writing it INSIDE the giant ops-JSON makes the
+    // planner shorten it. So for a pipeline we get the script from the dedicated `script` task FIRST,
+    // then the scene call builds shots around it (see the injected message below).
+    // We do NOT parse the duration in the client — that's brittle ("3 videos of 6s to 9s" is NOT the
+    // audio length). The user's RAW request goes straight to the LLM; the `script` system prompt reads
+    // the duration and hits it. (Trust the model; the frontend stays generic — no hardcoded intelligence.)
+    let injectedScript = "";
+    if (s.pipeline) {
+      const wc = (t: string) => t.split(/\s+/).filter(Boolean).length;
+      // Stream the script into its OWN collapsible box (not the main content) — like the 💭 Thought
+      // box. Open while it types; auto-collapses when done. content stays empty → the "…" dots show
+      // until the actual scene response starts (that's what the user asked for).
+      s.updateLast({ content: "", scriptText: "", scriptOpen: true, genStatus: "✍️ Scripting…" });
+      try {
+        injectedScript = (await llmTextStream("script", text, getToken(), (full) => {
+          s.updateLast({ scriptText: full, scriptOpen: true });
+        }, _work?.signal)).trim();
+      } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
+      if (injectedScript) {
+        elog(`[SCRIPT STEP] ${wc(injectedScript)} words (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
+        s.updateLast({ scriptText: injectedScript, scriptOpen: false }); // collapse; content empty → dots until scenes
+      }
+      if (_work?.signal.aborted) { s.setBusy(false); return; } // Stop pressed during the script step
+      // No script → don't proceed to a broken build (the audio op would stay the "__SCRIPT__" placeholder).
+      if (!injectedScript) { s.updateLast({ content: "⚠️ Couldn't write the script — try again." }); s.setBusy(false); return; }
+    }
+
     const projCtx = projectContext(trackItemsMap) + narrationTimeline(useAiEditStore.getState().transcript?.segments);
     const payload: Record<string, any> = {
       model: s.model,
@@ -596,12 +814,19 @@ export default function AiEditPanel() {
       // the input as a topic/story — the LLM plans the whole thing and emits generate/arrange
       // ops that build it on the timeline. No pipeline = the normal edit assistant.
       messages: [
-        { role: "system", content: PIPELINE_PROMPTS[s.pipeline] || OPS_SYSTEM_PROMPT },
+        // The selected DIRECTOR (S/D preset) is the planner's brain: a built-in pipeline prompt,
+        // a custom system prompt, or the plain Edit assistant ("" director).
+        { role: "system", content: directorPromptOf(s.pipeline) },
         {
           role: "user",
-          // A Vibe preset appends its style phrase so the pipeline plans the script + look to it.
+          // Any P-preset style the user picked is already pasted INTO `text` (visible + editable),
+          // so it reaches the planner here AND match_shots via _lastPipelineRequest — no hidden inject.
+          // For a pipeline WITH a pre-written script, the scene call only builds SHOTS around it (it
+          // does NOT rewrite the narration — the system inserts the real script into the audio op).
           content: s.pipeline
-            ? `${text}${vibeStyleOf(s.vibe) ? `\n\nSTYLE / VIBE: ${vibeStyleOf(s.vibe)}.` : ""}`
+            ? (injectedScript
+                ? `${text}\n\n━━━ The NARRATION SCRIPT is ALREADY WRITTEN (below) — the system inserts it. For the audio op output EXACTLY { "op":"generate","kind":"audio","text":"__SCRIPT__" } and do NOT write the narration yourself. Write the shot gen prompts so shot k matches the part of the script spoken at that moment, in order. ━━━\nSCRIPT (reference, to match shots to):\n${injectedScript}`
+                : text)
             : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
         },
       ],
@@ -610,23 +835,42 @@ export default function AiEditPanel() {
       payload.reasoning_effort = "low";
       payload.extra_body = { think: false };
     }
-    elog(`[LLM REQ] system=${s.pipeline ? PIPELINES.find((p) => p.id === s.pipeline)?.label : "edit assistant"} · task=editor_edit · in="${String(payload.messages[1].content).replace(/\s+/g, " ").slice(0, 160)}…"`);
+    elog(`[LLM REQ] director=${curDirector?.label || "edit assistant"} · task=editor_edit · in="${String(payload.messages[1].content).replace(/\s+/g, " ").slice(0, 160)}…"`);
     const t0 = Date.now();
     let firstContentAt = 0;
     try {
       const { content, reasoning } = await runChat(payload, (p) => {
         if (p.content && !firstContentAt) firstContentAt = Date.now();
-        s.updateLast({ content: p.content, reasoning: p.reasoning });
+        // Pipeline: the scene plan is raw JSON — hide it in a collapsible "🎬 Directing" box (not a
+        // wall of code in the chat); show a status line instead. Edit mode streams normally.
+        if (s.pipeline) s.updateLast({ directText: p.content, directOpen: true, content: p.content ? "🎬 Directing shots & effects…" : "", genStatus: p.content ? "🎬 Directing…" : "", reasoning: p.reasoning });
+        else s.updateLast({ content: p.content, reasoning: p.reasoning });
       }, _work?.signal);
       const reasoningMs = reasoning ? (firstContentAt || Date.now()) - t0 : undefined;
       elog(`[LLM RET] in ${Date.now() - t0}ms · ${content.length} chars`);
       const env = extractOps(content);
       if (env && env.operations?.length) {
+        // Force the audio op to the pre-written script (the scene call only referenced it / used a
+        // placeholder — never let it drift or shorten the narration). Add one if the model omitted it.
+        if (injectedScript) {
+          const audOp = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
+          if (audOp) audOp.text = injectedScript;
+          else env.operations.push({ op: "generate", kind: "audio", text: injectedScript });
+        }
+        // Optimizer is OPTIONAL (⚙ "Optimise prompt" toggle = 2 modes). PIPELINE_FORCE_OPTIMIZE keeps the
+        // "director writes SHORT hints → optimizer expands" path ONE FLAG away — flip it true if the
+        // director ever gets too heavy again (then also switch the director prompt back to short hints).
+        // Default false = director's full cinematic prompts go straight to the model (best quality).
+        if (s.pipeline && PIPELINE_FORCE_OPTIMIZE) {
+          env.operations.forEach((o: any) => {
+            if (o.op === "generate" && (o.kind === "image" || o.kind === "video")) o.optimize = true;
+          });
+        }
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
         if (aud?.text) elog(`[SCRIPT] ${String(aud.text).replace(/\s+/g, " ")}`);
         env.operations.filter((o: any) => o.op === "generate" && o.kind !== "audio").forEach((o: any, k: number) => elog(`[GEN PROMPT ${k + 1}] ${o.kind}: ${String(o.prompt || o.text || "").replace(/\s+/g, " ").slice(0, 140)}`));
-        s.updateLast({ content: env.summary || "Proposed edit ready.", reasoning, reasoningMs, thinkingOpen: false, ops: env.operations });
+        s.updateLast({ content: env.summary || "Proposed edit ready.", reasoning, reasoningMs, thinkingOpen: false, directOpen: false, ops: env.operations });
         // Auto mode: apply immediately without asking
         if (useAiEditStore.getState().autoApply) {
           const idx = useAiEditStore.getState().messages.length - 1;
@@ -667,6 +911,42 @@ export default function AiEditPanel() {
 
   // One generate op, run in the BACKGROUND (not awaited) so the chat stays free.
   const runGen = async (i: number, g: any) => {
+    // LIP-SYNC — align a talking-head video's speech to the timeline audio. Transcribe BOTH (word
+    // timestamps), find the longest phrase they share, then place the video at that AUDIO span, trim
+    // it to the matching footage, time-stretch to fit, and mute its own audio → the lips match the
+    // narration. Edit-mode prototype (select an audio + video(s), say "lip sync") before the pipeline.
+    if (g.op === "lipsync") {
+      try {
+        const st = useStore.getState().trackItemsMap || {};
+        const audio: any = Object.values(st).find((it: any) => it?.type === "audio");
+        if (!audio?.details?.src) { s.updateAt(i, { genStatus: "⚠️ lip-sync: put a voiceover/audio on the timeline first" }); return; }
+        let vids: string[] = g.itemId ? [g.itemId] : (g.target === "selected" ? activeIds.filter((id: string) => (st[id] as any)?.type === "video") : []);
+        if (!vids.length) vids = Object.keys(st).filter((id) => (st[id] as any)?.type === "video");
+        if (!vids.length) { s.updateAt(i, { genStatus: "⚠️ lip-sync: no video on the timeline" }); return; }
+        s.updateAt(i, { genStatus: "🎙️ Lip-sync: transcribing the audio…" });
+        const aw = await transcribeWords(audio.details.src, getToken());
+        const aSeq = aw.map((x) => x.w);
+        let done = 0;
+        for (let vi = 0; vi < vids.length; vi++) {
+          const vid = vids[vi];
+          const vsrc = (st[vid] as any)?.details?.src; if (!vsrc) continue;
+          s.updateAt(i, { genStatus: `🎙️ Lip-sync: transcribing video ${vi + 1}/${vids.length}…` });
+          const vw = await transcribeWords(vsrc, getToken());
+          if (!aw.length || !vw.length) { elog(`[LIPSYNC] ${vid.slice(0, 6)} — no words (audio ${aw.length}, video ${vw.length})`); continue; }
+          const m = longestWordMatch(aSeq, vw.map((x) => x.w));
+          if (m.len < 2) { elog(`[LIPSYNC] ${vid.slice(0, 6)} — no matching phrase found in the audio`); continue; }
+          const aStart = aw[m.aStart].start, aEnd = aw[m.aEnd].end;
+          const vStart = vw[m.bStart].start, vEnd = vw[m.bEnd].end;
+          const aDur = Math.max(200, aEnd - aStart), vDur = Math.max(200, vEnd - vStart);
+          const rate = Math.min(2, Math.max(0.5, vDur / aDur)); // stretch the video to the audio span
+          applyOperations([{ op: "lipsync", itemId: vid, display: { from: aStart, to: aEnd }, trim: { from: vStart, to: vEnd }, playbackRate: rate, mute: true }]);
+          elog(`[LIPSYNC] ${vid.slice(0, 6)} matched ${m.len} words → audio ${Math.round(aStart)}-${Math.round(aEnd)}ms · video ${Math.round(vStart)}-${Math.round(vEnd)}ms · rate ${rate.toFixed(2)}`);
+          done++;
+        }
+        s.updateAt(i, { genStatus: done ? `✓ Lip-sync arranged (${done} video${done > 1 ? "s" : ""})` : "⚠️ lip-sync: no phrase matched — use a video that speaks lines from the narration" });
+      } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ lip-sync: ${e?.message || e}` }); }
+      return;
+    }
     // Stock search — no generation job; fetch Pexels and add the top result(s).
     if (g.op === "search") {
       const kind = g.kind === "video" ? "video" : "image";
@@ -685,8 +965,11 @@ export default function AiEditPanel() {
         for (let k = 0; k < Math.min(n, results.length); k++) {
           const src = results[k]?.details?.src;
           if (!src) continue;
+          // Stock has no gen-prompt → use the result's TITLE/alt (or the search query) as the
+          // description, so the arrange's relevancy (match_shots) still knows what this clip shows.
+          const desc = String(results[k]?.alt || results[k]?.title || results[k]?.description || g.query || "stock").slice(0, 120);
           // serialized add (+ waits for landing) so concurrent stock adds never clobber each other
-          const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, g.query || "stock") : addImage(src, g.query || "stock")));
+          const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, desc) : addImage(src, desc)));
           snap[nid] = null;
           previews.push({ kind, url: results[k]?.preview || src });
           added++;
@@ -765,7 +1048,9 @@ export default function AiEditPanel() {
         image_url,
         aspect_ratio: g.aspect_ratio,
         duration: g.duration,
-        optimize: useAiEditStore.getState().optimizePrompt,
+        // Per-op wins (pipeline shots force it ON — the director now writes SHORT hints that the
+        // optimizer MUST expand); else the global "Optimise prompt" toggle.
+        optimize: g.optimize !== undefined ? !!g.optimize : useAiEditStore.getState().optimizePrompt,
         token: getToken(),
       });
       if (!id) throw new Error("no job id");
@@ -823,15 +1108,20 @@ export default function AiEditPanel() {
     const wantVisual = gens.filter((g) => g.kind !== "audio").length;
     const total = gens.length;
     let doneN = 0;
-    // Run the generations in parallel, with a live progress counter (so the user sees it working).
+    // PERSISTENT aggregate counter (own field so per-shot genStatus never clobbers it — the user
+    // must ALWAYS see "4/10"). Shows the batch mix too (img/vid/audio).
+    const setProg = () => { if (total > 1) s.updateAt(i, { buildProgress: `${doneN}/${total}` }); }; // compact — sits inline after the task
+    setProg();
+    // Run the generations in parallel, with the live counter (so the user sees it working).
     await Promise.all(
       gens.map((g) =>
         runGen(i, g).finally(() => {
           doneN += 1;
-          if (total > 1) s.updateAt(i, { genStatus: `🎨 Generating ${total} clips… (${doneN}/${total} done)` });
+          setProg();
         }),
       ),
     );
+    s.updateAt(i, { buildProgress: "" }); // gens done → hand off to the arrange (its own status)
     if (!arranges.length) return;
     // Promise.all(gens) above now resolves only AFTER every generated clip (images + the slow-loading
     // voiceover) has actually LANDED on the timeline — each runGen awaits waitForItem(). So there is NO
@@ -956,7 +1246,17 @@ export default function AiEditPanel() {
               const it: any = map[id];
               return clean(it?.metadata?.prompt) || clean(it?.details?.prompt) || clean(it?.metadata?.description) || clean(it?.name);
             };
-            const shots = targetVisuals.map((id) => ({ id, desc: localDesc(id) }));
+            // A VIDEO clip has a FIXED footage length (trim window ÷ playbackRate). Stretching its
+            // timeline window past that = a BLACK screen, so we tell match_shots each video's real
+            // seconds → it gives videos SHORT windows and lets IMAGE shots absorb the long holds.
+            const vidMs = (id: string) => {
+              const it: any = map[id];
+              if (it?.type !== "video") return 0;
+              const tr = it.trim || {};
+              const len = ((tr.to ?? it.duration ?? 0) - (tr.from ?? 0)) / (it.playbackRate || 1);
+              return len > 200 ? Math.round(len) : 0;
+            };
+            const shots = targetVisuals.map((id) => ({ id, desc: localDesc(id), type: (map[id] as any)?.type as string, vidMs: vidMs(id) }));
             // fill any missing descriptions from vApp media.meta (existing/uploaded images), in parallel
             const missing = shots.filter((sh) => !sh.desc && map[sh.id]?.details?.src);
             if (missing.length) {
@@ -973,12 +1273,11 @@ export default function AiEditPanel() {
             if (segs.length && described >= 2) {
               s.updateAt(i, { genStatus: "🧠 Matching each shot to what the narration says…" });
               const narration = segs.map((sg: any) => `[${(sg.start || 0).toFixed(1)}-${(sg.end || 0).toFixed(1)}] ${String(sg.text || "").trim()}`).join("\n");
-              const shotLines = shots.map((sh, k) => `${k + 1}. id="${sh.id}" desc="${sh.desc || "(unknown)"}"`).join("\n");
-              const vst = useAiEditStore.getState();
-              const vibeLine = [...VIBES, ...vst.customVibes].find((v) => v.id === vst.vibe)?.style || "";
-              // The user's own words drive motion + pace too — "punchy zoom-ins", "slow holds",
-              // "hard fast cuts" in the prompt reach match_shots (not just the Vibe preset).
-              const styleLine = [vibeLine, _lastPipelineRequest].filter(Boolean).join(". ").slice(0, 300);
+              const shotLines = shots.map((sh, k) => `${k + 1}. id="${sh.id}" ${sh.type === "video" ? `[VIDEO — footage only ~${sh.vidMs ? Math.round(sh.vidMs / 1000) : 6}s long; give it a SHORT window ≈ that, a longer window = BLACK screen] ` : ""}desc="${sh.desc || "(unknown)"}"`).join("\n");
+              // The user's own words drive motion + pace — "punchy zoom-ins", "slow holds",
+              // "hard fast cuts", plus any P-preset they pasted into the box — all ride in via
+              // _lastPipelineRequest, so match_shots hears the exact direction.
+              const styleLine = String(_lastPipelineRequest || "").slice(0, 300);
               const input = `NARRATION (timed, seconds):\n${narration}\n\nSHOTS (assign each id to the narration moment it matches, contiguous & gap-free; also give each a MOTION):\n${shotLines}\n\nTotal audio: ${totalMs} ms${styleLine ? `\n\nSTYLE / DIRECTION: ${styleLine}` : ""}`;
               elog(`[MATCH REQ] ${N} shots, total=${totalMs}ms, direction="${styleLine.slice(0, 80)}"`);
               shots.forEach((sh, k) => elog(`[MATCH SHOT ${k + 1}] ${sh.id.slice(0, 6)} desc="${sh.desc || "(none)"}"`));
@@ -1025,6 +1324,33 @@ export default function AiEditPanel() {
           beats = targetVisuals.map((id, k) => ({ itemId: id, fromMs: k * per, toMs: k === N - 1 ? totalMs : (k + 1) * per, text: "" }));
           elog(`[AI-Edit arrange] even fallback: ${N} × ${per}ms over ${totalMs}ms`);
         }
+        // VIDEO SPREAD: videos must NOT clump at the end (they carry the most motion — spacing them
+        // paces the whole piece). Put one video in the FIRST slot, one in the LAST (when 2+), the rest
+        // evenly across the middle. Images fill the leftover slots keeping their relative (≈narration)
+        // order. We permute only WHICH media sits in each fixed time-window — durations stay put; each
+        // media keeps its own LLM-chosen motion + text as it moves.
+        if (beats && beats.length >= 2) {
+          const isVid = (id: string) => (map[id] as any)?.type === "video";
+          const vids = beats.filter((b) => isVid(b.itemId));
+          const imgs = beats.filter((b) => !isVid(b.itemId));
+          if (vids.length && imgs.length) {
+            const N2 = beats.length;
+            const targets: number[] = vids.length === 1 ? [0] : [0, N2 - 1];
+            for (let v = 1; v < vids.length - 1; v++) targets.push(Math.round((v / (vids.length - 1)) * (N2 - 1)));
+            const used = new Set<number>();
+            const vslots: number[] = [];
+            for (const t of targets) { let x = Math.max(0, Math.min(N2 - 1, t)); while (used.has(x)) x = (x + 1) % N2; used.add(x); vslots.push(x); }
+            vslots.sort((a, b) => a - b);
+            const vMedia = beats.filter((b) => isVid(b.itemId)).map((b) => ({ itemId: b.itemId, text: b.text, motion: b.motion }));
+            const iMedia = beats.filter((b) => !isVid(b.itemId)).map((b) => ({ itemId: b.itemId, text: b.text, motion: b.motion }));
+            const slotMedia: { itemId: string; text: string; motion?: string }[] = new Array(N2);
+            vslots.forEach((sl, vi) => { slotMedia[sl] = vMedia[vi]; });
+            let ii2 = 0;
+            for (let sl = 0; sl < N2; sl++) if (!slotMedia[sl]) slotMedia[sl] = iMedia[ii2++];
+            beats = beats.map((b, k) => ({ ...b, itemId: slotMedia[k].itemId, text: slotMedia[k].text, motion: slotMedia[k].motion }));
+            elog(`[VIDEO SPREAD] ${vids.length} video(s) → slots [${vslots.join(",")}] of ${N2} (early + late + middle, no clumping)`);
+          }
+        }
         // MIN DURATIONS: images ≥2s, VIDEOS ≥3s (videos are motion — give them priority). A shot below
         // its floor steals time from the shots that have slack (the longest first), keeping the whole
         // sequence contiguous + spanning the same total. Kills the "1s flickery b-roll" look.
@@ -1046,6 +1372,25 @@ export default function AiEditPanel() {
               durs[k] -= give;
             }
           }
+          // VIDEO CEILING (physical, not arbitrary): a video can't play past its footage length — cap
+          // each video's dur at its clip length and hand the freed time to the IMAGE shots (they hold
+          // fine via Ken Burns). Kills the "video ends → BLACK screen" when a shot got a long window.
+          const vidCapMs = (id: string) => {
+            const it: any = map[id];
+            if (it?.type !== "video") return Infinity;
+            const tr = it.trim || {};
+            const len = ((tr.to ?? it.duration ?? 0) - (tr.from ?? 0)) / (it.playbackRate || 1);
+            return len > 200 ? len : Infinity;
+          };
+          let freed = 0;
+          for (let k = 0; k < durs.length; k++) { const cap = vidCapMs(bts[k].itemId); if (durs[k] > cap) { freed += durs[k] - cap; durs[k] = cap; } }
+          if (freed > 0.5) {
+            const imgIdx = bts.map((_, k) => k).filter((k) => (map[bts[k].itemId] as any)?.type !== "video");
+            const imgSlack = imgIdx.reduce((a, k) => a + durs[k], 0);
+            if (imgSlack > 0) for (const k of imgIdx) durs[k] += freed * (durs[k] / imgSlack);
+            else durs = durs.map((d) => d + freed / durs.length);
+            elog(`[VIDEO CEILING] capped video(s) to footage, redistributed ${Math.round(freed)}ms to images`);
+          }
           let cur = 0;
           beats = bts.map((b, k) => { const from = cur; const to = k === bts.length - 1 ? total : Math.round(from + durs[k]); cur = to; return { ...b, fromMs: from, toMs: Math.max(from + 300, to) }; });
           beats[beats.length - 1].toMs = total;
@@ -1055,6 +1400,7 @@ export default function AiEditPanel() {
           s.updateAt(i, { beats }); // persist the CONTEXT — animate / effects / lip-sync read this later
           // ONE authoritative arrange: contiguous, gap-free, all shots CONSOLIDATED onto a single
           // video row (the executor moves them onto one track — see operations.ts arrange handler).
+          s.updateAt(i, { genStatus: "🧩 Arranging clips to the narration…" });
           elog("[AI-Edit arrange] applying arrange (single track, gap-free)");
           applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
           // MOTION: DIRECTED per shot by the LLM (match_shots' `motion` = punchIn/zoomIn/hold/… fitting
@@ -1063,8 +1409,20 @@ export default function AiEditPanel() {
           // (videos move on their own), in ONE batched dispatch (N dispatches race → only last sticks).
           const KB = ["zoomIn", "zoomOut", "panLeft", "panRight", "zoomInPanRight", "zoomInPanLeft"];
           const motionOf = (itemId: string, k: number): { kb: string; intensity: number; dur?: number } => {
-            const m = (beats!.find((b) => b.itemId === itemId)?.motion || "").toLowerCase();
-            return MOTION_MAP[m] || { kb: KB[k % KB.length], intensity: 20 };
+            const b = beats!.find((x) => x.itemId === itemId);
+            const m = (b?.motion || "").toLowerCase();
+            const base = MOTION_MAP[m] || { kb: KB[k % KB.length], intensity: 20 };
+            const durMs = b ? b.toMs - b.fromMs : 4000;
+            // LENGTH-AWARE so the effect is ALWAYS FELT: a LONG shot gets a CONTINUOUS drift over its whole
+            // length (dur=100) — never a quick punch that then freezes for 20s ("no effect" feel); a SHORT
+            // shot keeps its snappy punch. Floor the intensity so nothing renders invisible (@5 → felt).
+            if (durMs >= 7000) {
+              // Longer shot → STRONGER continuous drift, intensity SCALED with length so a long hold is
+              // clearly felt (not a dead slow creep). ~18 at 7s → ~34 cap by ~45s. 'hold' stays gentler.
+              const scaled = Math.min(34, 18 + Math.round((durMs - 7000) / 2500));
+              return { kb: base.kb, intensity: Math.max(m === "hold" ? 12 : scaled, base.intensity), dur: 100 };
+            }
+            return { kb: base.kb, intensity: Math.max(12, base.intensity), dur: base.dur };
           };
           const imgShots = targetVisuals.filter((id) => (map[id] as any)?.type === "image");
           const applied = applyMotionBatch(imgShots.map((id, k) => { const mv = motionOf(id, k); return { id, kenBurns: mv.kb, intensity: mv.intensity, duration: mv.dur }; }));
@@ -1299,8 +1657,8 @@ export default function AiEditPanel() {
     elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
     if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");
@@ -1507,6 +1865,24 @@ export default function AiEditPanel() {
             </div>
           )}
 
+          {/* Settings strip — auto / streaming / fast moved up here (out of the composer) so the prompt
+              area stays clean. One compact row, click to toggle. Full set still in the ⚙ popover. */}
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-border/50 px-3 py-1">
+            <span className="text-[9px] text-muted-foreground/50">run</span>
+            <button type="button" onClick={() => s.setAutoApply(!s.autoApply)} title="Auto-apply vs Ask (preview first)"
+              className={`rounded-full border px-2 py-[1px] text-[9px] ${s.autoApply ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300" : "border-border bg-background text-muted-foreground"}`}>
+              {s.autoApply ? "auto" : "ask"}
+            </button>
+            <button type="button" onClick={() => s.setStreaming(!s.streaming)} title="Stream the response live"
+              className={`rounded-full border px-2 py-[1px] text-[9px] ${s.streaming ? "border-sky-500/50 bg-sky-500/15 text-sky-600 dark:text-sky-300" : "border-border bg-background text-muted-foreground"}`}>
+              stream
+            </button>
+            <button type="button" onClick={() => s.setShowThinking(!s.showThinking)} title="Fast = hide the model's thinking (lower latency)"
+              className={`rounded-full border px-2 py-[1px] text-[9px] ${!s.showThinking ? "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300" : "border-border bg-background text-muted-foreground"}`}>
+              fast
+            </button>
+          </div>
+
           {/* Selection chips */}
           <div className="shrink-0 border-b border-border/50 px-3 py-2">
             {chips.length ? (
@@ -1638,6 +2014,55 @@ export default function AiEditPanel() {
                         )}
                       </div>
                     ) : null}
+                    {m.scriptText ? (
+                      <div className="mb-1">
+                        <button
+                          onClick={() => s.updateAt(i, { scriptOpen: !m.scriptOpen })}
+                          className="flex items-center gap-1 text-[10px] text-violet-600/80 hover:text-violet-600 dark:text-violet-300/70"
+                        >
+                          <span>{m.scriptOpen ? "▾" : "▸"}</span>
+                          <span>📝 Script</span>
+                          <span className="text-[9px] opacity-60">
+                            {m.scriptText.trim().split(/\s+/).filter(Boolean).length}w · ~{Math.round(m.scriptText.trim().split(/\s+/).filter(Boolean).length / 2.5)}s
+                          </span>
+                        </button>
+                        {m.scriptOpen && (
+                          <div className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 text-[11px] leading-relaxed text-foreground/80">
+                            {m.scriptText}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    {(m.ops?.length || m.directText) ? (
+                      <div className="mb-1">
+                        <button
+                          onClick={() => s.updateAt(i, { directOpen: !m.directOpen })}
+                          className="flex items-center gap-1 text-[10px] text-fuchsia-600/80 hover:text-fuchsia-600 dark:text-fuchsia-300/70"
+                        >
+                          <span>{m.directOpen ? "▾" : "▸"}</span>
+                          <span>🎬 Directing</span>
+                          {m.ops?.length ? (
+                            <span className="text-[9px] opacity-60">
+                              {m.ops.filter((o: any) => o.op === "generate" && o.kind !== "audio").length || m.ops.length} shots
+                            </span>
+                          ) : null}
+                        </button>
+                        {m.directOpen && (
+                          <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/5 px-2 py-1 text-[10px] leading-relaxed text-foreground/80">
+                            {m.ops?.length ? (
+                              <ul className="space-y-0.5">
+                                {m.ops.map((op: any, oi: number) => (
+                                  <li key={oi} className="truncate">• {describeOp(op)}</li>
+                                ))}
+                              </ul>
+                            ) : null}
+                            {m.directText ? (
+                              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[9px] opacity-60">{m.directText}</pre>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
                     <div className="text-[13px] leading-relaxed text-foreground/90">
                       <span className="whitespace-pre-wrap">
                         {m.content || (s.busy && i === s.messages.length - 1 ? "…" : "")}
@@ -1654,6 +2079,8 @@ export default function AiEditPanel() {
                         >
                           {!m.genStatus.startsWith("✓") && !m.genStatus.startsWith("⚠️") && "● "}
                           {m.genStatus}
+                          {/* compact counter right after the task, e.g. "Generating video… 4/10" */}
+                          {m.buildProgress ? <span className="ml-1 tabular-nums opacity-60">{m.buildProgress}</span> : null}
                         </span>
                       )}
                     </div>
@@ -1725,6 +2152,7 @@ export default function AiEditPanel() {
           <div className="shrink-0 border-t border-border/50 p-2">
             <div className="rounded-xl border border-border bg-muted/40 p-1.5 focus-within:border-sky-500/40">
               <textarea
+                ref={taRef}
                 value={s.input}
                 onChange={(e) => s.setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1733,7 +2161,7 @@ export default function AiEditPanel() {
                     send();
                   }
                 }}
-                rows={2}
+                rows={1}
                 placeholder={
                   s.pipeline === "comic_drama"
                     ? 'Enter a story idea, e.g. "a billionaire\'s secret revenge"…'
@@ -1741,15 +2169,11 @@ export default function AiEditPanel() {
                       ? 'Enter a topic, e.g. "the history of black holes"…'
                       : "Describe the edit…"
                 }
-                className="max-h-32 min-h-[36px] w-full resize-none bg-transparent px-1.5 py-1 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/40"
+                className="min-h-[36px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/40"
+                style={{ maxHeight: 160 }}
               />
-              <div className="mt-1 flex items-center justify-between gap-1.5">
-                <div className="flex items-center gap-1.5 pl-1">
-                  {s.autoApply && <span className="text-[9px] text-emerald-600/70">auto</span>}
-                  {s.streaming && <span className="text-[9px] text-sky-500/70">streaming</span>}
-                  {!s.showThinking && <span className="text-[9px] text-muted-foreground/60">fast</span>}
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
+              <div className="mt-1 flex items-center justify-end gap-1.5">
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
                   {s.models.length > 0 && (
                     <select
                       value={s.model}
@@ -1764,96 +2188,154 @@ export default function AiEditPanel() {
                       ))}
                     </select>
                   )}
-                  {/* Pipeline — swaps the system prompt to build a whole video from a
-                      topic/story (Comic Drama on top, Faceless Video below). "" = normal Edit. */}
-                  <select
-                    value={s.pipeline}
-                    onChange={(e) => s.setPipeline(e.target.value)}
-                    className={`h-7 max-w-[124px] truncate rounded-lg border px-1.5 text-[10px] outline-none ${
-                      s.pipeline
-                        ? "border-violet-500/50 bg-violet-500/15 text-violet-600 dark:text-violet-300"
-                        : "border-border bg-background text-muted-foreground"
-                    }`}
-                    title="Pipeline — build a whole video from a topic/story"
-                  >
-                    <option value="">✦ Edit</option>
-                    {PIPELINES.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                  {/* Vibe preset — compact custom dropdown: built-in + your own presets (add / edit /
-                      delete, saved in localStorage). A style phrase injected into the plan + timing. */}
-                  {s.pipeline && (
-                    <div className="relative" ref={vibeMenuRef}>
-                      <button
-                        type="button"
-                        onClick={() => setVibeMenuOpen((o) => !o)}
-                        className={`flex h-7 max-w-[120px] items-center gap-1 truncate rounded-lg border px-1.5 text-[10px] outline-none ${
-                          s.vibe
-                            ? "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300"
-                            : "border-border bg-background text-muted-foreground"
-                        }`}
-                        title="Vibe — look & pace preset"
-                      >
-                        <span className="truncate">{curVibe && s.vibe ? curVibe.label : "🎨 Vibe"}</span>
-                        <span className="opacity-60">▾</span>
-                      </button>
-                      {vibeMenuOpen && (
-                        <div className="absolute bottom-full right-0 z-50 mb-1 max-h-[260px] w-[200px] overflow-auto rounded-lg border border-border bg-background p-1 shadow-xl">
-                          {allVibes.map((v) => {
-                            const custom = v.id.startsWith("custom_");
-                            return (
-                              <div key={v.id || "none"} className="group flex items-center rounded-md hover:bg-muted/60">
-                                <button
-                                  type="button"
-                                  onClick={() => { s.setVibe(v.id); setVibeMenuOpen(false); setVibeEdit(null); }}
-                                  className={`flex-1 truncate px-2 py-1 text-left text-[11px] ${s.vibe === v.id ? "font-medium text-amber-600 dark:text-amber-300" : "text-foreground"}`}
-                                >
-                                  {v.id ? v.label : "None"}
-                                  {!v.id && <span className="text-muted-foreground"> · default</span>}
-                                </button>
-                                {custom && (
-                                  <>
-                                    <button type="button" title="Edit" onClick={() => setVibeEdit({ id: v.id, label: v.label, style: v.style })} className="px-1 text-[11px] text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100">✎</button>
-                                    <button type="button" title="Delete" onClick={() => s.removeCustomVibe(v.id)} className="px-1 pr-1.5 text-[11px] text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100">🗑</button>
-                                  </>
-                                )}
-                              </div>
-                            );
-                          })}
-                          <div className="my-1 border-t border-border" />
-                          {vibeEdit ? (
-                            <div className="flex flex-col gap-1 p-1">
-                              <input
-                                autoFocus
-                                value={vibeEdit.label}
-                                onChange={(e) => setVibeEdit({ ...vibeEdit, label: e.target.value })}
-                                placeholder="Name (e.g. 🌧️ Rainy Noir)"
-                                className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:border-amber-500/60"
-                              />
-                              <textarea
-                                value={vibeEdit.style}
-                                onChange={(e) => setVibeEdit({ ...vibeEdit, style: e.target.value })}
-                                placeholder="Style / pace, e.g. dark rainy noir, slow moody holds, cold blue grade"
-                                rows={2}
-                                className="resize-none rounded border border-border bg-background px-1.5 py-1 text-[11px] outline-none focus:border-amber-500/60"
-                              />
-                              <div className="flex justify-end gap-1">
-                                <button type="button" onClick={() => setVibeEdit(null)} className="rounded px-2 py-[2px] text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
-                                <button type="button" onClick={saveVibe} disabled={!vibeEdit.label.trim() || !vibeEdit.style.trim()} className="rounded bg-amber-600 px-2 py-[2px] text-[10px] text-white hover:bg-amber-500 disabled:opacity-40">Save</button>
-                              </div>
+                  {/* S/D PRESETS (Directors) — the planner "brain". Built-in (Edit / Comic Drama /
+                      Faceless) + your own custom system-prompt directors (add / edit / delete,
+                      localStorage). Selecting one swaps the system prompt. Always visible. */}
+                  <div className="relative" ref={dirMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setDirMenuOpen((o) => !o)}
+                      className={`flex h-7 max-w-[150px] items-center gap-1 truncate rounded-lg border px-1.5 text-[10px] outline-none ${
+                        s.pipeline
+                          ? "border-violet-500/50 bg-violet-500/15 text-violet-600 dark:text-violet-300"
+                          : "border-border bg-background text-muted-foreground"
+                      }`}
+                      title="Director (S/D preset) — which system prompt the planner uses"
+                    >
+                      <span className="truncate">{curDirector?.label || "✦ Edit / General"}</span>
+                      <span className="opacity-60">▾</span>
+                    </button>
+                    {dirMenuOpen && (
+                      <div className="absolute bottom-full right-0 z-50 mb-1 max-h-[300px] w-[240px] overflow-auto rounded-lg border border-border bg-background p-1 shadow-xl">
+                        {allDirectors.map((d) => {
+                          const custom = d.id.startsWith("dir_");
+                          const overridden = !custom && !!dirOverrides[d.id];
+                          return (
+                            <div key={d.id || "edit"} className="group flex items-center rounded-md hover:bg-muted/60">
+                              <button
+                                type="button"
+                                onClick={() => { s.setPipeline(d.id); setDirMenuOpen(false); setDirEdit(null); setDirErr(""); }}
+                                className={`flex-1 truncate px-2 py-1 text-left text-[11px] ${s.pipeline === d.id ? "font-medium text-violet-600 dark:text-violet-300" : "text-foreground"}`}
+                              >
+                                {d.label}
+                                {overridden && <span title="edited by admin (global)" className="ml-1 text-[8px] text-violet-500">✎</span>}
+                              </button>
+                              {custom ? (
+                                <>
+                                  <button type="button" title="Edit" onClick={() => { const cd = s.customDirectors.find((x) => x.id === d.id); setDirEdit({ id: d.id, label: d.label, systemPrompt: cd?.systemPrompt || "" }); setDirErr(""); }} className="px-1 text-[11px] text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100">✎</button>
+                                  <button type="button" title="Delete" onClick={() => s.removeCustomDirector(d.id)} className="px-1 pr-1.5 text-[11px] text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100">🗑</button>
+                                </>
+                              ) : isAdmin ? (
+                                <button type="button" title="Edit this built-in prompt — saves GLOBALLY for everyone (admin)" onClick={() => { setDirEdit({ id: d.id, label: d.label, systemPrompt: directorPromptOf(d.id), builtin: true }); setDirErr(""); }} className="px-1 pr-1.5 text-[11px] text-muted-foreground opacity-0 hover:text-violet-500 group-hover:opacity-100">✎</button>
+                              ) : null}
                             </div>
-                          ) : (
-                            <button type="button" onClick={() => setVibeEdit({ id: "new", label: "", style: "" })} className="w-full rounded-md px-2 py-1 text-left text-[11px] text-sky-600 hover:bg-muted/60">
-                              + Add preset
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                          );
+                        })}
+                        <div className="my-1 border-t border-border" />
+                        {dirEdit ? (
+                          <div className="flex flex-col gap-1 p-1">
+                            {dirEdit.builtin && (
+                              <p className="px-0.5 text-[9px] text-violet-500">Editing a built-in director — saves GLOBALLY (all users), live. Admin only.</p>
+                            )}
+                            <input
+                              autoFocus={!dirEdit.builtin}
+                              value={dirEdit.label}
+                              onChange={(e) => setDirEdit({ ...dirEdit, label: e.target.value })}
+                              placeholder="Name (e.g. 🎭 Horror Director)"
+                              className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:border-violet-500/60"
+                            />
+                            <textarea
+                              autoFocus={dirEdit.builtin}
+                              value={dirEdit.systemPrompt}
+                              onChange={(e) => setDirEdit({ ...dirEdit, systemPrompt: e.target.value })}
+                              placeholder="System prompt — the director's brain: its role, the ops it may use, the style. (Prefilled from the current director — tweak it.)"
+                              rows={8}
+                              className="resize-y rounded border border-border bg-background px-1.5 py-1 text-[11px] outline-none focus:border-violet-500/60"
+                            />
+                            {dirErr && <p className="px-0.5 text-[10px] text-red-500">{dirErr}</p>}
+                            <div className="flex items-center justify-end gap-1">
+                              {dirEdit.builtin && dirOverrides[dirEdit.id] && (
+                                <button type="button" onClick={() => resetDir(dirEdit.id)} className="mr-auto rounded px-2 py-[2px] text-[10px] text-amber-600 hover:bg-amber-500/10" title="Revert to the original built-in prompt">Reset to default</button>
+                              )}
+                              <button type="button" onClick={() => { setDirEdit(null); setDirErr(""); }} className="rounded px-2 py-[2px] text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
+                              <button type="button" onClick={saveDir} disabled={!dirEdit.systemPrompt.trim() || (!dirEdit.builtin && !dirEdit.label.trim())} className="rounded bg-violet-600 px-2 py-[2px] text-[10px] text-white hover:bg-violet-500 disabled:opacity-40">Save</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button type="button" onClick={() => { setDirEdit({ id: "new", label: "", systemPrompt: directorPromptOf(s.pipeline) }); setDirErr(""); }} className="w-full rounded-md px-2 py-1 text-left text-[11px] text-sky-600 hover:bg-muted/60">
+                            + Add director
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {/* P PRESETS — prompt snippets. Clicking one PASTES its text into the box (visible +
+                      editable → it reaches the planner AND match_shots via _lastPipelineRequest).
+                      Built-in + your own (add / edit / delete, localStorage). Always visible. */}
+                  <div className="relative" ref={vibeMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setVibeMenuOpen((o) => !o)}
+                      className="flex h-7 max-w-[120px] items-center gap-1 truncate rounded-lg border border-border bg-background px-1.5 text-[10px] text-muted-foreground outline-none"
+                      title="P preset — paste a style / prompt snippet into the box"
+                    >
+                      <span className="truncate">＋ Preset</span>
+                      <span className="opacity-60">▾</span>
+                    </button>
+                    {vibeMenuOpen && (
+                      <div className="absolute bottom-full right-0 z-50 mb-1 max-h-[280px] w-[220px] overflow-auto rounded-lg border border-border bg-background p-1 shadow-xl">
+                        <div className="px-2 py-1 text-[10px] text-muted-foreground">{pPresets.length ? "click to paste into the prompt" : "no presets yet — add your own below"}</div>
+                        {pPresets.map((v) => {
+                          const custom = v.id.startsWith("custom_");
+                          return (
+                            <div key={v.id} className="group flex items-center rounded-md hover:bg-muted/60">
+                              <button
+                                type="button"
+                                onClick={() => pastePreset(v.style)}
+                                title={v.style}
+                                className="flex-1 truncate px-2 py-1 text-left text-[11px] text-foreground"
+                              >
+                                {v.label}
+                              </button>
+                              {custom && (
+                                <>
+                                  <button type="button" title="Edit" onClick={() => setVibeEdit({ id: v.id, label: v.label, style: v.style })} className="px-1 text-[11px] text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100">✎</button>
+                                  <button type="button" title="Delete" onClick={() => s.removeCustomVibe(v.id)} className="px-1 pr-1.5 text-[11px] text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100">🗑</button>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <div className="my-1 border-t border-border" />
+                        {vibeEdit ? (
+                          <div className="flex flex-col gap-1 p-1">
+                            <input
+                              autoFocus
+                              value={vibeEdit.label}
+                              onChange={(e) => setVibeEdit({ ...vibeEdit, label: e.target.value })}
+                              placeholder="Name (e.g. 🌧️ Rainy Noir)"
+                              className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:border-amber-500/60"
+                            />
+                            <textarea
+                              value={vibeEdit.style}
+                              onChange={(e) => setVibeEdit({ ...vibeEdit, style: e.target.value })}
+                              placeholder="Snippet to paste, e.g. dark rainy noir, slow moody holds, cold blue grade, hard fast cuts"
+                              rows={3}
+                              className="resize-none rounded border border-border bg-background px-1.5 py-1 text-[11px] outline-none focus:border-amber-500/60"
+                            />
+                            <div className="flex justify-end gap-1">
+                              <button type="button" onClick={() => setVibeEdit(null)} className="rounded px-2 py-[2px] text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
+                              <button type="button" onClick={saveVibe} disabled={!vibeEdit.label.trim() || !vibeEdit.style.trim()} className="rounded bg-amber-600 px-2 py-[2px] text-[10px] text-white hover:bg-amber-500 disabled:opacity-40">Save</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button type="button" onClick={() => setVibeEdit({ id: "new", label: "", style: "" })} className="w-full rounded-md px-2 py-1 text-left text-[11px] text-sky-600 hover:bg-muted/60">
+                            + Add preset
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <button
                     onClick={s.busy ? stopWork : send}
                     disabled={!s.busy && !s.input.trim()}

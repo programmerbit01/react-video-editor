@@ -17,6 +17,41 @@ export async function POST(request: Request) {
     }
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["X-API-Key"] = token;
+    // STREAM mode → pipe the vApp SSE straight through (live script typing). Forward the client's
+    // abort so a Stop cancels the upstream LLM too (same true-stop path as the ops stream).
+    if (body.stream) {
+      const sr = await fetch(`${base}/vapp/llm?stream=1`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          task,
+          input,
+          ...(body.overrides ? { overrides: body.overrides } : {}),
+          ...(token ? { api_key: token } : {}),
+        }),
+        signal: request.signal,
+      });
+      if (!sr.ok || !sr.body) {
+        const t = await sr.text().catch(() => "");
+        return NextResponse.json({ error: t || `llm stream failed (${sr.status})` }, { status: sr.status || 500 });
+      }
+      // ACTIVE pump (not a raw `sr.body` passthrough) — Node/Next buffers a raw body and delivers it
+      // all-at-once; pulling + enqueuing each chunk flushes it live. Mirrors the working /api/ai-edit.
+      const reader = sr.body.getReader();
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const { done, value } = await reader.read();
+            if (done) { controller.close(); return; }
+            controller.enqueue(value);
+          } catch { try { controller.close(); } catch { /* already closed */ } }
+        },
+        cancel() { try { reader.cancel(); } catch { /* ignore */ } },
+      });
+      return new Response(stream, {
+        headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", Connection: "keep-alive" },
+      });
+    }
     const r = await fetch(`${base}/vapp/llm`, {
       method: "POST",
       headers,

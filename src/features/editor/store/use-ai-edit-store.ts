@@ -8,12 +8,17 @@ export interface ChatMsg {
   reasoning?: string; // streamed "thinking"
   reasoningMs?: number; // how long it thought (ms)
   thinkingOpen?: boolean; // reasoning box expanded
+  scriptText?: string; // pipeline: the pre-written narration, shown in a collapsible box
+  scriptOpen?: boolean; // script box expanded (open while it streams, auto-collapses when done)
+  directText?: string; // pipeline: the raw scene-plan JSON as it streams (hidden in a collapsible, not the wall)
+  directOpen?: boolean; // directing box expanded (open while streaming, collapses when parsed)
   ops?: AiEditOp[]; // proposed operations (assistant)
   applied?: boolean;
   reverted?: boolean;
   snapshot?: Record<string, any>; // pre-apply state for inline revert
   historyId?: string;
-  genStatus?: string; // background generation status (queued #, %, ✓/⚠️)
+  genStatus?: string; // background generation status (queued #, %, ✓/⚠️) — per-shot detail, flickers
+  buildProgress?: string; // PERSISTENT aggregate counter during a build ("4/10 · 8 img · 2 vid") — never clobbered by per-shot genStatus
   genPreviews?: { kind: string; url: string }[]; // generated media previews
   // BEAT MODEL — the shared context a pipeline build produces: each shot's timeline slot +
   // the narration spoken during it (+ neighbours are derivable by index). Arrange uses it;
@@ -59,7 +64,8 @@ interface AiEditState {
   model: string;
   pipeline: string; // "" = normal Edit ; "comic_drama" | "faceless_video" = pipeline mode (swaps the system prompt)
   vibe: string; // "" = none ; a VIBE preset id (fast_drama / cinematic / …) — injects a style phrase into the prompt + timing
-  customVibes: { id: string; label: string; style: string }[]; // user-added presets (persisted)
+  customVibes: { id: string; label: string; style: string }[]; // user-added P presets — prompt snippets (persisted)
+  customDirectors: { id: string; label: string; systemPrompt: string }[]; // user-added S/D presets — director system prompts (persisted)
   models: ChatModel[];
   history: HistoryEntry[];
   transcript: { key: string; segments: { start: number; end: number; text: string }[] } | null;
@@ -90,6 +96,9 @@ interface AiEditState {
   addCustomVibe: (label: string, style: string) => string;
   updateCustomVibe: (id: string, label: string, style: string) => void;
   removeCustomVibe: (id: string) => void;
+  addCustomDirector: (label: string, systemPrompt: string) => string;
+  updateCustomDirector: (id: string, label: string, systemPrompt: string) => void;
+  removeCustomDirector: (id: string) => void;
   setModels: (m: ChatModel[]) => void;
   setTranscript: (t: { key: string; segments: { start: number; end: number; text: string }[] } | null) => void;
   addHistory: (e: HistoryEntry) => void;
@@ -120,9 +129,10 @@ const useAiEditStore = create<AiEditState>()(
   input: "",
   busy: false,
   model: "",
-  pipeline: "",
+  pipeline: "comic_drama", // default Director = Comic Drama (the main pipeline); "" = plain Edit
   vibe: "",
   customVibes: [],
+  customDirectors: [],
   models: [],
   history: [],
   transcript: null,
@@ -169,6 +179,15 @@ const useAiEditStore = create<AiEditState>()(
     set((st) => ({ customVibes: st.customVibes.map((v) => (v.id === id ? { ...v, label: label.trim() || v.label, style: style.trim() } : v)) })),
   removeCustomVibe: (id) =>
     set((st) => ({ customVibes: st.customVibes.filter((v) => v.id !== id), vibe: st.vibe === id ? "" : st.vibe })),
+  addCustomDirector: (label, systemPrompt) => {
+    const id = "dir_" + Math.random().toString(36).slice(2, 9);
+    set((st) => ({ customDirectors: [...st.customDirectors, { id, label: label.trim() || "Custom Director", systemPrompt: systemPrompt.trim() }], pipeline: id }));
+    return id;
+  },
+  updateCustomDirector: (id, label, systemPrompt) =>
+    set((st) => ({ customDirectors: st.customDirectors.map((d) => (d.id === id ? { ...d, label: label.trim() || d.label, systemPrompt: systemPrompt.trim() } : d)) })),
+  removeCustomDirector: (id) =>
+    set((st) => ({ customDirectors: st.customDirectors.filter((d) => d.id !== id), pipeline: st.pipeline === id ? "" : st.pipeline })),
   setModels: (m) => set({ models: m }),
   setTranscript: (t) => set({ transcript: t }),
   addHistory: (e) => set((st) => ({ history: [e, ...st.history] })),
@@ -187,8 +206,10 @@ const useAiEditStore = create<AiEditState>()(
         optimizePrompt: st.optimizePrompt,
         autoApply: st.autoApply,
         model: st.model,
+        pipeline: st.pipeline,
         vibe: st.vibe,
         customVibes: st.customVibes,
+        customDirectors: st.customDirectors,
       }),
       // The panel opens by DEFAULT now — force it EXPANDED on load so a STALE persisted
       // "collapsed" state can never leave it opened but blank (header only, no chat body).
