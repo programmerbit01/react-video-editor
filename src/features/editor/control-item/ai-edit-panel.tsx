@@ -278,12 +278,12 @@ function longestWordMatch(a: string[], b: string[]): { aStart: number; aEnd: num
 
 // Generic unified-LLM text call → /api/ai-llm → vApp /vapp/llm. Used by the auto-director
 // for the `script` + `beat_plan` tasks. Fail-open: returns "" on any error.
-async function llmText(task: string, input: string, token: string): Promise<string> {
+async function llmText(task: string, input: string, token: string, images?: string[]): Promise<string> {
   try {
     const res = await fetch(withEditorBase("/api/ai-llm"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task, input, token }),
+      body: JSON.stringify({ task, input, token, ...(images?.length ? { images } : {}) }),
     });
     const d = await res.json().catch(() => ({}));
     return String(d?.text || "");
@@ -302,15 +302,16 @@ async function llmTextStream(
   onDelta: (full: string) => void,
   signal?: AbortSignal,
   overrides?: Record<string, any>, // e.g. a per-director { system: <script prompt> } to override the task
+  images?: string[], // reference image(s) → the task runs multimodal (Qwen3.6 vision reads them)
 ): Promise<string> {
   const res = await fetch(withEditorBase("/api/ai-llm"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task, input, token, stream: true, ...(overrides ? { overrides } : {}) }),
+    body: JSON.stringify({ task, input, token, stream: true, ...(overrides ? { overrides } : {}), ...(images?.length ? { images } : {}) }),
     signal,
   });
   if (!res.ok || !res.body || !(res.headers.get("content-type") || "").includes("text/event-stream")) {
-    return llmText(task, input, token);
+    return llmText(task, input, token, images);
   }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -828,21 +829,36 @@ export default function AiEditPanel() {
     // audio length). The user's RAW request goes straight to the LLM; the `script` system prompt reads
     // the duration and hits it. (Trust the model; the frontend stays generic — no hardcoded intelligence.)
     let injectedScript = "";
+    let refDesc = ""; // what the uploaded reference image contains (script-step vision → rides to the director)
+    const refSrc = s.pipeline ? (s.refImage || selectedRefSrc()) : "";
     if (s.pipeline) {
       const wc = (t: string) => t.split(/\s+/).filter(Boolean).length;
       // Stream the script into its OWN collapsible box (not the main content) — like the 💭 Thought
       // box. Open while it types; auto-collapses when done. content stays empty → the "…" dots show
       // until the actual scene response starts (that's what the user asked for).
-      s.updateLast({ content: "", scriptText: "", scriptOpen: true, genStatus: "✍️ Scripting…" });
+      s.updateLast({ content: "", scriptText: "", scriptOpen: true, genStatus: refSrc ? "👁️ Looking at your image + scripting…" : "✍️ Scripting…" });
       // Per-director SCRIPT style (custom directors' optional 2nd box) rides in the INPUT so the base
       // `script` task rules (duration, ignore-editing-directions) stay in force and the style is added.
       const dirScript = s.customDirectors.find((d) => d.id === s.pipeline)?.scriptPrompt;
       const scriptInput = dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text;
       try {
+        // Reference image → the script step runs MULTIMODAL (Qwen3.6 vision): it SEES the image, so the
+        // narration fits whoever/whatever is actually in it — the ONE vision read for the whole pipeline.
         injectedScript = (await llmTextStream("script", scriptInput, getToken(), (full) => {
           s.updateLast({ scriptText: full, scriptOpen: true });
-        }, _work?.signal)).trim();
+        }, _work?.signal, undefined, refSrc ? [refSrc] : undefined)).trim();
       } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
+      // With a reference, the script leads with a "REF: <what's in the image>" line. Split it out:
+      // refDesc rides to the DIRECTOR (so it writes EDIT prompts around that subject); the rest = narration.
+      if (refSrc && injectedScript) {
+        const mm = injectedScript.match(/^\s*REF:\s*([\s\S]*?)(?:\n\s*\n|$)/i);
+        if (mm && mm[1].trim()) {
+          refDesc = mm[1].replace(/\s+/g, " ").trim().slice(0, 400);
+          const rest = injectedScript.slice(mm[0].length).trim();
+          if (rest) injectedScript = rest; // keep the whole thing if the parse ate the narration (safety)
+          elog(`[SCRIPT VISION] REF="${refDesc.slice(0, 120)}"`);
+        }
+      }
       if (injectedScript) {
         elog(`[SCRIPT STEP] ${wc(injectedScript)} words (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
         s.updateLast({ scriptText: injectedScript, scriptOpen: false }); // collapse; content empty → dots until scenes
@@ -852,6 +868,12 @@ export default function AiEditPanel() {
       if (!injectedScript) { s.updateLast({ content: "⚠️ Couldn't write the script — try again." }); s.setBusy(false); return; }
     }
 
+    // A reference image → tell the director WHAT is in it (from the script step's vision, no 2nd read)
+    // and to write EDIT-style prompts (keep that subject; change only wardrobe/setting/pose) — NOT a
+    // fresh t2i character it invents (that fights the edit model → the identity drifts).
+    const refBlock = refDesc
+      ? `\n\n━━━ REFERENCE IMAGE attached — it contains: ${refDesc}. Every image shot is generated by EDITING this reference, so KEEP that exact subject/identity. Write each image prompt as an EDIT: say "the same {subject} from the reference" then describe ONLY the changes (wardrobe, setting, pose, action, mood, lighting). Do NOT invent or describe faces/features — they come from the image. ━━━`
+      : "";
     const projCtx = projectContext(trackItemsMap) + narrationTimeline(useAiEditStore.getState().transcript?.segments);
     const payload: Record<string, any> = {
       model: s.model,
@@ -872,8 +894,8 @@ export default function AiEditPanel() {
           // does NOT rewrite the narration — the system inserts the real script into the audio op).
           content: s.pipeline
             ? (injectedScript
-                ? `${text}\n\n━━━ The NARRATION SCRIPT is ALREADY WRITTEN (below) — the system inserts it. For the audio op output EXACTLY { "op":"generate","kind":"audio","text":"__SCRIPT__" } and do NOT write the narration yourself. Write the shot gen prompts so shot k matches the part of the script spoken at that moment, in order. ━━━\nSCRIPT (reference, to match shots to):\n${injectedScript}`
-                : text)
+                ? `${text}${refBlock}\n\n━━━ The NARRATION SCRIPT is ALREADY WRITTEN (below) — the system inserts it. For the audio op output EXACTLY { "op":"generate","kind":"audio","text":"__SCRIPT__" } and do NOT write the narration yourself. Write the shot gen prompts so shot k matches the part of the script spoken at that moment, in order. ━━━\nSCRIPT (reference, to match shots to):\n${injectedScript}`
+                : `${text}${refBlock}`)
             : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
         },
       ],
@@ -916,7 +938,7 @@ export default function AiEditPanel() {
         // REFERENCE IMAGE: an explicit attached photo (pasted/dropped/linked) OR, failing that, the
         // timeline image the user has selected. Every IMAGE shot is then generated FROM it (img2img via
         // vapp-image-edit) → the same face/identity across shots. (Videos + stock skip it.)
-        const refSrc = s.pipeline ? (s.refImage || selectedRefSrc()) : "";
+        // refSrc computed once at the top of the pipeline flow (also drives the script-step vision).
         if (refSrc) {
           env.operations.forEach((o: any) => {
             if (o.op === "generate" && o.kind === "image") { o.image_url = refSrc; o.optimize = false; } // an edit-instruction, not a fresh prompt to optimize

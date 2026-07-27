@@ -15,6 +15,8 @@ export async function POST(request: Request) {
     if (!task || !input) {
       return NextResponse.json({ error: "task and input are required" }, { status: 400 });
     }
+    // Optional reference image(s) → /vapp/llm runs the task multimodal (a vision model reads them).
+    const images = Array.isArray(body.images) ? body.images.filter(Boolean) : undefined;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["X-API-Key"] = token;
     // STREAM mode → pipe the vApp SSE straight through (live script typing). Forward the client's
@@ -27,6 +29,7 @@ export async function POST(request: Request) {
           task,
           input,
           ...(body.overrides ? { overrides: body.overrides } : {}),
+          ...(images?.length ? { images } : {}),
           ...(token ? { api_key: token } : {}),
         }),
         signal: request.signal,
@@ -59,6 +62,7 @@ export async function POST(request: Request) {
         task,
         input,
         ...(body.overrides ? { overrides: body.overrides } : {}),
+        ...(images?.length ? { images } : {}),
         ...(token ? { api_key: token } : {}),
       }),
     });

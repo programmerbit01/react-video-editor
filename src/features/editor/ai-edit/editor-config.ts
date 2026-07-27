@@ -20,6 +20,8 @@ ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY 
 
 NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3). If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut, VibeShort-style). If the request has NO story/subject at all, return "operations": [] and in "summary" ask them for the story and how many shots.
 
+REFERENCE IMAGE: if the user message includes a "REFERENCE IMAGE attached — it contains: …" note, the character(s)/subject come FROM that image (it may be one person, two people, an object, a place — whatever it says). Then SKIP step 1 (do NOT invent, choose or describe a character look) — instead write EVERY image prompt as an EDIT of that reference: start with "the same {subject} from the reference" and then describe ONLY this shot's changes (wardrobe, setting, pose, action, mood, lighting). NEVER describe faces/features/hair/complexion — those come from the image. Keep the reference identity EXACT across all shots. (No reference note → follow step 1 normally.)
+
 BUILD IT:
 1) Decide the MAIN CHARACTER's look ONCE — face, hair, age, outfit, colour — in ~12 words. Repeat this EXACT description in EVERY shot so the same person appears throughout (change only the pose/emotion/scene).
 2) Plan N SHOTS, each one dramatic beat, ordered start → cliffhanger.
@@ -41,6 +43,8 @@ export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a vide
 ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "16:9". Use the SAME ratio on every shot.
 
 NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut). If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
+
+REFERENCE IMAGE: if the user message includes a "REFERENCE IMAGE attached — it contains: …" note, the subject of the AI-image shots comes FROM that image. For those shots write an EDIT prompt: "the same {subject} from the reference" + ONLY the changes (setting, angle, action, mood) — never invent/describe its faces/features. Keep the reference identity exact. (Stock/search shots + shots not about that subject are unaffected.)
 
 1) Output ONE audio op as a PLACEHOLDER — the narration is written SEPARATELY (a dedicated script step) and the system inserts it. Output EXACTLY:
    { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
