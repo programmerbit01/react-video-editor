@@ -62,7 +62,7 @@ interface AiEditState {
   input: string;
   busy: boolean;
   model: string;
-  refImage: string; // pipeline: a reference PHOTO URL → every shot is generated FROM it (character consistency)
+  refImages: string[]; // pipeline: reference PHOTO URLs → every shot is generated FROM them (character consistency, multi-ref)
   pipeline: string; // "" = normal Edit ; "comic_drama" | "faceless_video" = pipeline mode (swaps the system prompt)
   vibe: string; // "" = none ; a VIBE preset id (fast_drama / cinematic / …) — injects a style phrase into the prompt + timing
   customVibes: { id: string; label: string; style: string }[]; // user-added P presets — prompt snippets (persisted)
@@ -86,7 +86,9 @@ interface AiEditState {
   setOptimizePrompt: (v: boolean) => void;
 
   setInput: (v: string) => void;
-  setRefImage: (v: string) => void;
+  addRefImage: (v: string) => void;
+  removeRefImage: (v: string) => void;
+  clearRefImages: () => void;
   setBusy: (v: boolean) => void;
   addMessage: (m: ChatMsg) => void;
   updateLast: (patch: Partial<ChatMsg>) => void;
@@ -131,7 +133,7 @@ const useAiEditStore = create<AiEditState>()(
   input: "",
   busy: false,
   model: "",
-  refImage: "",
+  refImages: [],
   pipeline: "comic_drama", // default Director = Comic Drama (the main pipeline); "" = plain Edit
   vibe: "",
   customVibes: [],
@@ -155,7 +157,9 @@ const useAiEditStore = create<AiEditState>()(
   setOptimizePrompt: (v) => set({ optimizePrompt: v }),
 
   setInput: (v) => set({ input: v }),
-  setRefImage: (v) => set({ refImage: v }),
+  addRefImage: (v) => set((st) => (v && !st.refImages.includes(v) ? { refImages: [...st.refImages, v] } : {})),
+  removeRefImage: (v) => set((st) => ({ refImages: st.refImages.filter((x) => x !== v) })),
+  clearRefImages: () => set({ refImages: [] }),
   setBusy: (v) => set({ busy: v }),
   addMessage: (m) => set((st) => ({ messages: [...st.messages, m] })),
   updateLast: (patch) =>
@@ -210,7 +214,7 @@ const useAiEditStore = create<AiEditState>()(
         optimizePrompt: st.optimizePrompt,
         autoApply: st.autoApply,
         model: st.model,
-        refImage: st.refImage,
+        refImages: st.refImages,
         pipeline: st.pipeline,
         vibe: st.vibe,
         customVibes: st.customVibes,

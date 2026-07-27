@@ -46,9 +46,13 @@ export async function POST(request: Request) {
     const base = DEFAULT_VAPP_BASE.replace(/\/+$/, "");
     const token = String(body.token || "").replace(/^Bearer\s+/i, "").trim();
     const kind = String(body.kind || "audio");
-    // A reference / img2img image → route to the EDIT model (Flux Klein edit) which KEEPS the
-    // subject's identity (character consistency); a plain text→image stays on the base model.
-    const model = kind === "image" && body.image_url ? "vapp-image-edit" : (MODEL_FOR[kind] || MODEL_FOR.audio);
+    // Reference image(s) → route to the EDIT model (Flux Klein edit) which KEEPS the subject's
+    // identity (character consistency). Flux takes SEVERAL refs, so accept an images[] array too
+    // (forwarded as images_list, the field vApp/wan2gp already consolidates); a plain text→image
+    // stays on the base model.
+    const images: string[] = Array.isArray(body.images) ? body.images.filter((u: any) => typeof u === "string" && u.trim()) : [];
+    const hasRef = kind === "image" && (images.length > 0 || !!body.image_url);
+    const model = hasRef ? "vapp-image-edit" : (MODEL_FOR[kind] || MODEL_FOR.audio);
     const prompt = String(body.prompt || body.text || "").trim();
     if (!prompt) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
 
@@ -57,7 +61,7 @@ export async function POST(request: Request) {
     // The client toggle (AI Edit "Optimise prompt") wins when provided; else the env default.
     const wantOptimize = body.optimize !== undefined ? !!body.optimize : OPTIMIZE_GEN;
     const genPrompt =
-      wantOptimize && (kind === "image" || kind === "video") && !body.image_url
+      wantOptimize && (kind === "image" || kind === "video") && !body.image_url && !images.length
         ? await optimizePrompt(base, token, kind, prompt)
         : prompt;
 
@@ -67,7 +71,8 @@ export async function POST(request: Request) {
         prompt: genPrompt,
         aspect_ratio: body.aspect_ratio || "16:9",
         resolution: "1k",
-        ...(body.image_url ? { image_url: body.image_url } : {}), // img2img (regenerate)
+        // multi-reference → images_list (+ image_url[0] for single-image back-compat); else a single img2img ref
+        ...(images.length ? { images_list: images, image_url: images[0] } : body.image_url ? { image_url: body.image_url } : {}),
       };
     } else if (kind === "video") {
       reqBody = {

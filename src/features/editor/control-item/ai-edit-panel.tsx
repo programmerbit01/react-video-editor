@@ -488,23 +488,26 @@ export default function AiEditPanel() {
   // file uploads to R2; a bare image URL is used directly. The reference makes every generated IMAGE shot
   // keep one identity (img2img via vapp-image-edit). The SELECTED-clip fallback is computed at use time.
   const REF_IMG_URL = /^https?:\/\/\S+\.(png|jpe?g|gif|webp|bmp|avif)(\?|#|$)/i;
-  const selectedRefSrc = (): string => {
-    if (!s.pipeline) return "";
+  // Every timeline IMAGE the user has selected → the reference-image fallback (when none explicitly
+  // attached). Multiple selected images all become references.
+  const selectedRefSrcs = (): string[] => {
+    if (!s.pipeline) return [];
     const st = useStore.getState().trackItemsMap || {};
-    const id = (useStore.getState().activeIds || []).find((x: string) => (st[x] as any)?.type === "image");
-    return id ? String((st[id] as any)?.details?.src || "") : "";
+    return (useStore.getState().activeIds || [])
+      .map((x: string) => ((st[x] as any)?.type === "image" ? String((st[x] as any)?.details?.src || "") : ""))
+      .filter(Boolean);
   };
   const attachRefFile = async (file?: File | null) => {
     if (!file || !file.type?.startsWith("image/")) return;
     const ctx = getVappUploadCtx();
     if (!ctx) { elog("[REF] no upload ctx — open the editor with a vApp token to paste/drop a file"); return; }
-    try { setRefBusy(true); const { url } = await uploadVappMediaFile(file, ctx); if (url) s.setRefImage(url); }
+    try { setRefBusy(true); const { url } = await uploadVappMediaFile(file, ctx); if (url) s.addRefImage(url); }
     catch (err) { elog("[REF] upload failed", err); }
     finally { setRefBusy(false); }
   };
   const attachRefText = (text?: string): boolean => {
     const u = String(text || "").trim();
-    if (REF_IMG_URL.test(u)) { s.setRefImage(u); return true; }
+    if (REF_IMG_URL.test(u)) { s.addRefImage(u); return true; }
     return false;
   };
   const onComposerPaste = (e: any) => {
@@ -829,14 +832,16 @@ export default function AiEditPanel() {
     // audio length). The user's RAW request goes straight to the LLM; the `script` system prompt reads
     // the duration and hits it. (Trust the model; the frontend stays generic — no hardcoded intelligence.)
     let injectedScript = "";
-    let refDesc = ""; // what the uploaded reference image contains (script-step vision → rides to the director)
-    const refSrc = s.pipeline ? (s.refImage || selectedRefSrc()) : "";
+    let refDesc = ""; // what the uploaded reference image(s) contain (script-step vision → rides to the director)
+    // Reference images: the ones the user explicitly attached (paste/drop/link), else the timeline
+    // images they have selected. Multiple supported — all go to the vision script step + every gen.
+    const refSrcs = s.pipeline ? (s.refImages.length ? s.refImages : selectedRefSrcs()) : [];
     if (s.pipeline) {
       const wc = (t: string) => t.split(/\s+/).filter(Boolean).length;
       // Stream the script into its OWN collapsible box (not the main content) — like the 💭 Thought
       // box. Open while it types; auto-collapses when done. content stays empty → the "…" dots show
       // until the actual scene response starts (that's what the user asked for).
-      s.updateLast({ content: "", scriptText: "", scriptOpen: true, genStatus: refSrc ? "👁️ Looking at your image + scripting…" : "✍️ Scripting…" });
+      s.updateLast({ content: "", scriptText: "", scriptOpen: true, genStatus: refSrcs.length ? "👁️ Looking at your image + scripting…" : "✍️ Scripting…" });
       // Per-director SCRIPT style (custom directors' optional 2nd box) rides in the INPUT so the base
       // `script` task rules (duration, ignore-editing-directions) stay in force and the style is added.
       const dirScript = s.customDirectors.find((d) => d.id === s.pipeline)?.scriptPrompt;
@@ -846,11 +851,11 @@ export default function AiEditPanel() {
         // narration fits whoever/whatever is actually in it — the ONE vision read for the whole pipeline.
         injectedScript = (await llmTextStream("script", scriptInput, getToken(), (full) => {
           s.updateLast({ scriptText: full, scriptOpen: true });
-        }, _work?.signal, undefined, refSrc ? [refSrc] : undefined)).trim();
+        }, _work?.signal, undefined, refSrcs.length ? refSrcs : undefined)).trim();
       } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
       // With a reference, the script leads with a "REF: <what's in the image>" line. Split it out:
       // refDesc rides to the DIRECTOR (so it writes EDIT prompts around that subject); the rest = narration.
-      if (refSrc && injectedScript) {
+      if (refSrcs.length && injectedScript) {
         const mm = injectedScript.match(/^\s*REF:\s*([\s\S]*?)(?:\n\s*\n|$)/i);
         if (mm && mm[1].trim()) {
           refDesc = mm[1].replace(/\s+/g, " ").trim().slice(0, 400);
@@ -871,7 +876,7 @@ export default function AiEditPanel() {
     // A reference image → the AI-image shots EDIT it. The edit model (Flux) already SEES the image and
     // takes SHORT keyword edits, so the director must NOT describe what's in it — just compact edit
     // instructions, MOST IMPORTANT change first (earliest = most weight), "keep everything else" at the end.
-    const refBlock = refSrc
+    const refBlock = refSrcs.length
       ? `\n\n━━━ REFERENCE IMAGE attached — the AI-image shots are made by EDITING it. The edit model already SEES the image, so do NOT describe what's in it and do NOT write "the same person/subject from the reference". For EACH image shot write a SHORT Flux-EDIT prompt = ONLY the changes, compact instruction/keyword style (NOT a paragraph): put the MOST IMPORTANT change FIRST (earliest instructions carry the most weight), then the next, then minor ones — e.g. "change outfit to a bold red leather jacket and jeans; confident standing pose; neon city rooftop at night; low angle, cinematic". END every image prompt with "keep the same face and identity, do not change anything else". ━━━`
       : "";
     const projCtx = projectContext(trackItemsMap) + narrationTimeline(useAiEditStore.getState().transcript?.segments);
@@ -938,12 +943,12 @@ export default function AiEditPanel() {
         // REFERENCE IMAGE: an explicit attached photo (pasted/dropped/linked) OR, failing that, the
         // timeline image the user has selected. Every IMAGE shot is then generated FROM it (img2img via
         // vapp-image-edit) → the same face/identity across shots. (Videos + stock skip it.)
-        // refSrc computed once at the top of the pipeline flow (also drives the script-step vision).
-        if (refSrc) {
+        // refSrcs computed once at the top of the pipeline flow (also drives the script-step vision).
+        if (refSrcs.length) {
           env.operations.forEach((o: any) => {
-            if (o.op === "generate" && o.kind === "image") { o.image_url = refSrc; o.optimize = false; } // an edit-instruction, not a fresh prompt to optimize
+            if (o.op === "generate" && o.kind === "image") { o.images = refSrcs; o.optimize = false; } // EDIT from the reference(s) — not a fresh prompt to optimize
           });
-          elog(`[REF IMAGE] applied to image shots → ${refSrc.slice(0, 60)}… (${s.refImage ? "attached" : "selected clip"})`);
+          elog(`[REF IMAGE] ${refSrcs.length} reference(s) applied to image shots → ${refSrcs.map((r) => r.slice(-24)).join(", ")} (${s.refImages.length ? "attached" : "selected"})`);
         }
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
@@ -1126,7 +1131,8 @@ export default function AiEditPanel() {
     const label = isRegen ? "image" : g.kind || "audio";
     try {
       s.updateAt(i, { genStatus: `Starting ${isRegen ? "image edit" : label}…` });
-      let image_url: string | undefined = g.image_url || undefined; // reference image (character consistency) for a fresh image gen
+      const images: string[] | undefined = Array.isArray(g.images) && g.images.length ? g.images.filter(Boolean) : undefined; // multi-reference (character consistency)
+      let image_url: string | undefined = images?.[0] || g.image_url || undefined; // reference image for a fresh gen (first = single-image back-compat)
       if (isRegen) {
         const item = useStore.getState().trackItemsMap?.[g.itemId];
         image_url = item?.details?.src;
@@ -1140,6 +1146,7 @@ export default function AiEditPanel() {
         text: g.text,
         prompt: g.prompt || g.text,
         image_url,
+        images, // multi-reference → forwarded as images_list (Flux edit takes several)
         aspect_ratio: g.aspect_ratio,
         duration: g.duration,
         // Per-op wins (pipeline shots force it ON — the director now writes SHORT hints that the
@@ -2258,25 +2265,29 @@ export default function AiEditPanel() {
               onDragOver={(e) => { if (s.pipeline) e.preventDefault(); }}
             >
               {s.pipeline ? (() => {
-                const selRef = s.refImage ? "" : selectedRefSrc();
-                const effRef = s.refImage || selRef;
-                if (!effRef && !refBusy) return null;
+                const explicit = s.refImages;
+                const refs = explicit.length ? explicit : selectedRefSrcs();
+                if (!refs.length && !refBusy) return null;
+                const fromSel = !explicit.length && refs.length > 0; // selection fallback (no ✕ — deselect on the timeline)
                 return (
-                  <div className="mb-1 flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-1.5 py-1">
-                    {refBusy && !effRef ? (
-                      <span className="text-[10px] text-violet-500">Uploading reference…</span>
-                    ) : (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={effRef} alt="reference" className="h-8 w-8 rounded object-cover" />
-                        <span className="text-[10px] text-violet-600 dark:text-violet-300">
-                          {s.refImage ? "Reference — every shot generated to match this" : "Selected clip — used as reference (deselect to change)"}
-                        </span>
-                        {s.refImage ? (
-                          <button type="button" onClick={() => s.setRefImage("")} className="ml-auto px-1 text-[11px] text-muted-foreground hover:text-red-500" title="Remove the reference image">✕</button>
-                        ) : null}
-                      </>
-                    )}
+                  <div className="mb-1 flex flex-col gap-1 rounded-lg bg-violet-500/10 px-1.5 py-1">
+                    <span className="text-[10px] text-violet-600 dark:text-violet-300">
+                      {fromSel
+                        ? `Selected clip${refs.length > 1 ? "s" : ""} — used as reference (deselect to change)`
+                        : `Reference${refs.length > 1 ? "s" : ""} — every shot keeps ${refs.length > 1 ? "these subjects" : "this subject"} (paste / drop / select to add more)`}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {refs.map((src) => (
+                        <div key={src} className="relative">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={src} alt="reference" className="h-9 w-9 rounded object-cover" />
+                          {!fromSel ? (
+                            <button type="button" onClick={() => s.removeRefImage(src)} className="absolute -right-1 -top-1 rounded-full bg-background/90 px-1 text-[9px] leading-none text-muted-foreground shadow hover:text-red-500" title="Remove this reference">✕</button>
+                          ) : null}
+                        </div>
+                      ))}
+                      {refBusy ? <span className="self-center text-[10px] text-violet-500">uploading…</span> : null}
+                    </div>
                   </div>
                 );
               })() : null}
