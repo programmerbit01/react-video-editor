@@ -667,7 +667,7 @@ BUILD IT:
    { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
    Do NOT write the narration yourself — that is NOT your job here. Just plan the N shots in story order (shot k = the k-th beat) so they line up with the narration.
 5) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
-6) STYLE + EFFECTS = the user's call. Honor any STYLE they name (noir, fast-paced, romantic, gritty…) in the prompts AND pacing, the same way you honor shot count + duration. The arrange already adds Ken Burns motion; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for a HARD-cut / fast style add nothing. Only add effect ops the style calls for — never clutter. MUSIC: if the video wants background music, add ONE { "op":"musicbed" } (optionally { "op":"musicbed", "query":"romantic" } to pick a mood) — a low-volume bed from the user's saved music library.
+6) STYLE + EFFECTS = the user's call. Honor any STYLE they name (noir, fast-paced, romantic, gritty…) in the prompts AND pacing, the same way you honor shot count + duration. The arrange already adds Ken Burns motion; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for a HARD-cut / fast style add nothing. Only add effect ops the style calls for — never clutter. MUSIC: add a { "op":"musicbed" } ONLY IF the user EXPLICITLY asks for music / soundtrack / background music (optionally { "op":"musicbed", "query":"romantic" } for a mood) — otherwise do NOT add any music op. Music is opt-in.
 
 Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N shot ops (image/video interspersed), the audio op, the arrange op, then any effect op… ] }`;
 
@@ -686,7 +686,7 @@ NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no n
    • STOCK footage (real-world b-roll — cities, nature, crowds, objects, places): { "op":"search", "kind":"image|video", "query":"3-5 keyword search query", "count":1 } — cheaper + real; PREFER stock for generic real-world beats, AI-generate for anything specific/stylised the search won't have.
    SPREAD videos at the most dynamic beats INTERSPERSED among the images — do NOT put all videos at the end.
 3) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
-4) STYLE + EFFECTS = the user's call. Honor any STYLE they name (documentary, punchy, dark…) in the prompts + pacing. The arrange adds Ken Burns; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for hard/fast cuts add nothing. MUSIC: for a music-backed video add ONE { "op":"musicbed" } (optionally { "op":"musicbed", "query":"upbeat" }) — a low-volume bed from the user's saved music library.
+4) STYLE + EFFECTS = the user's call. Honor any STYLE they name (documentary, punchy, dark…) in the prompts + pacing. The arrange adds Ken Burns; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for hard/fast cuts add nothing. MUSIC: add a { "op":"musicbed" } ONLY IF the user EXPLICITLY asks for music / soundtrack (optionally { "op":"musicbed", "query":"upbeat" }) — otherwise do NOT add any music op. Music is opt-in.
 
 Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N shot ops (generate OR search, image/video interspersed), the arrange op, then any effect op… ] }`;
 
