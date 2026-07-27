@@ -945,10 +945,14 @@ export default function AiEditPanel() {
         // vapp-image-edit) → the same face/identity across shots. (Videos + stock skip it.)
         // refSrcs computed once at the top of the pipeline flow (also drives the script-step vision).
         if (refSrcs.length) {
+          let lip = 0;
           env.operations.forEach((o: any) => {
             if (o.op === "generate" && o.kind === "image") { o.images = refSrcs; o.optimize = false; } // EDIT from the reference(s) — not a fresh prompt to optimize
+            // a lip-sync / TALKING video shot (prompt has `says …`) → animate the reference character (i2v)
+            // so the SAME face talks (vapp-video is all-in-one: image + `says "…"` → lip-synced clip).
+            else if (o.op === "generate" && o.kind === "video" && /\bsays\b/i.test(String(o.prompt || ""))) { o.image_url = refSrcs[0]; o.optimize = false; lip++; }
           });
-          elog(`[REF IMAGE] ${refSrcs.length} reference(s) applied to image shots → ${refSrcs.map((r) => r.slice(-24)).join(", ")} (${s.refImages.length ? "attached" : "selected"})`);
+          elog(`[REF IMAGE] ${refSrcs.length} reference(s) → image shots${lip ? ` + ${lip} lip-sync video(s) i2v from ref` : ""} (${s.refImages.length ? "attached" : "selected"})`);
         }
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
