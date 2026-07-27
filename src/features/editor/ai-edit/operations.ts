@@ -18,6 +18,10 @@ import { nanoid } from "nanoid";
 import { getStateManagerRef } from "../utils/state-manager-ref";
 import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 import { upsertMusicBed } from "../utils/scene-audio";
+// The DIRECTOR pipeline prompts live in ONE editable place (./editor-config.ts). Imported here
+// (so PIPELINE_PROMPTS below can use them) and re-exported (so existing importers are unchanged).
+import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT } from "./editor-config";
+export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT };
 
 export interface AiEditOp {
   op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "sfx";
@@ -646,49 +650,10 @@ IMPORTANT: For "zoom in/out" or "pan" ALWAYS use the kenBurns fields above — N
 Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. A "generate" op needs no itemId. If nothing is selected and the request isn't add/generate, return "operations": [] and explain in "summary". Output ONLY the json block.`;
 
 // ─── PIPELINE system prompts ────────────────────────────────────────────────────
-// A "pipeline" is just a DIFFERENT system prompt fed to the SAME ops machinery: the
-// LLM plans the whole thing and emits generate/arrange ops → the editor builds it on
-// the live timeline. No hardcoded steps — control lives entirely in the prompt.
-export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
-
-ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "9:16" (a vertical short). Use the SAME ratio on every shot.
-
-NUMBER OF SHOTS = N: use EXACTLY the number the user asks for ("3 shots" → N=3). If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut, VibeShort-style). If the request has NO story/subject at all, return "operations": [] and in "summary" ask them for the story and how many shots.
-
-BUILD IT:
-1) Decide the MAIN CHARACTER's look ONCE — face, hair, age, outfit, colour — in ~12 words. Repeat this EXACT description in EVERY shot so the same person appears throughout (change only the pose/emotion/scene).
-2) Plan N SHOTS, each one dramatic beat, ordered start → cliffhanger.
-3) For EACH of the N shots output a generate op with a full prompt built as "<the fixed character description>, <this shot's pose/action/emotion>, <setting>, cinematic film still, SEMI-photorealistic (stylised realism — NOT a flat photo, NOT cartoon/comic-ink), realistic skin, dramatic moody lighting, shallow depth of field". Repeat the EXACT character description in EVERY shot (same person throughout). Keep the SEMI-photoreal look on every shot.
-   image shot: { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"<the chosen ratio>" }
-   VIDEO SHOTS: if the user asks for some video clips (e.g. "2 videos of 4s, 6s"), make those shots
-   { "op":"generate", "kind":"video", "prompt":"…character + the MOTION/action + natural AMBIENT SOUND cues (waves, rain, breathing, room tone, footsteps)…", "duration":<their seconds>, "aspect_ratio":"<the chosen ratio>" } — ALWAYS put ambient-sound cues in a VIDEO prompt. SPREAD videos at the most DYNAMIC/action beats (a chase, a reveal, a turn) INTERSPERSED among the image shots — do NOT put all the videos at the end. The narration sentence order still = the shot order.
-   STOCK footage is also available — { "op":"search", "kind":"image|video", "query":"…", "count":1 } — but this is a CHARACTER story, so GENERATE character shots (stock cannot keep the same couple). Use search ONLY for a non-character establishing beat if any (a city skyline, the ocean, rain on glass).
-4) Output ONE audio op as a PLACEHOLDER — the spoken narration is written SEPARATELY (a dedicated script step) and the system inserts it. Output EXACTLY:
-   { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
-   Do NOT write the narration yourself — that is NOT your job here. Just plan the N shots in story order (shot k = the k-th beat) so they line up with the narration.
-5) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
-6) STYLE + EFFECTS = the user's call. Honor any STYLE they name (noir, fast-paced, romantic, gritty…) in the prompts AND pacing, the same way you honor shot count + duration. The arrange already adds Ken Burns motion; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for a HARD-cut / fast style add nothing. Only add effect ops the style calls for — never clutter. MUSIC: add a { "op":"musicbed" } ONLY IF the user EXPLICITLY asks for music / soundtrack / background music (optionally { "op":"musicbed", "query":"romantic" } for a mood) — otherwise do NOT add any music op. Music is opt-in.
-
-Output ONLY this JSON: { "summary":"<one line>", "operations":[ …the N shot ops (image/video interspersed), the audio op, the arrange op, then any effect op… ] }`;
-
-export const FACELESS_EDIT_PROMPT = `You are a FACELESS-VIDEO DIRECTOR in a video editor. The user gives a topic. Turn it into a short faceless documentary as a JSON list of operations the editor applies to the timeline.
-
-ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "16:9". Use the SAME ratio on every shot.
-
-NUMBER OF SHOTS = N: use EXACTLY the number the user asks for. If they give no number, use N=8 — and for a punchy, fast-cut pace PREFER MORE, SHORTER shots (each becomes a ~1.5-2.5s cut). If there is NO topic at all, return "operations": [] and in "summary" ask for the topic and how many shots.
-
-1) Output ONE audio op as a PLACEHOLDER — the narration is written SEPARATELY (a dedicated script step) and the system inserts it. Output EXACTLY:
-   { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
-   Do NOT write the narration yourself — that is NOT your job here. Just plan the N visuals in narration order (visual k = the k-th beat).
-2) Output N shot ops, one per narration beat, each RELEVANT to what that line says. Each shot is EITHER AI-generated OR real stock footage — pick per beat:
-   • AI image: { "op":"generate", "kind":"image", "prompt":"…vivid cinematic keywords…", "aspect_ratio":"<the chosen ratio>" }
-   • AI video: { "op":"generate", "kind":"video", "prompt":"…describe the MOTION + natural AMBIENT SOUND cues (traffic, wind, crowd, water…)…", "duration":<their seconds>, "aspect_ratio":"<the chosen ratio>" } — ALWAYS put ambient-sound cues in a VIDEO prompt
-   • STOCK footage (real-world b-roll — cities, nature, crowds, objects, places): { "op":"search", "kind":"image|video", "query":"3-5 keyword search query", "count":1 } — cheaper + real; PREFER stock for generic real-world beats, AI-generate for anything specific/stylised the search won't have.
-   SPREAD videos at the most dynamic beats INTERSPERSED among the images — do NOT put all videos at the end.
-3) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
-4) STYLE + EFFECTS = the user's call. Honor any STYLE they name (documentary, punchy, dark…) in the prompts + pacing. The arrange adds Ken Burns; if the style wants SMOOTH cuts add ONE { "op":"transition", "target":"all" } after the arrange; for hard/fast cuts add nothing. MUSIC: add a { "op":"musicbed" } ONLY IF the user EXPLICITLY asks for music / soundtrack (optionally { "op":"musicbed", "query":"upbeat" }) — otherwise do NOT add any music op. Music is opt-in.
-
-Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N shot ops (generate OR search, image/video interspersed), the arrange op, then any effect op… ] }`;
+// A "pipeline" is just a DIFFERENT system prompt fed to the SAME ops machinery: the LLM
+// plans the whole thing and emits generate/arrange ops → the editor builds it on the live
+// timeline. No hardcoded steps — control lives entirely in the prompt. The director prompts
+// themselves now live in ./editor-config.ts (imported + re-exported at the top of this file).
 
 // Shown in the AI-Edit composer dropdown (top → bottom).
 export const PIPELINES: { id: string; label: string }[] = [

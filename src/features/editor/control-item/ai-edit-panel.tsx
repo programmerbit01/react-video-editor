@@ -1221,6 +1221,10 @@ export default function AiEditPanel() {
         let beats: { itemId: string; fromMs: number; toMs: number; text: string; motion?: string }[] | null = null;
         let source = "even"; // "server" | "transcript" | "even"
         let note = "";
+        // The ARRANGER (match_shots) — not the director — owns transitions: it sees the final clip
+        // lengths + narration, so it decides "fade" (smooth) vs hard cuts. Parsed from its output
+        // below, applied AFTER the arrange + motion.
+        let arrangeTransition = "";
         try {
           if (N > 1 && audio?.details?.src) {
             const src = String(audio.details.src);
@@ -1313,6 +1317,13 @@ export default function AiEditPanel() {
               const tM = Date.now();
               const outRaw = await llmText("match_shots", input, getToken());
               const win = normalizeShotWindows(outRaw, targetVisuals, totalMs);
+              // arranger's CUT STYLE — a top-level "transition" in its JSON ("fade" = smooth crossfades,
+              // "none"/absent = hard cuts). The director no longer decides this; the arranger does.
+              try {
+                const _t = outRaw || "";
+                const _o = JSON.parse(_t.slice(_t.indexOf("{"), _t.lastIndexOf("}") + 1));
+                arrangeTransition = String(_o?.transition || "").trim().toLowerCase();
+              } catch { /* no transition field → hard cuts */ }
               elog(`[MATCH RET] in ${Date.now() - tM}ms · usable=${!!win}`);
               if (win) elog(`[MATCH WINDOWS] ${win.map((w) => `${w.id.slice(0, 6)}:${w.from_ms}-${w.to_ms}(${w.to_ms - w.from_ms}ms,${w.motion || "?"})`).join(" | ")}`);
               else elog(`[MATCH RAW] ${(outRaw || "").slice(0, 200)}`);
@@ -1462,6 +1473,14 @@ export default function AiEditPanel() {
             const rm = useStore.getState().trackItemsMap || {};
             elog(`[MOTION READBACK] ${imgShots.map((id) => `${id.slice(0, 6)}=${(rm[id] as any)?.details?.kenBurns || "MISSING"}@${(rm[id] as any)?.details?.kenBurnsIntensity ?? "-"}`).join(", ")}`);
           }, 400);
+          // TRANSITIONS — the ARRANGER's call (fade = smooth; hard cuts = nothing). One op over every
+          // clip (fade in+out), applied after the clips are placed. The director never touches this.
+          if (/^(fade|crossfade|smooth|dissolve)$/.test(arrangeTransition)) {
+            applyOperations([{ op: "transition", target: "all" }]);
+            elog(`[AI-Edit arrange] arranger chose transition="${arrangeTransition}" → fades applied to all clips`);
+          } else {
+            elog(`[AI-Edit arrange] arranger transition="${arrangeTransition || "none"}" → hard cuts (no fades)`);
+          }
           elog("[AI-Edit arrange] ✅ DONE — arrange + motion applied");
         } catch (e) {
           elog("[AI-Edit arrange] ✖ applyOperations ERROR:", e);
