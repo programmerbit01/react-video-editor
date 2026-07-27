@@ -148,7 +148,12 @@ export function setSelection(ids: string[]): void {
 // designcombo's async reducer and only the LAST sticks (why the drama arrange's motion landed on just
 // the last image); one dispatch with a per-id payload applies to ALL. Returns the {id:kenBurns} map
 // applied (for logging).
-export function applyMotionBatch(items: { id: string; kenBurns: string; intensity?: number; duration?: number }[]): Record<string, string> {
+export function applyMotionBatch(
+  items: { id: string; kenBurns: string; intensity?: number; duration?: number }[],
+  fadeIds?: string[], // ids that ALSO get a fade-in+out (a transition). MERGED into the SAME EDIT_OBJECT
+                      // dispatch as the motion — a SEPARATE 2nd dispatch races and, per designcombo,
+                      // "only the last sticks", silently clobbering the kenBurns (→ "no zoom, only fades").
+): Record<string, string> {
   const payload: Record<string, any> = {};
   const applied: Record<string, string> = {};
   for (const it of items) {
@@ -162,6 +167,10 @@ export function applyMotionBatch(items: { id: string; kenBurns: string; intensit
       },
     };
     applied[it.id] = it.kenBurns;
+  }
+  if (fadeIds?.length) {
+    const anim = { in: fadeComposition(0, 1, "fadeIn"), out: fadeComposition(1, 0, "fadeOut") };
+    for (const id of fadeIds) payload[id] = { ...(payload[id] || {}), animations: anim }; // motion + fade, one dispatch
   }
   if (Object.keys(payload).length) dispatch(EDIT_OBJECT, { payload });
   return applied;
