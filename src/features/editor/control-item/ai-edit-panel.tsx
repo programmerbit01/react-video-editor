@@ -5,6 +5,7 @@ import useStore from "../store/use-store";
 import { dispatch } from "@designcombo/events";
 import { PLAYER_SEEK } from "../constants/events";
 import useCaptionTranscribeStore from "../captions/transcribe-store";
+import useAudioLibraryStore from "../store/use-audio-library-store";
 import { addCaptions } from "../captions/builder";
 import {
   applyOperations,
@@ -960,6 +961,21 @@ export default function AiEditPanel() {
       } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ lip-sync: ${e?.message || e}` }); }
       return;
     }
+    // MUSIC BED — add a low-volume, full-length background track from the user's curated audio
+    // library (Stock → Sound). Picks by mood keyword if given, else the first saved track.
+    if (g.op === "musicbed") {
+      try {
+        const lib = useAudioLibraryStore.getState().music || [];
+        if (!lib.length) { s.updateAt(i, { genStatus: "⚠️ music: add music to your library first (Stock → Sound → ♪)" }); return; }
+        const q = String(g.query || g.prompt || "").toLowerCase().trim();
+        const pick = (q && lib.find((m) => String(m.name || "").toLowerCase().includes(q))) || lib[0];
+        if (!pick?.src) { s.updateAt(i, { genStatus: "⚠️ music: no usable track in the library" }); return; }
+        applyOperations([{ op: "musicbed", src: pick.src, volume: g.volume ?? 18 }]);
+        s.updateAt(i, { genStatus: "✓ Music bed added" });
+        elog(`[MUSIC BED] "${String(pick.name || pick.src).slice(0, 40)}" @${g.volume ?? 18}%`);
+      } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ music: ${e?.message || e}` }); }
+      return;
+    }
     // Stock search — no generation job; fetch Pexels and add the top result(s).
     if (g.op === "search") {
       const kind = g.kind === "video" ? "video" : "image";
@@ -1670,8 +1686,8 @@ export default function AiEditPanel() {
     elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
     if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "sfx", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "sfx"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");
