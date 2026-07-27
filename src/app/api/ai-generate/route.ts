@@ -46,7 +46,9 @@ export async function POST(request: Request) {
     const base = DEFAULT_VAPP_BASE.replace(/\/+$/, "");
     const token = String(body.token || "").replace(/^Bearer\s+/i, "").trim();
     const kind = String(body.kind || "audio");
-    const model = MODEL_FOR[kind] || MODEL_FOR.audio;
+    // A reference / img2img image → route to the EDIT model (Flux Klein edit) which KEEPS the
+    // subject's identity (character consistency); a plain text→image stays on the base model.
+    const model = kind === "image" && body.image_url ? "vapp-image-edit" : (MODEL_FOR[kind] || MODEL_FOR.audio);
     const prompt = String(body.prompt || body.text || "").trim();
     if (!prompt) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
 

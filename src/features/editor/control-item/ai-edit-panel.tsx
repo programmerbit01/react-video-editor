@@ -871,6 +871,14 @@ export default function AiEditPanel() {
             if (o.op === "generate" && (o.kind === "image" || o.kind === "video")) o.optimize = true;
           });
         }
+        // REFERENCE IMAGE: if the user attached a photo, every IMAGE shot is generated FROM it
+        // (img2img via vapp-image-edit) → the same face/identity across shots. (Videos + stock skip it.)
+        if (s.pipeline && s.refImage) {
+          env.operations.forEach((o: any) => {
+            if (o.op === "generate" && o.kind === "image") { o.image_url = s.refImage; o.optimize = false; } // an edit-instruction, not a fresh prompt to optimize
+          });
+          elog(`[REF IMAGE] applied to image shots → ${s.refImage.slice(0, 60)}…`);
+        }
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
         if (aud?.text) elog(`[SCRIPT] ${String(aud.text).replace(/\s+/g, " ")}`);
@@ -1037,7 +1045,7 @@ export default function AiEditPanel() {
     const label = isRegen ? "image" : g.kind || "audio";
     try {
       s.updateAt(i, { genStatus: `Starting ${isRegen ? "image edit" : label}…` });
-      let image_url: string | undefined;
+      let image_url: string | undefined = g.image_url || undefined; // reference image (character consistency) for a fresh image gen
       if (isRegen) {
         const item = useStore.getState().trackItemsMap?.[g.itemId];
         image_url = item?.details?.src;
@@ -2156,6 +2164,14 @@ export default function AiEditPanel() {
           {/* Composer */}
           <div className="shrink-0 border-t border-border/50 p-2">
             <div className="rounded-xl border border-border bg-muted/40 p-1.5 focus-within:border-sky-500/40">
+              {s.pipeline && s.refImage ? (
+                <div className="mb-1 flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-1.5 py-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={s.refImage} alt="reference" className="h-8 w-8 rounded object-cover" />
+                  <span className="text-[10px] text-violet-600 dark:text-violet-300">Reference face — every shot generated to match this</span>
+                  <button type="button" onClick={() => s.setRefImage("")} className="ml-auto px-1 text-[11px] text-muted-foreground hover:text-red-500" title="Remove the reference image">✕</button>
+                </div>
+              ) : null}
               <textarea
                 ref={taRef}
                 value={s.input}
@@ -2287,6 +2303,27 @@ export default function AiEditPanel() {
                       </div>
                     )}
                   </div>
+                  {/* REFERENCE IMAGE (pipeline only) — attach a photo so every shot keeps the SAME
+                      character (img2img via vapp-image-edit). Uses a selected timeline image, else a URL. */}
+                  {s.pipeline && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const st = useStore.getState().trackItemsMap || {};
+                        const selImg = activeIds.find((id) => (st[id] as any)?.type === "image");
+                        const selSrc = selImg ? (st[selImg] as any)?.details?.src : "";
+                        if (selSrc) { s.setRefImage(selSrc); return; }
+                        const url = window.prompt("Reference image URL — a face/character EVERY shot should match (blank to clear):", s.refImage || "");
+                        if (url != null) s.setRefImage(url.trim());
+                      }}
+                      className={`flex h-7 items-center gap-1 rounded-lg border px-1.5 text-[10px] outline-none ${
+                        s.refImage ? "border-violet-500/50 bg-violet-500/15 text-violet-600 dark:text-violet-300" : "border-border bg-background text-muted-foreground"
+                      }`}
+                      title="Reference face — attach a photo (or select a timeline image) so every shot keeps the same character"
+                    >
+                      🖼 {s.refImage ? "Ref ✓" : "Ref"}
+                    </button>
+                  )}
                   {/* P PRESETS — prompt snippets. Clicking one PASTES its text into the box (visible +
                       editable → it reaches the planner AND match_shots via _lastPipelineRequest).
                       Built-in + your own (add / edit / delete, localStorage). Always visible. */}
