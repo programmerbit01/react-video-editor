@@ -65,7 +65,7 @@ interface AiEditState {
   pipeline: string; // "" = normal Edit ; "comic_drama" | "faceless_video" = pipeline mode (swaps the system prompt)
   vibe: string; // "" = none ; a VIBE preset id (fast_drama / cinematic / …) — injects a style phrase into the prompt + timing
   customVibes: { id: string; label: string; style: string }[]; // user-added P presets — prompt snippets (persisted)
-  customDirectors: { id: string; label: string; systemPrompt: string }[]; // user-added S/D presets — director system prompts (persisted)
+  customDirectors: { id: string; label: string; systemPrompt: string; scriptPrompt?: string }[]; // S/D presets — shots system prompt + optional per-director SCRIPT prompt (persisted)
   models: ChatModel[];
   history: HistoryEntry[];
   transcript: { key: string; segments: { start: number; end: number; text: string }[] } | null;
@@ -96,8 +96,8 @@ interface AiEditState {
   addCustomVibe: (label: string, style: string) => string;
   updateCustomVibe: (id: string, label: string, style: string) => void;
   removeCustomVibe: (id: string) => void;
-  addCustomDirector: (label: string, systemPrompt: string) => string;
-  updateCustomDirector: (id: string, label: string, systemPrompt: string) => void;
+  addCustomDirector: (label: string, systemPrompt: string, scriptPrompt?: string) => string;
+  updateCustomDirector: (id: string, label: string, systemPrompt: string, scriptPrompt?: string) => void;
   removeCustomDirector: (id: string) => void;
   setModels: (m: ChatModel[]) => void;
   setTranscript: (t: { key: string; segments: { start: number; end: number; text: string }[] } | null) => void;
@@ -179,13 +179,13 @@ const useAiEditStore = create<AiEditState>()(
     set((st) => ({ customVibes: st.customVibes.map((v) => (v.id === id ? { ...v, label: label.trim() || v.label, style: style.trim() } : v)) })),
   removeCustomVibe: (id) =>
     set((st) => ({ customVibes: st.customVibes.filter((v) => v.id !== id), vibe: st.vibe === id ? "" : st.vibe })),
-  addCustomDirector: (label, systemPrompt) => {
+  addCustomDirector: (label, systemPrompt, scriptPrompt) => {
     const id = "dir_" + Math.random().toString(36).slice(2, 9);
-    set((st) => ({ customDirectors: [...st.customDirectors, { id, label: label.trim() || "Custom Director", systemPrompt: systemPrompt.trim() }], pipeline: id }));
+    set((st) => ({ customDirectors: [...st.customDirectors, { id, label: label.trim() || "Custom Director", systemPrompt: systemPrompt.trim(), scriptPrompt: (scriptPrompt || "").trim() || undefined }], pipeline: id }));
     return id;
   },
-  updateCustomDirector: (id, label, systemPrompt) =>
-    set((st) => ({ customDirectors: st.customDirectors.map((d) => (d.id === id ? { ...d, label: label.trim() || d.label, systemPrompt: systemPrompt.trim() } : d)) })),
+  updateCustomDirector: (id, label, systemPrompt, scriptPrompt) =>
+    set((st) => ({ customDirectors: st.customDirectors.map((d) => (d.id === id ? { ...d, label: label.trim() || d.label, systemPrompt: systemPrompt.trim(), scriptPrompt: (scriptPrompt || "").trim() || undefined } : d)) })),
   removeCustomDirector: (id) =>
     set((st) => ({ customDirectors: st.customDirectors.filter((d) => d.id !== id), pipeline: st.pipeline === id ? "" : st.pipeline })),
   setModels: (m) => set({ models: m }),

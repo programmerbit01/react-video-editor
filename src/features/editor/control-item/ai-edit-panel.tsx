@@ -299,11 +299,12 @@ async function llmTextStream(
   token: string,
   onDelta: (full: string) => void,
   signal?: AbortSignal,
+  overrides?: Record<string, any>, // e.g. a per-director { system: <script prompt> } to override the task
 ): Promise<string> {
   const res = await fetch(withEditorBase("/api/ai-llm"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task, input, token, stream: true }),
+    body: JSON.stringify({ task, input, token, stream: true, ...(overrides ? { overrides } : {}) }),
     signal,
   });
   if (!res.ok || !res.body || !(res.headers.get("content-type") || "").includes("text/event-stream")) {
@@ -515,7 +516,7 @@ export default function AiEditPanel() {
     return PIPELINE_PROMPTS[id] || s.customDirectors.find((d) => d.id === id)?.systemPrompt || OPS_SYSTEM_PROMPT;
   };
   const [dirMenuOpen, setDirMenuOpen] = useState(false);
-  const [dirEdit, setDirEdit] = useState<{ id: string; label: string; systemPrompt: string; builtin?: boolean } | null>(null);
+  const [dirEdit, setDirEdit] = useState<{ id: string; label: string; systemPrompt: string; scriptPrompt?: string; builtin?: boolean } | null>(null);
   const [dirErr, setDirErr] = useState("");
   const dirMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -563,8 +564,8 @@ export default function AiEditPanel() {
         setDirOverrides(d.overrides || {});
         elog(`[DIRECTOR] built-in "${dirEdit.id || "edit"}" prompt updated GLOBALLY by admin`);
       } catch (e: any) { setDirErr(String(e?.message || e)); return; }
-    } else if (dirEdit.id === "new") s.addCustomDirector(dirEdit.label, dirEdit.systemPrompt);
-    else s.updateCustomDirector(dirEdit.id, dirEdit.label, dirEdit.systemPrompt);
+    } else if (dirEdit.id === "new") s.addCustomDirector(dirEdit.label, dirEdit.systemPrompt, dirEdit.scriptPrompt);
+    else s.updateCustomDirector(dirEdit.id, dirEdit.label, dirEdit.systemPrompt, dirEdit.scriptPrompt);
     setDirEdit(null);
   };
   // Admin: revert a built-in director to its hardcoded default (clears the server override).
@@ -791,8 +792,12 @@ export default function AiEditPanel() {
       // box. Open while it types; auto-collapses when done. content stays empty → the "…" dots show
       // until the actual scene response starts (that's what the user asked for).
       s.updateLast({ content: "", scriptText: "", scriptOpen: true, genStatus: "✍️ Scripting…" });
+      // Per-director SCRIPT style (custom directors' optional 2nd box) rides in the INPUT so the base
+      // `script` task rules (duration, ignore-editing-directions) stay in force and the style is added.
+      const dirScript = s.customDirectors.find((d) => d.id === s.pipeline)?.scriptPrompt;
+      const scriptInput = dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text;
       try {
-        injectedScript = (await llmTextStream("script", text, getToken(), (full) => {
+        injectedScript = (await llmTextStream("script", scriptInput, getToken(), (full) => {
           s.updateLast({ scriptText: full, scriptOpen: true });
         }, _work?.signal)).trim();
       } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
@@ -2222,7 +2227,7 @@ export default function AiEditPanel() {
                               </button>
                               {custom ? (
                                 <>
-                                  <button type="button" title="Edit" onClick={() => { const cd = s.customDirectors.find((x) => x.id === d.id); setDirEdit({ id: d.id, label: d.label, systemPrompt: cd?.systemPrompt || "" }); setDirErr(""); }} className="px-1 text-[11px] text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100">✎</button>
+                                  <button type="button" title="Edit" onClick={() => { const cd = s.customDirectors.find((x) => x.id === d.id); setDirEdit({ id: d.id, label: d.label, systemPrompt: cd?.systemPrompt || "", scriptPrompt: cd?.scriptPrompt || "" }); setDirErr(""); }} className="px-1 text-[11px] text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100">✎</button>
                                   <button type="button" title="Delete" onClick={() => s.removeCustomDirector(d.id)} className="px-1 pr-1.5 text-[11px] text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100">🗑</button>
                                 </>
                               ) : isAdmin ? (
@@ -2244,14 +2249,27 @@ export default function AiEditPanel() {
                               placeholder="Name (e.g. 🎭 Horror Director)"
                               className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:border-violet-500/60"
                             />
+                            <p className="px-0.5 text-[9px] text-muted-foreground">Shots / directing prompt (the brain — role, ops, visual style):</p>
                             <textarea
                               autoFocus={dirEdit.builtin}
                               value={dirEdit.systemPrompt}
                               onChange={(e) => setDirEdit({ ...dirEdit, systemPrompt: e.target.value })}
                               placeholder="System prompt — the director's brain: its role, the ops it may use, the style. (Prefilled from the current director — tweak it.)"
-                              rows={8}
+                              rows={7}
                               className="resize-y rounded border border-border bg-background px-1.5 py-1 text-[11px] outline-none focus:border-violet-500/60"
                             />
+                            {!dirEdit.builtin && (
+                              <>
+                                <p className="px-0.5 text-[9px] text-muted-foreground">Script instructions (optional) — how THIS director's narration sounds (tone, pauses, pacing). Blank = the default scriptwriter.</p>
+                                <textarea
+                                  value={dirEdit.scriptPrompt || ""}
+                                  onChange={(e) => setDirEdit({ ...dirEdit, scriptPrompt: e.target.value })}
+                                  placeholder="e.g. slow breathy sensual pauses · short punchy horror beats · warm documentary voice…"
+                                  rows={3}
+                                  className="resize-y rounded border border-border bg-background px-1.5 py-1 text-[11px] outline-none focus:border-violet-500/60"
+                                />
+                              </>
+                            )}
                             {dirErr && <p className="px-0.5 text-[10px] text-red-500">{dirErr}</p>}
                             <div className="flex items-center justify-end gap-1">
                               {dirEdit.builtin && dirOverrides[dirEdit.id] && (
