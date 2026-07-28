@@ -1625,20 +1625,6 @@ export default function AiEditPanel() {
     }
   };
 
-  // Measure a media clip's REAL length client-side (no server, no transcribe) — the drama stitch uses it.
-  const measureMediaMs = (url: string, isVideo: boolean): Promise<number> =>
-    new Promise((resolve) => {
-      try {
-        const el = document.createElement(isVideo ? "video" : "audio") as HTMLMediaElement;
-        el.preload = "metadata"; el.muted = true; el.src = url;
-        let fired = false;
-        const fin = (ms: number) => { if (!fired) { fired = true; resolve(ms); } };
-        el.onloadedmetadata = () => fin(Math.round((el.duration || 0) * 1000));
-        el.onerror = () => fin(0);
-        setTimeout(() => fin(0), 20000);
-      } catch { resolve(0); }
-    });
-
   // ── DRAMA v2 ASSEMBLER — deterministic, ordered, NO relevance-matcher, NO transcribe ──────────────
   // The screenplay is an ORDERED list of NARRATOR / DIALOGUE beats; the director made ONE shot per beat.
   // We build each shot + lay them BACK-TO-BACK in that order. Each NARRATOR beat gets its OWN narrator
@@ -1661,23 +1647,32 @@ export default function AiEditPanel() {
       return runBuild(i, gens, [{ op: "arrange", target: "all" }], []);
     }
     elog(`[DRAMA v2 ASM] ▶ ${beats.length} beats (${beats.filter((b) => b.type === "d").length} dialogue) — per-shot, stitch in order`);
-    s.updateAt(i, { genStatus: "🎬 Building drama…" });
     const total = beats.length;
+    s.updateAt(i, { genStatus: "🎬 Generating shots…", buildProgress: `0/${total}` });
     let doneN = 0;
     const bump = () => { doneN += 1; s.updateAt(i, { buildProgress: `${doneN}/${total}` }); };
-    // ONE retry so a single flaky gen doesn't DROP a whole beat (a missing shot breaks the story order).
-    const genUrl = async (kind: string, opts: any): Promise<string> => {
+    // ONE retry so a single flaky gen doesn't DROP a whole beat. onProg keeps the status LIVE during the
+    // (often minutes-long) gen wait — an empty callback made it look frozen at "Building drama…".
+    const genUrl = async (kind: string, opts: any, onProg?: (d: any) => void): Promise<string> => {
       for (let attempt = 0; attempt < 2 && !_stopBuild; attempt++) {
-        try { const gg = await startGen({ kind, ...opts, token }); const u = await waitGen(gg.id, () => {}); if (u) return u; }
+        try { const gg = await startGen({ kind, ...opts, token }); const u = await waitGen(gg.id, onProg || (() => {})); if (u) return u; }
         catch (e) { elog(`[DRAMA v2 ASM] ${kind} gen attempt ${attempt + 1} failed: ${e}`); }
       }
       return "";
+    };
+    // Real clip length FROM the just-added timeline item — ADD_VIDEO/ADD_AUDIO already loaded it, so we
+    // never download it a 2nd time (that double-load was why placement crawled on a slow CDN).
+    const clipMs = (id: string): number => {
+      const it: any = (useStore.getState().trackItemsMap || {})[id];
+      const d = Number(it?.duration) || (it?.display ? Number(it.display.to) - Number(it.display.from) : 0);
+      return d > 200 ? Math.round(d) : 0;
     };
     // GENERATE each beat in parallel; ADD each clip to the timeline + show a chat preview AS it lands
     // (incremental feedback), then measure it. The final stitch re-times everything into beat order.
     const built = await Promise.all(beats.map(async (b, k) => {
       if (_stopBuild) return null;
       const g: any = shots[k];
+      const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
         let vUrl = "";
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
@@ -1686,10 +1681,10 @@ export default function AiEditPanel() {
           const d = await r.json().catch(() => ({}));
           vUrl = d?.photos?.[0]?.src || d?.videos?.[0]?.src || "";
         }
-        if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize });
+        if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize }, prog);
         if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return null; }
         let aUrl = "";
-        if (b.type === "n") aUrl = await genUrl("audio", { text: b.text });
+        if (b.type === "n") aUrl = await genUrl("audio", { text: b.text }, prog);
         // add to the timeline NOW (incremental) + preview in the chat — like the old build felt
         const vid = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot") : addImage(vUrl, "shot")));
         let aid = "";
@@ -1699,7 +1694,7 @@ export default function AiEditPanel() {
           genPreviews: [...(now?.genPreviews || []), { kind: vKind, url: vUrl }],
           snapshot: { ...(now?.snapshot || {}), ...(vid ? { [vid]: null } : {}), ...(aid ? { [aid]: null } : {}) },
         });
-        let ms = b.type === "d" ? await measureMediaMs(vUrl, true) : (aUrl ? await measureMediaMs(aUrl, false) : 0);
+        let ms = b.type === "d" ? clipMs(vid) : (aid ? clipMs(aid) : 0); // real length from the just-added item
         if (!ms) ms = (Number(g.duration) || 4) * 1000; // fallback length
         bump();
         return { k, type: b.type, vid, aid, vKind, ms };
