@@ -107,6 +107,9 @@ const isTalkOp = (o: any) => o?.talk === true || (o?.op === "generate" && o?.kin
 // SSE fetch closes → the SERVER stops the LLM stream too (a TRUE stop). Generation jobs are NOT
 // stopped — they run in parallel on the vApp queue (good) and can't be pulled back anyway.
 let _work: AbortController | null = null;
+// The Stop button also halts the BACKGROUND build (gens already queued can't be pulled, but we skip
+// the remaining stages — arrange etc). Reset on every send.
+let _stopBuild = false;
 
 let _aiPositionSet = false;
 
@@ -785,7 +788,8 @@ export default function AiEditPanel() {
   const chips = selectionChips(activeIds, trackItemsMap);
 
   const runPrompt = async (text: string) => {
-    if (!text.trim() || s.busy) return;
+    if (!text.trim() || working) return; // block re-entry while ANY part (plan OR background build) runs
+    _stopBuild = false; // fresh run — clear any previous Stop
     _work = new AbortController(); // Stop button aborts this
     _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction (any P-preset style is now IN this text)
     elog(`━━━━━━━━━━ NEW GEN ━━━━━━━━━━  director=${curDirector?.label || "edit"}  model=${s.model}`);
@@ -1014,8 +1018,11 @@ export default function AiEditPanel() {
   // (Generation jobs already queued keep running in parallel — by design.)
   const stopWork = () => {
     _work?.abort();
+    _stopBuild = true; // halt the background build too (skips the remaining stages)
     s.setBusy(false);
-    elog("[AI-Edit] ⏹ user stopped the LLM request");
+    const idx = useAiEditStore.getState().messages.length - 1;
+    if (idx >= 0) s.updateAt(idx, { genStatus: "⏹ Stopped", buildProgress: "" }); // clears "working" → Stop reverts to Send, timer freezes
+    elog("[AI-Edit] ⏹ user stopped");
   };
 
   // One generate op, run in the BACKGROUND (not awaited) so the chat stays free.
@@ -1213,10 +1220,9 @@ export default function AiEditPanel() {
         if (newId) s.updateAt(i, { snapshot: { ...cur, [newId]: null } });
       }
       const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
-      s.updateAt(i, {
-        genStatus: `✓ ${isRegen ? "image edited" : label + " added"}`,
-        genPreviews: [...prev, { kind: label, url }],
-      });
+      // NO per-item "✓ … added" status — a ✓ here flips the aggregate "working" state (and the timer +
+      // Stop button) OFF mid-build. The running counter/stage owns genStatus; the preview shows the clip.
+      s.updateAt(i, { genPreviews: [...prev, { kind: label, url }] });
     } catch (e: any) {
       s.updateAt(i, { genStatus: `⚠️ ${label}: ${e?.message || "failed"}` });
     }
@@ -1239,6 +1245,9 @@ export default function AiEditPanel() {
     // PERSISTENT aggregate counter (own field so per-shot genStatus never clobbers it — the user
     // must ALWAYS see "4/10"). Shows the batch mix too (img/vid/audio).
     const setProg = () => { if (total > 1) s.updateAt(i, { buildProgress: `${doneN}/${total}` }); }; // compact — sits inline after the task
+    // A stable in-progress STAGE for the whole gen phase — keeps "working" TRUE (Stop button + timer stay
+    // on) even as individual clips land. Per-clip live % from runGen just refines this text.
+    if (total) s.updateAt(i, { genStatus: "🎨 Generating…" });
     setProg();
     // Run the generations in parallel, with the live counter (so the user sees it working).
     await Promise.all(
@@ -1250,7 +1259,10 @@ export default function AiEditPanel() {
       ),
     );
     s.updateAt(i, { buildProgress: "" }); // gens done → hand off to the arrange (its own status)
-    if (!arranges.length) return;
+    if (_stopBuild) { s.updateAt(i, { genStatus: "⏹ Stopped", buildProgress: "" }); return; }
+    // No arrange (e.g. a plain edit-mode generate) → the gens ARE the whole result; mark it DONE so the
+    // timer freezes + the Stop button reverts to Send (there is no per-item ✓ status anymore).
+    if (!arranges.length) { s.updateAt(i, { genStatus: total > 1 ? `✓ ${total} generated` : "✓ Done" }); return; }
     // Promise.all(gens) above now resolves only AFTER every generated clip (images + the slow-loading
     // voiceover) has actually LANDED on the timeline — each runGen awaits waitForItem(). So there is NO
     // race to guess around here: the new visuals + audio are already present. A tiny settle flushes any
@@ -2521,12 +2533,12 @@ export default function AiEditPanel() {
                     )}
                   </div>
                   <button
-                    onClick={s.busy ? stopWork : send}
-                    disabled={!s.busy && !s.input.trim()}
-                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white transition disabled:opacity-40 ${s.busy ? "bg-red-600 hover:bg-red-500" : "bg-sky-600 hover:bg-sky-500"}`}
-                    title={s.busy ? "Stop the AI" : "Send"}
+                    onClick={working ? stopWork : send}
+                    disabled={!working && !s.input.trim()}
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white transition disabled:opacity-40 ${working ? "bg-red-600 hover:bg-red-500" : "bg-sky-600 hover:bg-sky-500"}`}
+                    title={working ? "Stop the AI" : "Send"}
                   >
-                    {s.busy ? "■" : "↑"}
+                    {working ? "■" : "↑"}
                   </button>
                 </div>
               </div>
