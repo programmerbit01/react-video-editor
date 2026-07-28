@@ -883,6 +883,7 @@ export default function AiEditPanel() {
         // fallback: no NARRATOR lines tagged → strip any tags so the TTS never speaks a label
         injectedScript = narr || injectedScript.replace(/^\s*(NARRATOR|DIALOGUE[^:]*)\s*:\s*/gim, "").replace(/\s*\n+\s*/g, " ").trim();
         elog(`[DRAMA v2] screenplay: ${lines.length} lines, ${dCount} dialogue → narrator VO ${wc(narr)} words`);
+        elog(`[DRAMA v2 SCREENPLAY]\n${directorScript}`); // the FULL tagged screenplay drama_script wrote
       }
       if (directorScript) {
         elog(`[SCRIPT STEP] ${wc(injectedScript)} words voiceover (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
