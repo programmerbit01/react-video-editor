@@ -1863,6 +1863,7 @@ export default function AiEditPanel() {
   // panel so the user always sees what's happening without scrolling to the last message.
   const lastAsst = [...s.messages].reverse().find((m) => m.role === "assistant");
   const liveStatus = lastAsst?.genStatus || "";
+  const liveProgress = lastAsst?.buildProgress || ""; // the N/M counter — shown at the top too (same as the message)
 
   if (!s.isOpen) return null;
 
@@ -2079,6 +2080,7 @@ export default function AiEditPanel() {
                   <span className="flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
                     {!/^\s*[✓⚠️]/.test(liveStatus) && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" />}
                     <span className="truncate">{liveStatus}</span>
+                    {liveProgress ? <span className="ml-1 shrink-0 tabular-nums opacity-60">{liveProgress}</span> : null}
                   </span>
                 ) : (
                   "Select a clip, then describe the edit — or tap 💡 for ideas."
