@@ -53,12 +53,12 @@ class CanvasVideoClip {
   private init(): Promise<void> {
     return new Promise((resolve) => {
       const v = document.createElement("video");
-      // NO crossOrigin. Proven against the live file: once the no-cors player/warmer has cached a
-      // url as an OPAQUE response (rpublic sends `Vary: Origin`), a cors `<video>` load of the SAME
-      // url fails instantly with MEDIA_ELEMENT_ERROR code 4. So the filmstrip loads no-cors too,
-      // sharing that one cache entry (no double-fetch, no poison). The canvas frame reads below just
-      // no-op on the resulting tainted canvas (already wrapped in try/catch) — a missing thumbnail,
-      // never a broken load. See [[project_media_nocors_playback]].
+      // crossOrigin is REQUIRED — the filmstrip draws these frames into a canvas and toBlob()s them;
+      // without crossOrigin the canvas taints, toBlob throws, and the thumbnail is BLANK. (A no-cors
+      // load of the same url first CAN opaque-poison this cors load → an occasional missing thumbnail;
+      // that's cosmetic and already caught below. Playback buffering was a SEPARATE bug, fixed by the
+      // preview using native <Video> — not by touching this.) See [[project_media_nocors_playback]].
+      v.crossOrigin = "anonymous";
       // metadata (not auto): don't download the WHOLE file per clip — with many clips
       // that saturates the network and some time out → black. Seeking still range-fetches.
       v.preload = "metadata";
@@ -379,12 +379,12 @@ class Video extends Trimmable {
   private async loadFallbackFromVideoFrame() {
     return new Promise<void>((resolve) => {
       const v = document.createElement("video");
-      // NO crossOrigin. Proven against the live file: once the no-cors player/warmer has cached a
-      // url as an OPAQUE response (rpublic sends `Vary: Origin`), a cors `<video>` load of the SAME
-      // url fails instantly with MEDIA_ELEMENT_ERROR code 4. So the filmstrip loads no-cors too,
-      // sharing that one cache entry (no double-fetch, no poison). The canvas frame reads below just
-      // no-op on the resulting tainted canvas (already wrapped in try/catch) — a missing thumbnail,
-      // never a broken load. See [[project_media_nocors_playback]].
+      // crossOrigin is REQUIRED — the filmstrip draws these frames into a canvas and toBlob()s them;
+      // without crossOrigin the canvas taints, toBlob throws, and the thumbnail is BLANK. (A no-cors
+      // load of the same url first CAN opaque-poison this cors load → an occasional missing thumbnail;
+      // that's cosmetic and already caught below. Playback buffering was a SEPARATE bug, fixed by the
+      // preview using native <Video> — not by touching this.) See [[project_media_nocors_playback]].
+      v.crossOrigin = "anonymous";
       v.preload = "metadata";
       v.muted = true;
       v.playsInline = true;
