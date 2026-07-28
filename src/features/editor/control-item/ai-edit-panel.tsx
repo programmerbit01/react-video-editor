@@ -1748,9 +1748,15 @@ export default function AiEditPanel() {
         // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
         const nowP = useAiEditStore.getState().messages[i];
         s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl }] });
+        // KNOWN dims (from the aspect-ratio + requested seconds) let designcombo add the VIDEO WITHOUT
+        // downloading it first → instant land; the pixels stream in the player afterward. Videos are the
+        // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
+        const ar = String(g.aspect_ratio || "16:9");
+        const wh: [number, number] = ar === "9:16" ? [720, 1280] : ar === "1:1" ? [1024, 1024] : ar === "4:5" ? [1024, 1280] : [1280, 720];
+        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: (Number(g.duration) || 5) * 1000 } : undefined;
         let vid = "";
         for (let att = 0; att < 3 && !_stopBuild; att++) {
-          const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot") : addImage(vUrl, "shot")), 22000);
+          const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot", vDims) : addImage(vUrl, "shot")), 22000);
           if (id && (useStore.getState().trackItemsMap || {})[id]) { vid = id; break; }
           if (id) applyOperations([{ op: "delete", itemId: id }]); // drop the dead attempt before retrying
           elog(`[DRAMA v2 ASM] beat ${k + 1} add try ${att + 1}/3 didn't land — CDN warming, retry`);
@@ -2397,9 +2403,13 @@ export default function AiEditPanel() {
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={pv.url} alt="" className="max-h-40 rounded-lg border border-border" />
                         ) : pv.kind === "video" ? (
-                          <video src={pv.url} controls className="max-h-40 w-full rounded-lg border border-border" />
+                          // preload="none": do NOT auto-download every result preview the moment the
+                          // panel renders — on a slow pipe 3-4 of these + the main player all pulling
+                          // at once split the bandwidth so nothing finishes ("stuck 20 min"). Loads
+                          // only when the user hits play, so the clip being watched owns the pipe.
+                          <video src={pv.url} controls preload="none" className="max-h-40 w-full rounded-lg border border-border" />
                         ) : (
-                          <audio src={pv.url} controls className="w-full" />
+                          <audio src={pv.url} controls preload="none" className="w-full" />
                         )}
                       </div>
                     ))}

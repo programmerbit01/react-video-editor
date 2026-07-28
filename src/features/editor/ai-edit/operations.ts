@@ -124,13 +124,22 @@ export function addImage(src: string, name: string, fromMs = 0, durationMs = 500
   return id;
 }
 
-export function addVideo(src: string, name: string): string {
+export function addVideo(src: string, name: string, dims?: { width?: number; height?: number; durationMs?: number }): string {
   const id = nanoid();
   const prompt = String(name || "").trim();
+  // If width+height+duration are KNOWN (from the gen aspect-ratio/seconds), designcombo's loader SKIPS
+  // downloading the whole video just to read its dimensions (see @designcombo/state Ki) — so the item
+  // lands on the timeline INSTANTLY and the pixels stream in the player afterward (like the chat <video>).
+  const hasDims = !!(dims?.width && dims?.height && dims?.durationMs);
   dispatch(ADD_VIDEO, {
     // metadata.prompt survives the reducer (name is normalised away) → the arrange's relevancy match
     // knows what this VIDEO depicts, same as images. (vApp media.meta also has it as a fallback.)
-    payload: { id, type: "video", name: (prompt || "video").slice(0, 40), details: { src }, ...(prompt ? { metadata: { prompt: prompt.slice(0, 200) } } : {}) },
+    payload: {
+      id, type: "video", name: (prompt || "video").slice(0, 40),
+      ...(hasDims ? { duration: dims!.durationMs } : {}),
+      details: { src, ...(hasDims ? { width: dims!.width, height: dims!.height } : {}) },
+      ...(prompt ? { metadata: { prompt: prompt.slice(0, 200) } } : {}),
+    },
     options: { resourceId: "main", scaleMode: "fit" },
   });
   return id;
