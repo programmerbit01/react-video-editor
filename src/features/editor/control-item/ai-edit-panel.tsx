@@ -103,6 +103,14 @@ function elog(...args: any[]) {
 // yells / asks / announces …, LTX lip-syncs on any of them), in case the flag is missing.
 const TALK_RE = /\b(say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|scream|screams|call|calls|reply|replies|tell|tells|announce|announces|mutter|mutters|murmur|murmurs|cry|cries|snap|snaps)\b\s*[:'"“]/i;
 const isTalkOp = (o: any) => o?.talk === true || (o?.op === "generate" && o?.kind === "video" && TALK_RE.test(String(o?.prompt || "")));
+// A talking shot's video MUST be long enough for the spoken line, else LTX cuts the voice mid-sentence
+// (the director can't count words, so it guesses a random duration). Estimate seconds from the QUOTED
+// words after the speech verb: ~2.3 words/sec + a 1s buffer, capped. 0 = no quoted line found.
+const spokenSecs = (prompt: string): number => {
+  const m = String(prompt || "").match(/\b(?:say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|announce|announces|reply|replies|tell|tells|call|calls|murmur|murmurs|mutter|mutters|cry|cries)\b[^'"“]*['"“]([^'"”]+)['"”]/i);
+  const words = m ? m[1].trim().split(/\s+/).filter(Boolean).length : 0;
+  return words ? Math.min(14, Math.max(3, Math.round(words / 2.3) + 1)) : 0;
+};
 
 // Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
 // SSE fetch closes → the SERVER stops the LLM stream too (a TRUE stop). Generation jobs are NOT
@@ -1733,12 +1741,16 @@ export default function AiEditPanel() {
       try {
         let vUrl = "";
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
+        // TALKING video → size the clip to the spoken WORDS (LTX cuts the voice if the video is too short);
+        // the director's own duration guess is unreliable, so we derive it from the `says '…'` line.
+        const genSecs = (vKind === "video" && isTalkOp(g) ? spokenSecs(g.prompt) : 0) || Number(g.duration) || 5;
+        if (vKind === "video" && isTalkOp(g)) elog(`[DRAMA v2 ASM] beat ${k + 1} talk video → ${genSecs}s (fits the spoken line)`);
         if (g.op === "search") {
           const r = await fetch(withEditorBase(`/api/pexels?query=${encodeURIComponent(g.query || b.text)}&per_page=1`));
           const d = await r.json().catch(() => ({}));
           vUrl = d?.photos?.[0]?.src || d?.videos?.[0]?.src || "";
         }
-        if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize }, prog);
+        if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
         if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return; }
         elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) ${vKind} url=…${vUrl.slice(-74)}`);
         let aUrl = "";
@@ -1754,7 +1766,7 @@ export default function AiEditPanel() {
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
         const ar = String(g.aspect_ratio || "16:9");
         const wh: [number, number] = ar === "9:16" ? [720, 1280] : ar === "1:1" ? [1024, 1024] : ar === "4:5" ? [1024, 1280] : [1280, 720];
-        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: (Number(g.duration) || 5) * 1000 } : undefined;
+        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: genSecs * 1000 } : undefined;
         let vid = "";
         for (let att = 0; att < 3 && !_stopBuild; att++) {
           const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot", vDims) : addImage(vUrl, "shot")), 22000);
