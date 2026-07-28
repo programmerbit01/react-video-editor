@@ -109,6 +109,8 @@ async function postUnified(base: string, token: string, stream: boolean, body: a
 
   const reqBody: Record<string, any> = { task: "editor_edit", input, overrides };
   if (token) reqBody.api_key = token;
+  // Run id → the vApp registers this stream under it, so POST /vapp/llm/stop {session} can kill it.
+  if (body.session) reqBody.session = String(body.session);
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["X-API-Key"] = token;

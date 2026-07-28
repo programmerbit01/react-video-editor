@@ -28,6 +28,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           task,
           input,
+          ...(body.session ? { session: String(body.session) } : {}), // → server-side stop by run id
           ...(body.overrides ? { overrides: body.overrides } : {}),
           ...(images?.length ? { images } : {}),
           ...(token ? { api_key: token } : {}),
@@ -61,6 +62,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         task,
         input,
+        ...(body.session ? { session: String(body.session) } : {}), // → server-side stop by run id
         ...(body.overrides ? { overrides: body.overrides } : {}),
         ...(images?.length ? { images } : {}),
         ...(token ? { api_key: token } : {}),

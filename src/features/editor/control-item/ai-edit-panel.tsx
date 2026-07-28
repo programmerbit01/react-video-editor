@@ -111,6 +111,27 @@ let _work: AbortController | null = null;
 // The Stop button also halts the BACKGROUND build (gens already queued can't be pulled, but we skip
 // the remaining stages — arrange etc). Reset on every send.
 let _stopBuild = false;
+// A run id shared by EVERY LLM call this send makes (script → director → optimizer → match_shots).
+// Stop POSTs it to /vapp/llm/stop → the server kills whichever call is live, regardless of the model
+// or preset. This is the RELIABLE stop (disconnect-through-the-proxy was the flaky part). Reset per send.
+let _session = "";
+const _newSession = () =>
+  (globalThis.crypto?.randomUUID?.() || `s_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+// Fire-and-forget imperative kill: tells the vApp to stop the backend LLM for this run NOW, without
+// relying on the fetch abort reaching LM Studio. Safe no-op if the session never started a stream.
+function _serverStopLlm(session: string) {
+  if (!session) return;
+  try {
+    fetch(withEditorBase("/api/ai-edit/stop"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session }),
+      keepalive: true, // still delivers if the panel/route is torn down right after
+    }).catch(() => {});
+  } catch {
+    /* ignore — Stop must never throw */
+  }
+}
 
 let _aiPositionSet = false;
 
@@ -122,7 +143,7 @@ async function runChat(
   const res = await fetch(withEditorBase("/api/ai-edit"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, session: _session }), // session → server can be told to stop this run
     signal, // Stop → aborts this fetch → the SSE closes → the server stops the LLM stream
   });
   const ctype = res.headers.get("content-type") || "";
@@ -309,7 +330,7 @@ async function llmText(task: string, input: string, token: string, images?: stri
     const res = await fetch(withEditorBase("/api/ai-llm"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task, input, token, ...(images?.length ? { images } : {}) }),
+      body: JSON.stringify({ task, input, token, session: _session, ...(images?.length ? { images } : {}) }),
     });
     const d = await res.json().catch(() => ({}));
     return String(d?.text || "");
@@ -333,7 +354,7 @@ async function llmTextStream(
   const res = await fetch(withEditorBase("/api/ai-llm"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task, input, token, stream: true, ...(overrides ? { overrides } : {}), ...(images?.length ? { images } : {}) }),
+    body: JSON.stringify({ task, input, token, stream: true, session: _session, ...(overrides ? { overrides } : {}), ...(images?.length ? { images } : {}) }),
     signal,
   });
   if (!res.ok || !res.body || !(res.headers.get("content-type") || "").includes("text/event-stream")) {
@@ -808,6 +829,7 @@ export default function AiEditPanel() {
     if (!text.trim() || working) return; // block re-entry while ANY part (plan OR background build) runs
     _stopBuild = false; // fresh run — clear any previous Stop
     _work = new AbortController(); // Stop button aborts this
+    _session = _newSession(); // one id for every LLM call this run → Stop kills them server-side
     _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction (any P-preset style is now IN this text)
     elog(`━━━━━━━━━━ NEW GEN ━━━━━━━━━━  director=${curDirector?.label || "edit"}  model=${s.model}`);
     elog(`[PROMPT] ${text}`);
@@ -1034,6 +1056,7 @@ export default function AiEditPanel() {
   // TRUE stop: abort the in-flight LLM request → its SSE fetch closes → the server stops streaming.
   // (Generation jobs already queued keep running in parallel — by design.)
   const stopWork = () => {
+    _serverStopLlm(_session); // imperative kill FIRST — stops the backend LLM even if the abort doesn't reach it
     _work?.abort();
     _stopBuild = true; // halt the background build too (skips the remaining stages)
     s.setBusy(false);
@@ -1683,10 +1706,28 @@ export default function AiEditPanel() {
       const d = Number(it?.duration) || (it?.display ? Number(it.display.to) - Number(it.display.from) : 0);
       return d > 200 ? Math.round(d) : 0;
     };
-    // GENERATE each beat in parallel; ADD each clip to the timeline + show a chat preview AS it lands
-    // (incremental feedback), then measure it. The final stitch re-times everything into beat order.
-    const built = await Promise.all(beats.map(async (b, k) => {
-      if (_stopBuild) return null;
+    // INCREMENTAL STITCH: whenever a beat LANDS, re-time ALL landed beats into gap-free in-order windows
+    // → completed shots hit the timeline IMMEDIATELY, without waiting for the slow ones (a video can take
+    // minutes). No Promise.all barrier before anything shows. The final pass just tidies + reports.
+    const landed: { k: number; type: "n" | "d"; vid: string; aid: string; vKind: string; ms: number }[] = [];
+    const restitch = () => {
+      const seq = [...landed].sort((a, b) => a.k - b.k);
+      let cur = 0;
+      const vItems: { itemId: string; fromMs: number; toMs: number }[] = [];
+      const aItems: { itemId: string; fromMs: number; toMs: number }[] = [];
+      const imgIds: string[] = [];
+      for (const p of seq) {
+        const from = cur; const to = cur + Math.max(600, p.ms); cur = to;
+        if (p.vid) { vItems.push({ itemId: p.vid, fromMs: from, toMs: to }); if (p.vKind !== "video") imgIds.push(p.vid); }
+        if (p.aid) aItems.push({ itemId: p.aid, fromMs: from, toMs: to });
+      }
+      if (vItems.length) applyOperations([{ op: "arrange", items: vItems }]); // images→row, videos→row, at windows
+      if (aItems.length) setItemWindows(aItems);                              // narrator voice clips → their windows
+      if (imgIds.length) applyMotionBatch(imgIds.map((id, kk) => ({ id, kenBurns: kk % 2 ? "zoomOut" : "zoomIn", intensity: 18, duration: 100 })));
+    };
+    // GENERATE each beat in parallel; the moment one is ready → add + preview + re-stitch (show it NOW).
+    await Promise.all(beats.map(async (b, k) => {
+      if (_stopBuild) return;
       const g: any = shots[k];
       const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
@@ -1698,55 +1739,42 @@ export default function AiEditPanel() {
           vUrl = d?.photos?.[0]?.src || d?.videos?.[0]?.src || "";
         }
         if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize }, prog);
-        if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return null; }
-        // DIAGNOSTIC PROBE: can the browser actually LOAD this media? (the timeline add needs it) — logs
-        // the url + load time so a "never landed" is pinpointed: bad url vs slow CDN vs designcombo.
+        if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return; }
+        // NON-BLOCKING diagnostic probe — fire + LOG the browser load, never delay the add.
         elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) ${vKind} url=…${vUrl.slice(-74)}`);
-        const probe = await new Promise<number>((res) => {
+        void (async () => {
           const t0 = Date.now();
-          if (vKind === "video") { const el = document.createElement("video"); el.preload = "metadata"; el.muted = true; el.onloadedmetadata = () => res(Date.now() - t0); el.onerror = () => res(-1); el.src = vUrl; }
-          else { const im = new Image(); im.onload = () => res(Date.now() - t0); im.onerror = () => res(-1); im.src = vUrl; }
-          setTimeout(() => res(-2), 40000);
-        });
-        elog(`[DRAMA v2 ASM] beat ${k + 1} media PROBE: ${probe === -1 ? "❌ LOAD ERROR (bad url / CORS / CDN)" : probe === -2 ? "⏱ >40s TIMEOUT (CDN too slow)" : `✓ loaded ${probe}ms`}`);
+          const probe = await new Promise<number>((res) => {
+            if (vKind === "video") { const el = document.createElement("video"); el.preload = "metadata"; el.muted = true; el.onloadedmetadata = () => res(Date.now() - t0); el.onerror = () => res(-1); el.src = vUrl; }
+            else { const im = new Image(); im.onload = () => res(Date.now() - t0); im.onerror = () => res(-1); im.src = vUrl; }
+            setTimeout(() => res(-2), 40000);
+          });
+          elog(`[DRAMA v2 ASM] beat ${k + 1} media PROBE: ${probe === -1 ? "❌ LOAD ERROR (bad url/CORS)" : probe === -2 ? "⏱ >40s (CDN slow)" : `✓ loaded ${probe}ms`}`);
+        })();
         let aUrl = "";
         if (b.type === "n") aUrl = await genUrl("audio", { text: b.text }, prog);
-        // add to the timeline NOW (incremental) + preview in the chat — like the old build felt
-        // add the VISUAL; if the media fails to LOAD into the timeline (a network blip → the item never
-        // lands), still show the chat preview but DROP this beat from the stitch — never block on it.
+        // ADD to the timeline NOW + chat preview — the moment this shot is ready.
         const vid = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot") : addImage(vUrl, "shot")));
         const now = useAiEditStore.getState().messages[i];
         s.updateAt(i, { genPreviews: [...(now?.genPreviews || []), { kind: vKind, url: vUrl }] });
-        if (!vid || !(useStore.getState().trackItemsMap || {})[vid]) { elog(`[DRAMA v2 ASM] beat ${k + 1} media didn't land (network?) — dropped from the stitch`); bump(); return null; }
+        if (!vid || !(useStore.getState().trackItemsMap || {})[vid]) { elog(`[DRAMA v2 ASM] beat ${k + 1} media didn't land — dropped from the stitch`); bump(); return; }
         let aid = "";
         if (b.type === "n" && aUrl) aid = await serializedAdd("audio", () => addAudio(aUrl, "narration"));
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
-        let ms = b.type === "d" ? clipMs(vid) : (aid ? clipMs(aid) : 0); // real length from the just-added item
-        if (!ms) ms = (Number(g.duration) || 4) * 1000; // fallback length
+        let ms = b.type === "d" ? clipMs(vid) : (aid ? clipMs(aid) : 0);
+        if (!ms) ms = (Number(g.duration) || 4) * 1000;
+        landed.push({ k, type: b.type, vid, aid, vKind, ms });
+        restitch();                                        // ← place the shots we HAVE, right now
         bump();
-        return { k, type: b.type, vid, aid, vKind, ms };
-      } catch (e) { elog(`[DRAMA v2 ASM] beat ${k + 1} failed: ${e}`); bump(); return null; }
+        s.updateAt(i, { genStatus: `🧩 ${landed.length}/${total} shots placed…` });
+      } catch (e) { elog(`[DRAMA v2 ASM] beat ${k + 1} failed: ${e}`); bump(); }
     }));
     if (_stopBuild) { s.updateAt(i, { genStatus: "⏹ Stopped", buildProgress: "" }); return; }
-    const ok = (built.filter(Boolean) as any[]).sort((a, b) => a.k - b.k); // back into beat (screenplay) order
-    if (!ok.length) { s.updateAt(i, { genStatus: "⚠️ Drama: nothing generated" }); return; }
-    const dropped = total - ok.length;
-    // STITCH — cumulative gap-free windows in beat order (sequential; no overlap, no matcher).
-    s.updateAt(i, { genStatus: "🧩 Stitching shots in order…", buildProgress: "" });
-    let cur = 0;
-    const vItems: { itemId: string; fromMs: number; toMs: number }[] = [];
-    const aItems: { itemId: string; fromMs: number; toMs: number }[] = [];
-    const imgIds: string[] = [];
-    for (const p of ok) {
-      const from = cur; const to = cur + Math.max(600, p.ms); cur = to;
-      if (p.vid) { vItems.push({ itemId: p.vid, fromMs: from, toMs: to }); if (p.vKind !== "video") imgIds.push(p.vid); }
-      if (p.aid) aItems.push({ itemId: p.aid, fromMs: from, toMs: to });
-    }
-    applyOperations([{ op: "arrange", items: vItems }]);   // images→one row, videos→one row, at their windows
-    if (aItems.length) setItemWindows(aItems);             // narrator voice clips → their exact windows (audio row)
-    if (imgIds.length) applyMotionBatch(imgIds.map((id, k) => ({ id, kenBurns: k % 2 ? "zoomOut" : "zoomIn", intensity: 18, duration: 100 })));
-    s.updateAt(i, { genStatus: `✓ Drama built — ${ok.length} shots in order (${ok.filter((p) => p.type === "d").length} dialogue)${dropped ? ` · ${dropped} failed` : ""}`, buildProgress: "" });
-    elog(`[DRAMA v2 ASM] ✅ ${ok.length}/${total} shots, ${Math.round(cur / 1000)}s — arranged + ${aItems.length} narrator clip(s)${dropped ? ` · ${dropped} beat(s) FAILED to generate` : ""}`);
+    if (!landed.length) { s.updateAt(i, { genStatus: "⚠️ Drama: nothing landed — check the PROBE logs (url/CORS)" }); return; }
+    const dropped = total - landed.length;
+    restitch(); // final tidy pass
+    s.updateAt(i, { genStatus: `✓ Drama built — ${landed.length} shots in order (${landed.filter((p) => p.type === "d").length} dialogue)${dropped ? ` · ${dropped} failed` : ""}`, buildProgress: "" });
+    elog(`[DRAMA v2 ASM] ✅ ${landed.length}/${total} shots stitched${dropped ? ` · ${dropped} beat(s) FAILED` : ""}`);
   };
 
   // Captions — ensure a transcript (transcribe if we don't have one), then lay a
