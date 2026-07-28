@@ -832,7 +832,6 @@ export default function AiEditPanel() {
     // audio length). The user's RAW request goes straight to the LLM; the `script` system prompt reads
     // the duration and hits it. (Trust the model; the frontend stays generic — no hardcoded intelligence.)
     let injectedScript = "";
-    let refDesc = ""; // what the uploaded reference image(s) contain (script-step vision → rides to the director)
     // Reference images: the ones the user explicitly attached (paste/drop/link), else the timeline
     // images they have selected. Multiple supported — all go to the vision script step + every gen.
     const refSrcs = s.pipeline ? (s.refImages.length ? s.refImages : selectedRefSrcs()) : [];
@@ -853,16 +852,15 @@ export default function AiEditPanel() {
           s.updateLast({ scriptText: full, scriptOpen: true });
         }, _work?.signal, undefined, refSrcs.length ? refSrcs : undefined)).trim();
       } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
-      // With a reference, the script leads with a "REF: <what's in the image>" line. Split it out:
-      // refDesc rides to the DIRECTOR (so it writes EDIT prompts around that subject); the rest = narration.
-      if (refSrcs.length && injectedScript) {
-        const mm = injectedScript.match(/^\s*REF:\s*([\s\S]*?)(?:\n\s*\n|$)/i);
-        if (mm && mm[1].trim()) {
-          refDesc = mm[1].replace(/\s+/g, " ").trim().slice(0, 400);
-          const rest = injectedScript.slice(mm[0].length).trim();
-          if (rest) injectedScript = rest; // keep the whole thing if the parse ate the narration (safety)
-          elog(`[SCRIPT VISION] REF="${refDesc.slice(0, 120)}"`);
-        }
+      // Defensive: even told not to, a model may prepend a "REF: …" or "[REF]…[/REF]" label (a scene
+      // description, NOT narration). Strip it so the TTS never SPEAKS the word "REF". A whole
+      // [REF]…[/REF] block is dropped; a bare "REF:" token is removed (its sentence reads fine as an opener).
+      if (injectedScript) {
+        const cleaned = injectedScript
+          .replace(/^\s*\[REF\][\s\S]*?\[\/REF\]\s*/i, "")
+          .replace(/^\s*REF\s*:\s*/i, "")
+          .trim();
+        if (cleaned) injectedScript = cleaned;
       }
       if (injectedScript) {
         elog(`[SCRIPT STEP] ${wc(injectedScript)} words (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
@@ -957,7 +955,7 @@ export default function AiEditPanel() {
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
         if (aud?.text) elog(`[SCRIPT] ${String(aud.text).replace(/\s+/g, " ")}`);
-        env.operations.filter((o: any) => o.op === "generate" && o.kind !== "audio").forEach((o: any, k: number) => elog(`[GEN PROMPT ${k + 1}] ${o.kind}: ${String(o.prompt || o.text || "").replace(/\s+/g, " ").slice(0, 140)}`));
+        env.operations.filter((o: any) => o.op === "generate" && o.kind !== "audio").forEach((o: any, k: number) => elog(`[GEN PROMPT ${k + 1}] ${o.kind}${o.image_url ? " (i2v-ref)" : o.images ? ` (edit ×${o.images.length})` : ""}: ${String(o.prompt || o.text || "").replace(/\s+/g, " ")}`));
         s.updateLast({ content: env.summary || "Proposed edit ready.", reasoning, reasoningMs, thinkingOpen: false, directOpen: false, ops: env.operations });
         // Auto mode: apply immediately without asking
         if (useAiEditStore.getState().autoApply) {
@@ -1159,6 +1157,8 @@ export default function AiEditPanel() {
         token: getToken(),
       });
       if (!id) throw new Error("no job id");
+      // The ACTUAL prompt sent to the model (full, not truncated) — after any optimizer rewrite.
+      if (label !== "audio") elog(`[GEN SENT ${label}]${image_url ? " i2v-ref" : images ? ` edit×${images.length}` : ""}: ${String(usedPrompt || sentPrompt).replace(/\s+/g, " ")}`);
       // /vapp/llm rewrote the image/video prompt into a model-friendly one — flag it (✨) so
       // the user sees their idea was enhanced before generating.
       const optimized = !!usedPrompt && usedPrompt.trim() !== sentPrompt && !isRegen && label !== "audio";
