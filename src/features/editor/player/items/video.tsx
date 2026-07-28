@@ -4,7 +4,7 @@ import { BoxAnim, ContentAnim, MaskAnim } from "@designcombo/animations";
 import { calculateContainerStyles, calculateMediaStyles } from "../styles";
 import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
-import { OffthreadVideo, getRemotionEnvironment } from "remotion";
+import { OffthreadVideo, Video as RemotionVideo, getRemotionEnvironment } from "remotion";
 import { kenBurnsTransform } from "./ken-burns";
 import { resolveAssetUrl } from "../../utils/asset-url";
 import { makeVolumeFn } from "../../utils/volume-envelope";
@@ -55,6 +55,13 @@ export const Video = ({
   // offline render it pins a full-res backing texture per clip and wastes RAM.
   const promoteLayer = !getRemotionEnvironment().isRendering;
 
+  // Interactive preview plays through the NATIVE <Video> — it streams progressively over range
+  // requests exactly like opening the url in a new tab (instant, no stall). <OffthreadVideo> is a
+  // frame EXTRACTOR; in the live player it stalled a single fresh clip on "Buffering…" for minutes
+  // while that very url played instantly in a new tab (isolated with a 1-clip, no-cors, warmed test).
+  // Keep OffthreadVideo for the offline render, where exact-frame extraction is what it's for.
+  const VideoComp = promoteLayer ? RemotionVideo : OffthreadVideo;
+
   // Ken Burns: optional slow pan/zoom (subtle motion on archival footage too).
   const kbTransform = kenBurnsTransform(
     (details as any)?.kenBurns,
@@ -93,7 +100,7 @@ export const Video = ({
               ...(kbTransform ? { overflow: "hidden" } : {})
             }}
           >
-            <OffthreadVideo
+            <VideoComp
               startFrom={startFromFrame}
               endAt={endAtFrame}
               playbackRate={playbackRate}
