@@ -34,6 +34,8 @@ import {
   LIPSYNC_DURATION_MULT,
   LIPSYNC_MIN_SECS,
   LIPSYNC_MAX_SECS,
+  LIPSYNC_WITH_AUDIO,
+  LIPSYNC_I2V_EDIT_FIRST,
 } from "../ai-edit/editor-config";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
@@ -1755,6 +1757,31 @@ export default function AiEditPanel() {
       }
       return "";
     };
+    // BUILD A TALKING (lip-sync) SHOT. Order matters and is the whole point of the fix:
+    //   1) generate the dialogue as CLEAN TTS (the video will lip-sync to it),
+    //   2) if a reference image is attached, EDIT the ref into THIS shot's look first — the video model
+    //      animates its input image as-is (it won't restyle from the prompt), so the outfit/scene must be
+    //      baked into the image, not just described (LIPSYNC_I2V_EDIT_FIRST),
+    //   3) generate the video: WITH_AUDIO → feed the TTS as `audio` so it lip-syncs to the real words
+    //      (lips match, exact length, no hallucination); else the legacy text-driven path.
+    // Returns the video url + the TTS url (the TTS is still overlaid + sizes the clip downstream).
+    const genTalkShot = async (g: any, narrText: string, onProg: (d: any) => void): Promise<{ vUrl: string; aUrl: string }> => {
+      const aUrl = narrText ? await genUrl("audio", { text: narrText }, onProg) : "";
+      let baseImg = String(g.image_url || "");
+      if (baseImg && LIPSYNC_I2V_EDIT_FIRST) {
+        // Flux EDIT the ref into this shot's look — force it to keep the face (the video prompt is a scene
+        // description, not an edit prompt, so it lacks the identity-lock the image shots carry).
+        const editPrompt = `${g.prompt}, keep the same face and identity, do not change anything else`;
+        const edited = await genUrl("image", { prompt: editPrompt, images: [baseImg], aspect_ratio: g.aspect_ratio, optimize: false }, onProg);
+        if (edited) { baseImg = edited; elog(`[DRAMA v2 ASM] talk shot: edited the reference into the shot look → i2v from THAT`); }
+        else elog(`[DRAMA v2 ASM] talk shot: ref edit failed — animating the raw reference`);
+      }
+      const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, duration: spokenSecs(g) || 5, optimize: false };
+      if (baseImg) vOpts.image_url = baseImg;
+      if (LIPSYNC_WITH_AUDIO && aUrl) { vOpts.audio = aUrl; elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (exact length, no hallucination)`); }
+      const vUrl = await genUrl("video", vOpts, onProg);
+      return { vUrl, aUrl };
+    };
     // Real clip length FROM the just-added timeline item — ADD_VIDEO/ADD_AUDIO already loaded it, so we
     // never download it a 2nd time (that double-load was why placement crawled on a slow CDN).
     const clipMs = (id: string): number => {
@@ -1786,30 +1813,31 @@ export default function AiEditPanel() {
       if (_stopBuild) return;
       const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
-        let vUrl = "";
+        let vUrl = "", aUrl = "";
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
-        // TALKING video → make it long enough to COVER the spoken line (we overlay clean TTS and mute the
-        // video's own garbled audio, so the video just needs to last as long as the words). Derived from the
-        // `line` word-count via the LIPSYNC_* knobs.
+        // A talk video's length is driven by the spoken line (the vApp caps it to the TTS audio anyway).
         const genSecs = (vKind === "video" && talk ? spokenSecs(g) : 0) || Number(g.duration) || 5;
-        if (vKind === "video" && talk) elog(`[DRAMA v2 ASM] shot ${k + 1} talk video → ${genSecs}s (covers the spoken line)`);
-        if (g.op === "search") {
-          // match the stock orientation to the shot's aspect (was pulling portrait stock into a 16:9 video)
-          const orient = aspectOrientation(g.aspect_ratio);
-          const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
-          const query = g.query || narrText || g.prompt || "";
-          const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(query)}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
-          const d = await r.json().catch(() => ({}));
-          vUrl = d?.photos?.[0]?.details?.src || d?.photos?.[0]?.src || d?.videos?.[0]?.details?.src || d?.videos?.[0]?.src || "";
-          elog(`[DRAMA v2 ASM] shot ${k + 1} STOCK ${vKind} search "${String(query).slice(0, 48)}"${orient ? ` [${orient}]` : ""} → ${vUrl ? "hit" : "MISS (will AI-generate)"}`);
+        if (talk && vKind === "video") {
+          // TALKING shot → lip-sync pipeline (TTS → [edit ref] → audio-driven video). See genTalkShot.
+          elog(`[DRAMA v2 ASM] shot ${k + 1} talk video → ${LIPSYNC_WITH_AUDIO ? "lip-sync to TTS (exact length)" : "text-driven, ~" + genSecs + "s"}`);
+          ({ vUrl, aUrl } = await genTalkShot(g, narrText, prog));
+        } else {
+          // B-ROLL shot → stock search or a plain gen, then its narrator voiceover.
+          if (g.op === "search") {
+            // match the stock orientation to the shot's aspect (was pulling portrait stock into a 16:9 video)
+            const orient = aspectOrientation(g.aspect_ratio);
+            const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
+            const query = g.query || narrText || g.prompt || "";
+            const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(query)}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
+            const d = await r.json().catch(() => ({}));
+            vUrl = d?.photos?.[0]?.details?.src || d?.photos?.[0]?.src || d?.videos?.[0]?.details?.src || d?.videos?.[0]?.src || "";
+            elog(`[DRAMA v2 ASM] shot ${k + 1} STOCK ${vKind} search "${String(query).slice(0, 48)}"${orient ? ` [${orient}]` : ""} → ${vUrl ? "hit" : "MISS (will AI-generate)"}`);
+          }
+          if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
+          if (narrText) aUrl = await genUrl("audio", { text: narrText }, prog);
         }
-        if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
         if (!vUrl) { elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) VISUAL failed after retry — kept out`); bump(); return; }
         elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) ${vKind} url=…${vUrl.slice(-74)}`);
-        // EVERY shot speaks its line as clean TTS — talk shots speak their dialogue (op.line), b-roll shots
-        // speak their narrator line. (Talk video's own audio is garbled → muted below, TTS plays instead.)
-        let aUrl = "";
-        if (narrText) aUrl = await genUrl("audio", { text: narrText }, prog);
         // Preview immediately; then ADD to the timeline. A FRESH R2 object can be slow to load the first
         // time (Cloudflare origin-fetch on a cache MISS), so the load may not land on the first try —
         // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
@@ -1844,9 +1872,11 @@ export default function AiEditPanel() {
           }
           if (!aid) elog(`[DRAMA v2 ASM] shot ${k + 1} voice never loaded — visual kept, silent`);
         }
-        // A talk video's OWN audio is LTX-garbled — MUTE it so ONLY the clean TTS is heard. (If the TTS
-        // failed to land, leave the native audio as a fallback rather than a silent talking head.)
-        if (talk && aid) { applyOperations([{ op: "edit", itemId: vid, details: { volume: 0 } }]); elog(`[DRAMA v2 ASM] shot ${k + 1} muted LTX audio → clean TTS voiceover`); }
+        // MUTE the talk video and let ONLY the clean TTS clip be heard. WITH_AUDIO: the video is already
+        // lip-synced to this exact TTS, so its lips match the overlaid clip; WITHOUT audio: the video's own
+        // audio is LTX-garbled, so muting it is what makes the dialogue intelligible. Either way, if the TTS
+        // failed to land we leave the native audio as a fallback rather than a silent talking head.
+        if (talk && aid) { applyOperations([{ op: "edit", itemId: vid, details: { volume: 0 } }]); elog(`[DRAMA v2 ASM] shot ${k + 1} muted video audio → clean TTS voiceover`); }
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
         // Window = the VOICE length (the TTS clip) when there is one; else the video's own footage (silent
         // b-roll video / talk video with no TTS), else the director's guessed seconds (silent image).

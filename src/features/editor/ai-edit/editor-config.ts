@@ -29,6 +29,19 @@ export const LIPSYNC_DURATION_MULT = 2.0;
 export const LIPSYNC_MIN_SECS = 3;
 export const LIPSYNC_MAX_SECS = 16;
 
+// ── LIP-SYNC MODE (Drama v2 talking shots) ───────────────────────────────────────────────────
+// WITH_AUDIO (recommended, default): the dialogue is generated as clean TTS and that mp3 is fed to the
+// video model (vapp-video / LTX) as its `audio` input → the character lip-syncs to the REAL audio: the
+// LIPS MATCH, nothing is cut, no hallucinated words, and the clip length = the audio length (the vApp
+// caps the video to the audio). Flip to FALSE for the legacy path: the model makes the mouth move from
+// the `says '…'` text using its OWN (garbled) audio, which we then mute + overlay the TTS on top of. Kept
+// as a fallback so the old behaviour is one flag away.
+export const LIPSYNC_WITH_AUDIO = true;
+// i2v with a reference image: the video model ANIMATES its input image AS-IS — it does NOT restyle it from
+// the prompt. So to get this shot's outfit/scene, first EDIT the reference into that look (Flux edit) and
+// feed THAT image to i2v, not the raw reference (otherwise every shot just animates the original photo).
+export const LIPSYNC_I2V_EDIT_FIRST = true;
+
 export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
 
 ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "9:16" (a vertical short). Use the SAME ratio on every shot.

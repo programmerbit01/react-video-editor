@@ -80,6 +80,10 @@ export async function POST(request: Request) {
         aspect_ratio: body.aspect_ratio || "16:9",
         duration: Math.min(20, Number(body.duration) || 5),
         ...(body.image_url ? { image_url: body.image_url } : {}), // image-to-video (animate a still → LTX i2v)
+        // LIP-SYNC: an audio URL → the vApp runs the video model in talking mode (it auto-sets
+        // audio_prompt_type "A" and CAPS the video length to the audio), so the character lip-syncs to THIS
+        // exact audio — no cut, no hallucinated words. Sent under several keys the backend accepts.
+        ...(body.audio ? { audio: body.audio, audio_url: body.audio } : {}),
       };
     } else {
       reqBody = { prompt, model };
