@@ -11,7 +11,7 @@ import { addCaptions } from "../captions/builder";
 import {
   applyOperations,
   applyMotionBatch,
-  setItemWindows,
+  placeAudioClips,
   addAudio,
   addImage,
   addVideo,
@@ -1722,7 +1722,7 @@ export default function AiEditPanel() {
         if (p.aid) aItems.push({ itemId: p.aid, fromMs: from, toMs: to });
       }
       if (vItems.length) applyOperations([{ op: "arrange", items: vItems }]); // images→row, videos→row, at windows
-      if (aItems.length) setItemWindows(aItems);                              // narrator voice clips → their windows
+      if (aItems.length) placeAudioClips(aItems);                             // narrator voice → ONE narration row
       if (imgIds.length) applyMotionBatch(imgIds.map((id, kk) => ({ id, kenBurns: kk % 2 ? "zoomOut" : "zoomIn", intensity: 18, duration: 100 })));
     };
     // GENERATE each beat in parallel; the moment one is ready → add + preview + re-stitch (show it NOW).
@@ -1747,7 +1747,8 @@ export default function AiEditPanel() {
         // time (Cloudflare origin-fetch on a cache MISS), so the load may not land on the first try —
         // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
         const nowP = useAiEditStore.getState().messages[i];
-        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl }] });
+        // show the shot's VISUAL and (for a narrator beat) its VOICE clip in the chat, both as they land
+        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl }] : [])] });
         // KNOWN dims (from the aspect-ratio + requested seconds) let designcombo add the VIDEO WITHOUT
         // downloading it first → instant land; the pixels stream in the player afterward. Videos are the
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
@@ -1768,10 +1769,11 @@ export default function AiEditPanel() {
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
         let ms = b.type === "d" ? clipMs(vid) : (aid ? clipMs(aid) : 0);
         if (!ms) ms = (Number(g.duration) || 4) * 1000;
+        // Just DROP it on the timeline as it lands (it's already added above) — do NOT re-arrange per clip.
+        // The single category-row arrange happens ONCE at the end, when everything is in.
         landed.push({ k, type: b.type, vid, aid, vKind, ms });
-        restitch();                                        // ← place the shots we HAVE, right now
         bump();
-        s.updateAt(i, { genStatus: `🧩 ${landed.length}/${total} shots placed…` });
+        s.updateAt(i, { genStatus: `🎬 ${landed.length}/${total} shots ready…` });
       } catch (e) { elog(`[DRAMA v2 ASM] beat ${k + 1} failed: ${e}`); bump(); }
     }));
     if (_stopBuild) { s.updateAt(i, { genStatus: "⏹ Stopped", buildProgress: "" }); return; }

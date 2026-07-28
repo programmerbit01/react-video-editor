@@ -208,6 +208,31 @@ export function setItemWindows(items: { itemId: string; fromMs: number; toMs: nu
   if (changed) sm.updateState({ trackItemsMap: map }, { updateHistory: true });
 }
 
+// Place narrator-voice clips at their windows AND consolidate them onto ONE audio row (category layout —
+// all narration on a single track, like images→one row / videos→one row from the arrange executor).
+export function placeAudioClips(items: { itemId: string; fromMs: number; toMs: number }[]): void {
+  const sm = getStateManagerRef();
+  const st = sm?.getState?.();
+  if (!st) return;
+  const ids = items.map((it) => it.itemId).filter((id) => (st.trackItemsMap || {})[id]);
+  if (!ids.length) return;
+  const map = { ...(st.trackItemsMap || {}) };
+  for (const it of items) {
+    const item = map[it.itemId];
+    if (item) { const from = Math.max(0, Math.round(it.fromMs)); map[it.itemId] = { ...item, display: { from, to: Math.max(from + 100, Math.round(it.toMs)) } }; }
+  }
+  // pull the narration clips off every track, then drop them ALL onto one dedicated narration audio row.
+  let tracks = (st.tracks || []).map((t: any) => ({ ...t, items: (t.items || []).filter((x: string) => !ids.includes(x)) }));
+  const isNarr = (t: any) => t?.type === "audio" && t?.metadata?.trackRole === "narration";
+  let track = tracks.find(isNarr);
+  if (!track) {
+    track = { id: `narration-${nanoid(6)}`, type: "audio", name: "Narration", accepts: ["audio"], items: [], magnetic: false, static: false, metadata: { trackRole: "narration" } };
+    tracks = [...tracks, track];
+  }
+  tracks = tracks.map((t: any) => (t.id === track.id ? { ...t, items: [...(t.items || []), ...ids] } : t));
+  sm.updateState({ trackItemsMap: map, tracks }, { updateHistory: true });
+}
+
 // Apply SYNC ops (everything except `generate`, which is async and handled by the
 // panel). Returns ids created by add ops so the caller can record them for revert.
 export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {
