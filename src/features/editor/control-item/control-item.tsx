@@ -50,13 +50,13 @@ const TAB_CONFIG: Record<string, TabDefinition[]> = {
   ],
   video: [
     { value: "adjust", label: "Adjust", features: ["crop", "basic"] },
-    { value: "audio", label: "Audio", features: ["volume", "speed"] },
+    { value: "audio", label: "Audio", features: ["volume", "speed", "envelope"] },
     { value: "motion", label: "Motion", features: ["animations"] },
     { value: "style", label: "Style", features: ["outline", "shadow"] },
     { value: "transcript", label: "Guided Text", transcript: true }
   ],
   audio: [
-    { value: "audio", label: "Audio", features: ["volume", "speed"] },
+    { value: "audio", label: "Audio", features: ["volume", "speed", "envelope"] },
     { value: "transcript", label: "Guided Text", transcript: true }
   ]
 };
@@ -89,7 +89,7 @@ const renderFeature = (trackItem: ITrackItemAndDetails, feature: string) => {
     case "image":
       return <BasicImage key={feature} trackItem={trackItem as ITrackItem & IImage} type={feature} />;
     case "video":
-      if (feature === "volume" || feature === "speed") {
+      if (feature === "volume" || feature === "speed" || feature === "envelope") {
         return <BasicAudio key={feature} trackItem={trackItem as any} type={feature} />;
       }
       return <BasicVideo key={feature} trackItem={trackItem as ITrackItem & IVideo} type={feature} />;
