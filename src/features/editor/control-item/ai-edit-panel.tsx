@@ -97,6 +97,12 @@ function elog(...args: any[]) {
   }, 500);
 }
 
+// A generate-video op is a TALKING / lip-sync shot when the DIRECTOR flags it `talk:true` — never a
+// hard-coded keyword. Fallback: a speech verb + a quote in the prompt (says / speaks / whispers /
+// yells / asks / announces …, LTX lip-syncs on any of them), in case the flag is missing.
+const TALK_RE = /\b(say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|scream|screams|call|calls|reply|replies|tell|tells|announce|announces|mutter|mutters|murmur|murmurs|cry|cries|snap|snaps)\b\s*[:'"“]/i;
+const isTalkOp = (o: any) => o?.talk === true || (o?.op === "generate" && o?.kind === "video" && TALK_RE.test(String(o?.prompt || "")));
+
 // Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
 // SSE fetch closes → the SERVER stops the LLM stream too (a TRUE stop). Generation jobs are NOT
 // stopped — they run in parallel on the vApp queue (good) and can't be pulled back anyway.
@@ -946,9 +952,9 @@ export default function AiEditPanel() {
           let lip = 0;
           env.operations.forEach((o: any) => {
             if (o.op === "generate" && o.kind === "image") { o.images = refSrcs; o.optimize = false; } // EDIT from the reference(s) — not a fresh prompt to optimize
-            // a lip-sync / TALKING video shot (prompt has `says …`) → animate the reference character (i2v)
-            // so the SAME face talks (vapp-video is all-in-one: image + `says "…"` → lip-synced clip).
-            else if (o.op === "generate" && o.kind === "video" && /\bsays\b/i.test(String(o.prompt || ""))) { o.image_url = refSrcs[0]; o.optimize = false; lip++; }
+            // a TALKING video shot (director's `talk:true`, or a speech verb fallback) → animate the
+            // reference character (i2v) so the SAME face talks (vapp-video all-in-one: image + spoken line).
+            else if (o.op === "generate" && o.kind === "video" && isTalkOp(o)) { o.image_url = refSrcs[0]; o.optimize = false; lip++; }
           });
           elog(`[REF IMAGE] ${refSrcs.length} reference(s) → image shots${lip ? ` + ${lip} lip-sync video(s) i2v from ref` : ""} (${s.refImages.length ? "attached" : "selected"})`);
         }

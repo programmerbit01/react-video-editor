@@ -50,6 +50,8 @@ export interface AiEditOp {
   aspect_ratio?: string;
   duration?: number;
   image_url?: string; // regenerate: source image for img2img
+  images?: string[]; // multi-reference (character consistency) — forwarded as images_list
+  talk?: boolean; // generate video: a TALKING / lip-sync shot (the character speaks) — the director SETS this, so we never hard-code a "says" keyword
   // arrange (sequence items to build a video):
   totalMs?: number;
   startMs?: number;
