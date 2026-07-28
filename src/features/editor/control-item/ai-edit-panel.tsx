@@ -187,33 +187,41 @@ async function startGen(payload: Record<string, any>): Promise<{ id: string; pro
   return { id: String(data?.request_id || ""), prompt: String(data?.prompt || "") };
 }
 
-// Poll the job until it finishes. Reports live progress via onStatus. Returns the output URL.
-// SHORT server-side wait (8s, not 35s): if the editor is served THROUGH a proxy (e.g. :3000/editor →
-// :3001), that proxy kills a long-held connection (socket hang up / ECONNRESET → 500), so the status
-// could never be read and the gen looked "stuck" even though the job had finished on the vApp. Short
-// polls stay well under any proxy idle limit, so they get through and we see completion.
-async function waitGen(id: string, onStatus: (d: any) => void): Promise<string> {
-  const deadline = Date.now() + 12 * 60 * 1000; // 12-min cap
-  let errStreak = 0;
-  while (Date.now() < deadline) {
-    let d: any = {};
-    try {
-      const res = await fetch(withEditorBase(`/api/ai-generate?id=${encodeURIComponent(id)}&timeout=8`), {
-        cache: "no-store",
-      });
-      d = await res.json().catch(() => ({}));
-    } catch {
-      d = { status: "error" };
+// ── Shared BATCH job poller ─────────────────────────────────────────────────────────────────────
+// Instead of N per-job LONG-polls (each a long-held connection that dies behind a proxy + updates
+// late), ONE SHORT call every ~2s for ALL pending request_ids at once. Each gen just registers its id
+// and awaits. The vApp already has the data (vapp_jobs) so the call returns instantly. Short
+// connections = proxy-safe; batched = efficient no matter how many gens run in parallel.
+type _JobWaiter = { resolve: (url: string) => void; reject: (e: any) => void; onStatus: (d: any) => void; started: number };
+const _jobWaiters = new Map<string, _JobWaiter>();
+let _jobPoll: any = null;
+async function _pollJobsOnce() {
+  const ids = Array.from(_jobWaiters.keys());
+  if (!ids.length) { if (_jobPoll) { clearInterval(_jobPoll); _jobPoll = null; } return; }
+  let m: any = {};
+  try {
+    const r = await fetch(withEditorBase(`/api/jobs-status?ids=${encodeURIComponent(ids.join(","))}`), { cache: "no-store" });
+    m = await r.json().catch(() => ({}));
+  } catch { m = {}; }
+  for (const id of ids) {
+    const w = _jobWaiters.get(id);
+    if (!w) continue;
+    const d = m?.[id];
+    if (d) {
+      const st = String(d.status || "").toLowerCase();
+      if (st === "completed" && d.output_url) { _jobWaiters.delete(id); w.resolve(String(d.output_url)); continue; }
+      if (st === "failed" || st === "cancelled") { _jobWaiters.delete(id); w.reject(new Error(d.error || "generation failed")); continue; }
+      w.onStatus(d);
     }
-    if (d?.failed) throw new Error(d?.error || "generation failed");
-    if (d?.done && d?.output_url) return d.output_url;
-    onStatus(d);
-    // transient (proxy reset / server restart) — brief backoff, escalating a little so a truly-down
-    // poller doesn't hammer, but a flaky proxy recovers fast.
-    if (d?.status === "error") { errStreak += 1; await sleep(Math.min(6000, 1500 * errStreak)); }
-    else { errStreak = 0; await sleep(1200); }
+    if (Date.now() - w.started > 12 * 60 * 1000) { _jobWaiters.delete(id); w.reject(new Error("timed out")); } // 12-min safety
   }
-  throw new Error("timed out");
+}
+function waitGen(id: string, onStatus: (d: any) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!id) { reject(new Error("no request id")); return; }
+    _jobWaiters.set(id, { resolve, reject, onStatus, started: Date.now() });
+    if (!_jobPoll) { _pollJobsOnce(); _jobPoll = setInterval(_pollJobsOnce, 2000); }
+  });
 }
 
 // Transcribe an audio URL → timed segments (start/end in SECONDS). Powers script-sync.
