@@ -838,6 +838,7 @@ export default function AiEditPanel() {
     // audio length). The user's RAW request goes straight to the LLM; the `script` system prompt reads
     // the duration and hits it. (Trust the model; the frontend stays generic — no hardcoded intelligence.)
     let injectedScript = "";
+    let directorScript = ""; // what the DIRECTOR sees (Drama v2 = the full tagged screenplay; else = the narration)
     // Reference images: the ones the user explicitly attached (paste/drop/link), else the timeline
     // images they have selected. Multiple supported — all go to the vision script step + every gen.
     const refSrcs = s.pipeline ? (s.refImages.length ? s.refImages : selectedRefSrcs()) : [];
@@ -851,10 +852,13 @@ export default function AiEditPanel() {
       // `script` task rules (duration, ignore-editing-directions) stay in force and the style is added.
       const dirScript = s.customDirectors.find((d) => d.id === s.pipeline)?.scriptPrompt;
       const scriptInput = dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text;
+      // Drama v2 uses its OWN screenwriter task (tagged NARRATOR / DIALOGUE screenplay); everyone else
+      // uses the shared `script` narration task. (Isolated — v1/faceless/edit are untouched.)
+      const scriptTask = s.pipeline === "drama_v2" ? "drama_script" : "script";
       try {
         // Reference image → the script step runs MULTIMODAL (Qwen3.6 vision): it SEES the image, so the
         // narration fits whoever/whatever is actually in it — the ONE vision read for the whole pipeline.
-        injectedScript = (await llmTextStream("script", scriptInput, getToken(), (full) => {
+        injectedScript = (await llmTextStream(scriptTask, scriptInput, getToken(), (full) => {
           s.updateLast({ scriptText: full, scriptOpen: true });
         }, _work?.signal, undefined, refSrcs.length ? refSrcs : undefined)).trim();
       } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
@@ -868,13 +872,25 @@ export default function AiEditPanel() {
           .trim();
         if (cleaned) injectedScript = cleaned;
       }
-      if (injectedScript) {
-        elog(`[SCRIPT STEP] ${wc(injectedScript)} words (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
-        s.updateLast({ scriptText: injectedScript, scriptOpen: false }); // collapse; content empty → dots until scenes
+      // The DIRECTOR sees the full script/screenplay; the AUDIO voiceover is derived from it.
+      directorScript = injectedScript;
+      // DRAMA v2: the script is a TAGGED screenplay. The narrator VOICEOVER (audio op) is ONLY the
+      // NARRATOR lines — the DIALOGUE lines are spoken on camera by their talking shots (not the narrator).
+      if (s.pipeline === "drama_v2" && injectedScript) {
+        const lines = injectedScript.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+        const narr = lines.filter((l) => /^NARRATOR\s*:/i.test(l)).map((l) => l.replace(/^NARRATOR\s*:\s*/i, "").trim()).filter(Boolean).join(" ");
+        const dCount = lines.filter((l) => /^DIALOGUE\b/i.test(l)).length;
+        // fallback: no NARRATOR lines tagged → strip any tags so the TTS never speaks a label
+        injectedScript = narr || injectedScript.replace(/^\s*(NARRATOR|DIALOGUE[^:]*)\s*:\s*/gim, "").replace(/\s*\n+\s*/g, " ").trim();
+        elog(`[DRAMA v2] screenplay: ${lines.length} lines, ${dCount} dialogue → narrator VO ${wc(narr)} words`);
+      }
+      if (directorScript) {
+        elog(`[SCRIPT STEP] ${wc(injectedScript)} words voiceover (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
+        s.updateLast({ scriptText: directorScript, scriptOpen: false }); // show the full script/screenplay, then collapse
       }
       if (_work?.signal.aborted) { s.setBusy(false); return; } // Stop pressed during the script step
       // No script → don't proceed to a broken build (the audio op would stay the "__SCRIPT__" placeholder).
-      if (!injectedScript) { s.updateLast({ content: "⚠️ Couldn't write the script — try again." }); s.setBusy(false); return; }
+      if (!directorScript) { s.updateLast({ content: "⚠️ Couldn't write the script — try again." }); s.setBusy(false); return; }
     }
 
     // A reference image → the AI-image shots EDIT it. The edit model (Flux) already SEES the image and
@@ -902,8 +918,8 @@ export default function AiEditPanel() {
           // For a pipeline WITH a pre-written script, the scene call only builds SHOTS around it (it
           // does NOT rewrite the narration — the system inserts the real script into the audio op).
           content: s.pipeline
-            ? (injectedScript
-                ? `${text}${refBlock}\n\n━━━ The NARRATION SCRIPT is ALREADY WRITTEN (below) — the system inserts it. For the audio op output EXACTLY { "op":"generate","kind":"audio","text":"__SCRIPT__" } and do NOT write the narration yourself. Write the shot gen prompts so shot k matches the part of the script spoken at that moment, in order. ━━━\nSCRIPT (reference, to match shots to):\n${injectedScript}`
+            ? (directorScript
+                ? `${text}${refBlock}\n\n━━━ The NARRATION SCRIPT is ALREADY WRITTEN (below) — the system inserts it. For the audio op output EXACTLY { "op":"generate","kind":"audio","text":"__SCRIPT__" } and do NOT write the narration yourself. Write the shot gen prompts so shot k matches the part of the script spoken at that moment, in order. ━━━\nSCRIPT (reference, to match shots to):\n${directorScript}`
                 : `${text}${refBlock}`)
             : `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`,
         },

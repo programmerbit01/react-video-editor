@@ -20,8 +20,8 @@ import { TEXT_ADD_PAYLOAD } from "../constants/payload";
 import { upsertMusicBed } from "../utils/scene-audio";
 // The DIRECTOR pipeline prompts live in ONE editable place (./editor-config.ts). Imported here
 // (so PIPELINE_PROMPTS below can use them) and re-exported (so existing importers are unchanged).
-import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT } from "./editor-config";
-export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT };
+import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT } from "./editor-config";
+export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT };
 
 export interface AiEditOp {
   op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "sfx";
@@ -670,6 +670,7 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 export const PIPELINES: { id: string; label: string }[] = [
   { id: "comic_drama", label: "🎭 Comic Drama" },
   { id: "faceless_video", label: "🎬 Faceless Video" },
+  { id: "drama_v2", label: "🎬 Drama (v2)" },
 ];
 
 // VIBE presets — one-click "look & pace" shortcuts. Each is just a STYLE PHRASE injected into the LLM
@@ -689,6 +690,7 @@ export const vibeLabel = (id: string): string => VIBES.find((v) => v.id === id)?
 export const PIPELINE_PROMPTS: Record<string, string> = {
   comic_drama: COMIC_DRAMA_PROMPT,
   faceless_video: FACELESS_EDIT_PROMPT,
+  drama_v2: DRAMA_V2_PROMPT,
 };
 
 export function extractOps(text: string): OpsEnvelope | null {
