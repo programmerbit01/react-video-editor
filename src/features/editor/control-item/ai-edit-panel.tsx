@@ -29,6 +29,12 @@ import {
   PIPELINES,
   PIPELINE_PROMPTS,
 } from "../ai-edit/operations";
+import {
+  LIPSYNC_WORDS_PER_SEC,
+  LIPSYNC_DURATION_MULT,
+  LIPSYNC_MIN_SECS,
+  LIPSYNC_MAX_SECS,
+} from "../ai-edit/editor-config";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
 const withEditorBase = (path: string) => {
@@ -105,8 +111,9 @@ const TALK_RE = /\b(say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells
 const isTalkOp = (o: any) => o?.talk === true || (o?.op === "generate" && o?.kind === "video" && TALK_RE.test(String(o?.prompt || "")));
 // A talking shot's video MUST be long enough for the spoken line, else LTX cuts the voice mid-sentence.
 // The director can't count words → it emits the exact words as `op.line`; we size the clip from that.
-// LTX rule: the clip needs ~1.5× the natural speech time (words ÷ ~2.5 wps). Falls back to parsing the
-// quoted words out of the prompt if `line` is missing. Returns 0 when there's no spoken line.
+// The estimate (words-per-sec, multiplier, min/max) is CONFIGURABLE in editor-config.ts — see the
+// LIPSYNC_* constants there. Falls back to parsing the quoted words out of the prompt if `line` is
+// missing. Returns 0 when there's no spoken line.
 const spokenSecs = (op: any): number => {
   let line = String(op?.line || "").trim();
   if (!line) {
@@ -114,7 +121,9 @@ const spokenSecs = (op: any): number => {
     line = m ? m[1] : "";
   }
   const words = line ? line.trim().split(/\s+/).filter(Boolean).length : 0;
-  return words ? Math.min(16, Math.max(3, Math.ceil((words / 2.5) * 1.5))) : 0;
+  if (!words) return 0;
+  const secs = Math.ceil((words / LIPSYNC_WORDS_PER_SEC) * LIPSYNC_DURATION_MULT);
+  return Math.min(LIPSYNC_MAX_SECS, Math.max(LIPSYNC_MIN_SECS, secs));
 };
 
 // Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
@@ -1692,11 +1701,20 @@ export default function AiEditPanel() {
       return null as any;
     }).filter(Boolean) as { type: "n" | "d"; text: string }[];
     const shots = gens.filter((g: any) => (g.op === "generate" && (g.kind === "image" || g.kind === "video")) || g.op === "search");
-    const aligned = beats.length > 0 && beats.length === shots.length && beats.every((b, k) => (b.type === "d") === isTalkOp(shots[k]));
+    // The director may REORDER its ops (it put a dialogue shot first even though the screenplay opens on a
+    // NARRATOR line). So don't require positional 1:1 — only that the COUNT of each type matches, then
+    // assign shots to beats BY TYPE in screenplay order (k-th dialogue beat → k-th talking shot, etc).
+    const talkShots = shots.filter((s: any) => isTalkOp(s));
+    const brollShots = shots.filter((s: any) => !isTalkOp(s));
+    const dCount = beats.filter((b) => b.type === "d").length;
+    const nCount = beats.filter((b) => b.type === "n").length;
+    const aligned = beats.length > 0 && talkShots.length === dCount && brollShots.length === nCount;
     if (!aligned) {
-      elog(`[DRAMA v2 ASM] not 1:1 (beats=${beats.length}, shots=${shots.length}) → fallback to standard arrange`);
+      elog(`[DRAMA v2 ASM] type counts differ (beats n/d=${nCount}/${dCount}, shots broll/talk=${brollShots.length}/${talkShots.length}) → fallback to standard arrange`);
       return runBuild(i, gens, [{ op: "arrange", target: "all" }], []);
     }
+    let _ti = 0, _ni = 0;
+    const beatShots: any[] = beats.map((b) => (b.type === "d" ? talkShots[_ti++] : brollShots[_ni++]));
     elog(`[DRAMA v2 ASM] ▶ ${beats.length} beats (${beats.filter((b) => b.type === "d").length} dialogue) — per-shot, stitch in order`);
     const total = beats.length;
     s.updateAt(i, { genStatus: "🎬 Generating shots…", buildProgress: `0/${total}` });
@@ -1740,7 +1758,7 @@ export default function AiEditPanel() {
     // GENERATE each beat in parallel; the moment one is ready → add + preview + re-stitch (show it NOW).
     await Promise.all(beats.map(async (b, k) => {
       if (_stopBuild) return;
-      const g: any = shots[k];
+      const g: any = beatShots[k];
       const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
         let vUrl = "";

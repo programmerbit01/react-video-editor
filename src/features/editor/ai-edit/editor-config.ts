@@ -14,6 +14,21 @@
 // owns ALL timing + motion + transitions, because only it sees the final clip lengths and the
 // narration it has to fit them to.
 
+// ── LIP-SYNC CLIP LENGTH ─────────────────────────────────────────────────────────────────────
+// A talking (lip-sync) video MUST be long enough for the spoken line, or LTX cuts the voice off
+// mid-sentence. The director can't count words, so it emits the exact spoken words as `op.line`
+// and the editor sizes the clip from that word count. Tune the estimate HERE — it is the single
+// knob for "how long should a lip-sync clip be for N spoken words":
+//
+//   seconds = clamp( ceil( words / WORDS_PER_SEC * DURATION_MULT ), MIN, MAX )
+//
+// LTX needs ~1.5× the natural speech time (natural speech ≈ 2.5 words/sec), hence the defaults.
+// Raise DURATION_MULT if voices still get cut; lower it if clips run too long/silent at the end.
+export const LIPSYNC_WORDS_PER_SEC = 2.5;
+export const LIPSYNC_DURATION_MULT = 1.5;
+export const LIPSYNC_MIN_SECS = 3;
+export const LIPSYNC_MAX_SECS = 16;
+
 export const COMIC_DRAMA_PROMPT = `You are a MOTION-DRAMA DIRECTOR in a video editor. The user gives a story idea. Turn it into a short cinematic motion-drama episode as a JSON list of operations the editor applies to the timeline.
 
 ASPECT: read the ORIENTATION the user wants and put it as aspect_ratio on EVERY generate op — 'reels / shorts / tiktok / insta / vertical / 9:16' -> "9:16"; 'youtube / yt / landscape / wide / horizontal / 16:9' -> "16:9"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". If they don't say, default "9:16" (a vertical short). Use the SAME ratio on every shot.
