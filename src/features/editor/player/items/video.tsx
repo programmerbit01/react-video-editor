@@ -19,6 +19,15 @@ export const Video = ({
   const { fps, frame } = options;
   const { details, animations } = item;
   const playbackRate = item.playbackRate || 1;
+  // Trim → source frames, with the WHOLE clip as the default when trim is absent. AI-added clips
+  // often carry no `trim`, and the old `item.trim?.from!` then yielded startFrom=NaN — a frame the
+  // <video> can never seek to, so the player waited forever on it → the "Buffering…" that never
+  // clears while the exact same url plays instantly in a new tab. audio.tsx already defaults trim;
+  // this brings video.tsx in line.
+  const trimFromMs = item.trim?.from ?? 0;
+  const trimToMs = item.trim?.to ?? Math.max(item.display.to - item.display.from, 1);
+  const startFromFrame = Math.max(0, Math.round((trimFromMs / 1000) * fps));
+  const endAtFrame = Math.max(startFromFrame + 1, Math.round((trimToMs / 1000) * fps));
   const { animationIn, animationOut, animationTimed } = getAnimations(
     animations!,
     item,
@@ -85,8 +94,8 @@ export const Video = ({
             }}
           >
             <OffthreadVideo
-              startFrom={(item.trim?.from! / 1000) * fps}
-              endAt={(item.trim?.to! / 1000) * fps || 1 / fps}
+              startFrom={startFromFrame}
+              endAt={endAtFrame}
               playbackRate={playbackRate}
               src={resolveAssetUrl(details.src)}
               // NO crossOrigin — the preview player only PLAYS the clip (exactly like opening
