@@ -134,7 +134,7 @@ const useAiEditStore = create<AiEditState>()(
   busy: false,
   model: "",
   refImages: [],
-  pipeline: "comic_drama", // default Director = Comic Drama (the main pipeline); "" = plain Edit
+  pipeline: "drama_v2", // default Director = Drama (v2, the main pipeline); "" = plain Edit
   vibe: "",
   customVibes: [],
   customDirectors: [],
@@ -223,7 +223,13 @@ const useAiEditStore = create<AiEditState>()(
       // The panel opens by DEFAULT now — force it EXPANDED on load so a STALE persisted
       // "collapsed" state can never leave it opened but blank (header only, no chat body).
       // (isCollapsed is also dropped from partialize above, so it's no longer persisted.)
-      merge: (persisted, current) => ({ ...current, ...(persisted as any), isCollapsed: false }),
+      merge: (persisted, current) => {
+        const p = (persisted as any) || {};
+        // One-time nudge: users still on the OLD default (comic_drama) move to the NEW default
+        // (drama_v2). A deliberate non-default choice (faceless / custom / plain Edit) is kept.
+        const pipeline = p.pipeline === "comic_drama" ? "drama_v2" : (p.pipeline ?? current.pipeline);
+        return { ...current, ...p, pipeline, isCollapsed: false };
+      },
     }
   )
 );

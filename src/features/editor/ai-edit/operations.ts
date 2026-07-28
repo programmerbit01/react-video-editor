@@ -668,9 +668,9 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 
 // Shown in the AI-Edit composer dropdown (top → bottom).
 export const PIPELINES: { id: string; label: string }[] = [
+  { id: "drama_v2", label: "🎬 Drama (v2)" },
   { id: "comic_drama", label: "🎭 Comic Drama" },
   { id: "faceless_video", label: "🎬 Faceless Video" },
-  { id: "drama_v2", label: "🎬 Drama (v2)" },
 ];
 
 // VIBE presets — one-click "look & pace" shortcuts. Each is just a STYLE PHRASE injected into the LLM
