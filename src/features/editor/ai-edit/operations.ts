@@ -52,6 +52,7 @@ export interface AiEditOp {
   image_url?: string; // regenerate: source image for img2img
   images?: string[]; // multi-reference (character consistency) — forwarded as images_list
   talk?: boolean; // generate video: a TALKING / lip-sync shot (the character speaks) — the director SETS this, so we never hard-code a "says" keyword
+  line?: string; // the EXACT spoken words of a talking shot → the client sizes the clip to fit them (LTX cuts the voice if too short)
   // arrange (sequence items to build a video):
   totalMs?: number;
   startMs?: number;

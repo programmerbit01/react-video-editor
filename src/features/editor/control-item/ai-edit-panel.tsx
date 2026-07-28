@@ -103,13 +103,18 @@ function elog(...args: any[]) {
 // yells / asks / announces …, LTX lip-syncs on any of them), in case the flag is missing.
 const TALK_RE = /\b(say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|scream|screams|call|calls|reply|replies|tell|tells|announce|announces|mutter|mutters|murmur|murmurs|cry|cries|snap|snaps)\b\s*[:'"“]/i;
 const isTalkOp = (o: any) => o?.talk === true || (o?.op === "generate" && o?.kind === "video" && TALK_RE.test(String(o?.prompt || "")));
-// A talking shot's video MUST be long enough for the spoken line, else LTX cuts the voice mid-sentence
-// (the director can't count words, so it guesses a random duration). Estimate seconds from the QUOTED
-// words after the speech verb: ~2.3 words/sec + a 1s buffer, capped. 0 = no quoted line found.
-const spokenSecs = (prompt: string): number => {
-  const m = String(prompt || "").match(/\b(?:say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|announce|announces|reply|replies|tell|tells|call|calls|murmur|murmurs|mutter|mutters|cry|cries)\b[^'"“]*['"“]([^'"”]+)['"”]/i);
-  const words = m ? m[1].trim().split(/\s+/).filter(Boolean).length : 0;
-  return words ? Math.min(14, Math.max(3, Math.round(words / 2.3) + 1)) : 0;
+// A talking shot's video MUST be long enough for the spoken line, else LTX cuts the voice mid-sentence.
+// The director can't count words → it emits the exact words as `op.line`; we size the clip from that.
+// LTX rule: the clip needs ~1.5× the natural speech time (words ÷ ~2.5 wps). Falls back to parsing the
+// quoted words out of the prompt if `line` is missing. Returns 0 when there's no spoken line.
+const spokenSecs = (op: any): number => {
+  let line = String(op?.line || "").trim();
+  if (!line) {
+    const m = String(op?.prompt || "").match(/\b(?:say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|announce|announces|reply|replies|tell|tells|call|calls|murmur|murmurs|mutter|mutters|cry|cries)\b[^'"“]*['"“]([^'"”]+)['"”]/i);
+    line = m ? m[1] : "";
+  }
+  const words = line ? line.trim().split(/\s+/).filter(Boolean).length : 0;
+  return words ? Math.min(16, Math.max(3, Math.ceil((words / 2.5) * 1.5))) : 0;
 };
 
 // Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
@@ -232,7 +237,6 @@ async function _pollJobsOnce() {
     const r = await fetch(withEditorBase(`/api/jobs-status?ids=${encodeURIComponent(ids.join(","))}`), { cache: "no-store" });
     m = await r.json().catch(() => ({}));
   } catch (e) { elog(`[jobs] poll FETCH FAILED: ${e}`); m = {}; }
-  elog(`[jobs] poll ${ids.length}: ${ids.map((id) => `${id.slice(0, 8)}=${m?.[id]?.status || "?"}${m?.[id]?.progress != null ? `(${m[id].progress}%)` : ""}`).join(" ")}`);
   for (const id of ids) {
     const w = _jobWaiters.get(id);
     if (!w) continue;
@@ -1743,7 +1747,7 @@ export default function AiEditPanel() {
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
         // TALKING video → size the clip to the spoken WORDS (LTX cuts the voice if the video is too short);
         // the director's own duration guess is unreliable, so we derive it from the `says '…'` line.
-        const genSecs = (vKind === "video" && isTalkOp(g) ? spokenSecs(g.prompt) : 0) || Number(g.duration) || 5;
+        const genSecs = (vKind === "video" && isTalkOp(g) ? spokenSecs(g) : 0) || Number(g.duration) || 5;
         if (vKind === "video" && isTalkOp(g)) elog(`[DRAMA v2 ASM] beat ${k + 1} talk video → ${genSecs}s (fits the spoken line)`);
         if (g.op === "search") {
           const r = await fetch(withEditorBase(`/api/pexels?query=${encodeURIComponent(g.query || b.text)}&per_page=1`));
@@ -2421,7 +2425,7 @@ export default function AiEditPanel() {
                           // panel renders — on a slow pipe 3-4 of these + the main player all pulling
                           // at once split the bandwidth so nothing finishes ("stuck 20 min"). Loads
                           // only when the user hits play, so the clip being watched owns the pipe.
-                          <video src={pv.url} controls preload="none" className="max-h-40 w-full rounded-lg border border-border" />
+                          <video src={pv.url} poster={withEditorBase(`/api/media-poster?url=${encodeURIComponent(pv.url)}`)} controls preload="none" className="max-h-40 w-full rounded-lg border border-border bg-black" />
                         ) : (
                           <audio src={pv.url} controls preload="none" className="w-full" />
                         )}
