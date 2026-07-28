@@ -178,6 +178,27 @@ export function applyMotionBatch(
   return applied;
 }
 
+// Set explicit timeline windows on ANY items (incl. AUDIO — which `arrange` deliberately never touches).
+// Used by the Drama v2 ASSEMBLER to place per-shot narrator-voice clips at their exact, gap-free spans
+// (deterministic ordering, no relevance-matcher). One state update, so no per-item dispatch race.
+export function setItemWindows(items: { itemId: string; fromMs: number; toMs: number }[]): void {
+  const sm = getStateManagerRef();
+  const st = sm?.getState?.();
+  if (!st) return;
+  const map = { ...(st.trackItemsMap || {}) };
+  let changed = false;
+  for (const it of items || []) {
+    const item = map[it.itemId];
+    if (item) {
+      const from = Math.max(0, Math.round(it.fromMs));
+      const to = Math.max(from + 100, Math.round(it.toMs));
+      map[it.itemId] = { ...item, display: { from, to } };
+      changed = true;
+    }
+  }
+  if (changed) sm.updateState({ trackItemsMap: map }, { updateHistory: true });
+}
+
 // Apply SYNC ops (everything except `generate`, which is async and handled by the
 // panel). Returns ids created by add ops so the caller can record them for revert.
 export function applyOperations(ops: AiEditOp[]): { addedIds: string[] } {

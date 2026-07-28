@@ -11,6 +11,7 @@ import { addCaptions } from "../captions/builder";
 import {
   applyOperations,
   applyMotionBatch,
+  setItemWindows,
   addAudio,
   addImage,
   addVideo,
@@ -1624,6 +1625,94 @@ export default function AiEditPanel() {
     }
   };
 
+  // Measure a media clip's REAL length client-side (no server, no transcribe) — the drama stitch uses it.
+  const measureMediaMs = (url: string, isVideo: boolean): Promise<number> =>
+    new Promise((resolve) => {
+      try {
+        const el = document.createElement(isVideo ? "video" : "audio") as HTMLMediaElement;
+        el.preload = "metadata"; el.muted = true; el.src = url;
+        let fired = false;
+        const fin = (ms: number) => { if (!fired) { fired = true; resolve(ms); } };
+        el.onloadedmetadata = () => fin(Math.round((el.duration || 0) * 1000));
+        el.onerror = () => fin(0);
+        setTimeout(() => fin(0), 20000);
+      } catch { resolve(0); }
+    });
+
+  // ── DRAMA v2 ASSEMBLER — deterministic, ordered, NO relevance-matcher, NO transcribe ──────────────
+  // The screenplay is an ORDERED list of NARRATOR / DIALOGUE beats; the director made ONE shot per beat.
+  // We build each shot + lay them BACK-TO-BACK in that order. Each NARRATOR beat gets its OWN narrator
+  // voice clip (its length = the beat's window). Each DIALOGUE beat is a talking video carrying its OWN
+  // voice (its footage length = the window). Sequential → narrator + dialogue audio NEVER overlap (the
+  // exact bug the matcher path hit). Falls back to the standard arrange if the shots aren't 1:1 with beats.
+  const runBuildDrama = async (i: number, gens: any[], screenplay: string) => {
+    const token = getToken();
+    const beats = (screenplay || "").split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const nm = l.match(/^NARRATOR\s*:\s*(.+)$/i);
+      if (nm) return { type: "n" as const, text: nm[1].trim() };
+      const dm = l.match(/^DIALOGUE\b[^:]*:\s*(.+)$/i);
+      if (dm) return { type: "d" as const, text: dm[1].trim() };
+      return null as any;
+    }).filter(Boolean) as { type: "n" | "d"; text: string }[];
+    const shots = gens.filter((g: any) => (g.op === "generate" && (g.kind === "image" || g.kind === "video")) || g.op === "search");
+    const aligned = beats.length > 0 && beats.length === shots.length && beats.every((b, k) => (b.type === "d") === isTalkOp(shots[k]));
+    if (!aligned) {
+      elog(`[DRAMA v2 ASM] not 1:1 (beats=${beats.length}, shots=${shots.length}) → fallback to standard arrange`);
+      return runBuild(i, gens, [{ op: "arrange", target: "all" }], []);
+    }
+    elog(`[DRAMA v2 ASM] ▶ ${beats.length} beats (${beats.filter((b) => b.type === "d").length} dialogue) — per-shot, stitch in order`);
+    s.updateAt(i, { genStatus: "🎬 Building drama…" });
+    const total = beats.length;
+    let doneN = 0;
+    const bump = () => { doneN += 1; s.updateAt(i, { buildProgress: `${doneN}/${total}` }); };
+    // GENERATE each beat's VISUAL (+ narrator VOICE) in parallel; measure real lengths.
+    const built = await Promise.all(beats.map(async (b, k) => {
+      if (_stopBuild) return null;
+      const g: any = shots[k];
+      try {
+        let vUrl = "";
+        const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
+        if (g.op === "search") {
+          const r = await fetch(withEditorBase(`/api/pexels?query=${encodeURIComponent(g.query || b.text)}&per_page=1`));
+          const d = await r.json().catch(() => ({}));
+          vUrl = d?.photos?.[0]?.src || d?.videos?.[0]?.src || "";
+        }
+        if (!vUrl) {
+          const gg = await startGen({ kind: vKind, prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize, token });
+          vUrl = await waitGen(gg.id, () => {});
+        }
+        let aUrl = "";
+        if (b.type === "n") { const ag = await startGen({ kind: "audio", text: b.text, token }); aUrl = await waitGen(ag.id, () => {}); }
+        let ms = b.type === "d" ? await measureMediaMs(vUrl, true) : (aUrl ? await measureMediaMs(aUrl, false) : 0);
+        if (!ms) ms = (Number(g.duration) || 4) * 1000; // fallback length
+        bump();
+        return { type: b.type, vUrl, vKind, aUrl, ms };
+      } catch (e) { elog(`[DRAMA v2 ASM] beat ${k + 1} failed: ${e}`); bump(); return null; }
+    }));
+    if (_stopBuild) { s.updateAt(i, { genStatus: "⏹ Stopped", buildProgress: "" }); return; }
+    const okBeats = built.filter(Boolean) as any[];
+    if (!okBeats.length) { s.updateAt(i, { genStatus: "⚠️ Drama: nothing generated" }); return; }
+    // CUMULATIVE, gap-free windows — the whole point: sequential, no overlap, no matcher.
+    s.updateAt(i, { genStatus: "🧩 Stitching in order…", buildProgress: "" });
+    let cur = 0;
+    const placed = okBeats.map((bb) => { const from = cur; const to = cur + Math.max(600, bb.ms); cur = to; return { ...bb, from, to }; });
+    const vItems: { itemId: string; fromMs: number; toMs: number }[] = [];
+    const aItems: { itemId: string; fromMs: number; toMs: number }[] = [];
+    const imgIds: string[] = [];
+    for (const p of placed) {
+      const vid = await serializedAdd(p.vKind, () => (p.vKind === "video" ? addVideo(p.vUrl, "shot") : addImage(p.vUrl, "shot")));
+      if (vid) { vItems.push({ itemId: vid, fromMs: p.from, toMs: p.to }); if (p.vKind !== "video") imgIds.push(vid); }
+      if (p.type === "n" && p.aUrl) { const aid = await serializedAdd("audio", () => addAudio(p.aUrl, "narration")); if (aid) aItems.push({ itemId: aid, fromMs: p.from, toMs: p.to }); }
+      const snap = useAiEditStore.getState().messages[i]?.snapshot || {};
+      s.updateAt(i, { snapshot: { ...snap, ...(vid ? { [vid]: null } : {}) } });
+    }
+    applyOperations([{ op: "arrange", items: vItems }]);   // visuals → their windows (single track, gap-free)
+    if (aItems.length) setItemWindows(aItems);             // narrator voice clips → their exact windows
+    if (imgIds.length) applyMotionBatch(imgIds.map((id, k) => ({ id, kenBurns: k % 2 ? "zoomOut" : "zoomIn", intensity: 18, duration: 100 })));
+    s.updateAt(i, { genStatus: `✓ Drama built — ${placed.length} shots in order (${placed.filter((p) => p.type === "d").length} dialogue)`, buildProgress: "" });
+    elog(`[DRAMA v2 ASM] ✅ ${placed.length} shots, ${Math.round(cur / 1000)}s total — visuals arranged + ${aItems.length} narrator clip(s) placed`);
+  };
+
   // Captions — ensure a transcript (transcribe if we don't have one), then lay a
   // word-synced caption track under the audio. Background so the chat stays free.
   const runCaptions = async (i: number, captionOps: any[]) => {
@@ -1831,8 +1920,13 @@ export default function AiEditPanel() {
     s.updateAt(i, { applied: true, snapshot, historyId });
     s.addHistory({ id: historyId, time: now.toLocaleTimeString(), summary: m.content || "Applied edit", ops: m.ops, snapshot });
 
-    // generation (+ deferred arrange + post-effects) + captions run in the background — chat stays free
-    if (willBuild) runBuild(i, gens, arranges, postEffects);
+    // generation (+ deferred arrange + post-effects) + captions run in the background — chat stays free.
+    // DRAMA v2 uses its OWN ordered ASSEMBLER (per-shot audio, dialogue-locked, stitch in order) instead
+    // of the relevance-matcher arrange. The screenplay rides on the message as scriptText.
+    if (willBuild) {
+      if (s.pipeline === "drama_v2") runBuildDrama(i, gens, m.scriptText || "");
+      else runBuild(i, gens, arranges, postEffects);
+    }
     if (captionOps.length) runCaptions(i, captionOps);
     for (const d of directs) runDirect(i, d);
   };
