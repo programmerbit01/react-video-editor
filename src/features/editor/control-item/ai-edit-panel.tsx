@@ -407,12 +407,12 @@ async function waitForItem(id: string, timeoutMs = 45000): Promise<boolean> {
 // each add — AND waits for it to actually land — before the next one starts. Generation stays
 // parallel (the slow part); only the mutation is serialized.
 let _addChain: Promise<any> = Promise.resolve();
-function serializedAdd(label: string, doAdd: () => string): Promise<string> {
+function serializedAdd(label: string, doAdd: () => string, waitMs = 45000): Promise<string> {
   const run = _addChain.then(async () => {
     const before = Object.keys(useStore.getState().trackItemsMap || {}).length;
     const id = doAdd();
     let landed = false;
-    if (id) landed = await waitForItem(id);
+    if (id) landed = await waitForItem(id, waitMs);
     const after = Object.keys(useStore.getState().trackItemsMap || {}).length;
     elog(`[AI-Edit gen] +${label} ${id.slice(0, 6)} ${landed ? "landed" : "TIMEOUT"} — items ${before}→${after}`);
     return id;
@@ -1740,24 +1740,23 @@ export default function AiEditPanel() {
         }
         if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize }, prog);
         if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return; }
-        // NON-BLOCKING diagnostic probe — fire + LOG the browser load, never delay the add.
         elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) ${vKind} url=…${vUrl.slice(-74)}`);
-        void (async () => {
-          const t0 = Date.now();
-          const probe = await new Promise<number>((res) => {
-            if (vKind === "video") { const el = document.createElement("video"); el.preload = "metadata"; el.muted = true; el.onloadedmetadata = () => res(Date.now() - t0); el.onerror = () => res(-1); el.src = vUrl; }
-            else { const im = new Image(); im.onload = () => res(Date.now() - t0); im.onerror = () => res(-1); im.src = vUrl; }
-            setTimeout(() => res(-2), 40000);
-          });
-          elog(`[DRAMA v2 ASM] beat ${k + 1} media PROBE: ${probe === -1 ? "❌ LOAD ERROR (bad url/CORS)" : probe === -2 ? "⏱ >40s (CDN slow)" : `✓ loaded ${probe}ms`}`);
-        })();
         let aUrl = "";
         if (b.type === "n") aUrl = await genUrl("audio", { text: b.text }, prog);
-        // ADD to the timeline NOW + chat preview — the moment this shot is ready.
-        const vid = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot") : addImage(vUrl, "shot")));
-        const now = useAiEditStore.getState().messages[i];
-        s.updateAt(i, { genPreviews: [...(now?.genPreviews || []), { kind: vKind, url: vUrl }] });
-        if (!vid || !(useStore.getState().trackItemsMap || {})[vid]) { elog(`[DRAMA v2 ASM] beat ${k + 1} media didn't land — dropped from the stitch`); bump(); return; }
+        // Preview immediately; then ADD to the timeline. A FRESH R2 object can be slow to load the first
+        // time (Cloudflare origin-fetch on a cache MISS), so the load may not land on the first try —
+        // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
+        const nowP = useAiEditStore.getState().messages[i];
+        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl }] });
+        let vid = "";
+        for (let att = 0; att < 3 && !_stopBuild; att++) {
+          const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot") : addImage(vUrl, "shot")), 22000);
+          if (id && (useStore.getState().trackItemsMap || {})[id]) { vid = id; break; }
+          if (id) applyOperations([{ op: "delete", itemId: id }]); // drop the dead attempt before retrying
+          elog(`[DRAMA v2 ASM] beat ${k + 1} add try ${att + 1}/3 didn't land — CDN warming, retry`);
+          await sleep(2500);
+        }
+        if (!vid) { elog(`[DRAMA v2 ASM] beat ${k + 1} media never loaded after retries — dropped`); bump(); return; }
         let aid = "";
         if (b.type === "n" && aUrl) aid = await serializedAdd("audio", () => addAudio(aUrl, "narration"));
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
