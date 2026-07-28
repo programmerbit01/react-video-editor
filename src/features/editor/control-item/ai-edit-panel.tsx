@@ -1776,16 +1776,9 @@ export default function AiEditPanel() {
         if (edited) { baseImg = edited; elog(`[DRAMA v2 ASM] talk shot: edited the reference into the shot look → i2v from THAT`); }
         else elog(`[DRAMA v2 ASM] talk shot: ref edit failed — animating the raw reference`);
       }
-      const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, optimize: false };
+      const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, duration: spokenSecs(g) || 5, optimize: false };
       if (baseImg) vOpts.image_url = baseImg;
-      if (LIPSYNC_WITH_AUDIO && aUrl) {
-        // Ask for the MAX length — the vApp caps it to the actual TTS audio, so a LONG line (3-4 sentences)
-        // is never cut. (A capped-low spokenSecs would clamp the video BELOW the audio and truncate it.)
-        vOpts.audio = aUrl; vOpts.duration = 20;
-        elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (video capped to audio length, no cut)`);
-      } else {
-        vOpts.duration = spokenSecs(g) || 5; // text-driven: size to the estimated speech length
-      }
+      if (LIPSYNC_WITH_AUDIO && aUrl) { vOpts.audio = aUrl; elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (exact length, no hallucination)`); }
       const vUrl = await genUrl("video", vOpts, onProg);
       return { vUrl, aUrl };
     };
@@ -1856,10 +1849,7 @@ export default function AiEditPanel() {
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
         const ar = String(g.aspect_ratio || "16:9");
         const wh: [number, number] = ar === "9:16" ? [720, 1280] : ar === "1:1" ? [1024, 1024] : ar === "4:5" ? [1024, 1280] : [1280, 720];
-        // A talk video's real length = its (unknown-yet) audio, up to the 20s cap. Claim the MAX so a long
-        // dialogue window is never clamped by a too-short declared duration; the real window = the TTS length.
-        const vDurMs = (talk ? 20 : genSecs) * 1000;
-        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: vDurMs } : undefined;
+        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: genSecs * 1000 } : undefined;
         let vid = "";
         for (let att = 0; att < 3 && !_stopBuild; att++) {
           const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot", vDims) : addImage(vUrl, "shot")), 22000);
