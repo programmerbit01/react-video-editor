@@ -187,14 +187,18 @@ async function startGen(payload: Record<string, any>): Promise<{ id: string; pro
   return { id: String(data?.request_id || ""), prompt: String(data?.prompt || "") };
 }
 
-// Long-poll the job (each call waits ~35s server-side via /vapp/wait_job) until it
-// finishes. Reports live progress via onStatus. Returns the output URL.
+// Poll the job until it finishes. Reports live progress via onStatus. Returns the output URL.
+// SHORT server-side wait (8s, not 35s): if the editor is served THROUGH a proxy (e.g. :3000/editor →
+// :3001), that proxy kills a long-held connection (socket hang up / ECONNRESET → 500), so the status
+// could never be read and the gen looked "stuck" even though the job had finished on the vApp. Short
+// polls stay well under any proxy idle limit, so they get through and we see completion.
 async function waitGen(id: string, onStatus: (d: any) => void): Promise<string> {
   const deadline = Date.now() + 12 * 60 * 1000; // 12-min cap
+  let errStreak = 0;
   while (Date.now() < deadline) {
     let d: any = {};
     try {
-      const res = await fetch(withEditorBase(`/api/ai-generate?id=${encodeURIComponent(id)}&timeout=35`), {
+      const res = await fetch(withEditorBase(`/api/ai-generate?id=${encodeURIComponent(id)}&timeout=8`), {
         cache: "no-store",
       });
       d = await res.json().catch(() => ({}));
@@ -204,7 +208,10 @@ async function waitGen(id: string, onStatus: (d: any) => void): Promise<string> 
     if (d?.failed) throw new Error(d?.error || "generation failed");
     if (d?.done && d?.output_url) return d.output_url;
     onStatus(d);
-    if (d?.status === "error") await sleep(8000); // transient — brief backoff
+    // transient (proxy reset / server restart) — brief backoff, escalating a little so a truly-down
+    // poller doesn't hammer, but a flaky proxy recovers fast.
+    if (d?.status === "error") { errStreak += 1; await sleep(Math.min(6000, 1500 * errStreak)); }
+    else { errStreak = 0; await sleep(1200); }
   }
   throw new Error("timed out");
 }
