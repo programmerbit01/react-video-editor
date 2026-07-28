@@ -332,47 +332,65 @@ class Video extends Trimmable {
     };
   }
 
-  // load fallback thumbnail, resize it and cache it
+  // Fallback thumbnail: try image posters IN ORDER, first that loads wins — so the timeline clip
+  // shows a picture INSTANTLY instead of a black bar ("poster now, sharpen later"):
+  //   1. the stored poster (previewUrl — the R2 jpg, or already a server url)
+  //   2. the server poster endpoint (an on-the-fly ffmpeg frame) — reliable even when the R2 jpg
+  //      404s or gets cors-opaque-poisoned, since it's a different url the player never touches
+  //   3. last resort — a client video-frame capture (may taint/poison; best-effort)
   private async loadFallbackThumbnail() {
-    const fallbackThumbnail = this.previewUrl;
-    if (!fallbackThumbnail) {
-      await this.loadFallbackFromVideoFrame();
-      return;
+    const seen = new Set<string>();
+    const candidates = [this.previewUrl, this.buildServerPosterUrl()].filter((u) => {
+      if (!u || seen.has(u)) return false;
+      seen.add(u);
+      return true;
+    });
+    for (const url of candidates) {
+      if (await this.loadThumbFromImageUrl(url)) return;
     }
+    await this.loadFallbackFromVideoFrame();
+  }
 
-    return new Promise<void>((resolve) => {
+  // Server-side poster (one ffmpeg frame, cached) for this clip — a plain <img>, no video decode and
+  // no dependence on the R2 poster jpg existing. baseUrl comes from the editor's ?baseUrl= param.
+  private buildServerPosterUrl(): string {
+    if (typeof window === "undefined") return "";
+    if (!/^https?:\/\//i.test(this.src)) return "";
+    const baseUrl = new URLSearchParams(window.location.search).get("baseUrl") || "";
+    return baseUrl ? `${baseUrl}/vapp/media/poster?url=${encodeURIComponent(this.src)}` : "";
+  }
+
+  // Load an image url and cache it as the 40px "fallback" thumbnail. Resolves true on success, false
+  // on any failure (bad url / 404 / tainted canvas) so the caller can try the next candidate.
+  // NO cache-buster on the url — the server poster reads a `t` query as a FRAME TIMESTAMP, and a
+  // unique `t` is also a fresh CDN cache key every request → permanent miss / black. Posters are immutable.
+  private loadThumbFromImageUrl(url: string): Promise<boolean> {
+    return new Promise((resolve) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
-      // NO cache-buster on the poster url. The server poster endpoint reads `t` as the FRAME
-      // TIMESTAMP (/vapp/media/poster?url=…&t=), so `&t=Date.now()` asked ffmpeg for a frame at
-      // ~1.7e9 seconds → no such frame → 404 → black filmstrip. And on an R2 poster jpg a unique
-      // `t` is a fresh CDN cache key every request → permanent miss. Posters are immutable; as-is.
-      img.src = fallbackThumbnail;
       img.onload = () => {
-        // Create a temporary canvas to resize the image
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve();
-
-        // Calculate new width maintaining aspect ratio
-        const aspectRatio = img.width / img.height;
-        const targetHeight = 40;
-        const targetWidth = Math.round(targetHeight * aspectRatio);
-        // Set canvas size and draw resized image
-        canvas.height = targetHeight;
-        canvas.width = targetWidth;
-        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-
-        // Create new image from resized canvas
-        const resizedImg = new Image();
-        resizedImg.src = canvas.toDataURL();
-        // Update aspect ratio and cache the resized image
-        this.aspectRatio = aspectRatio;
-        this.thumbnailWidth = targetWidth;
-        this.thumbnailCache.setThumbnail("fallback", resizedImg);
-        resolve();
+        try {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return resolve(false);
+          const aspectRatio = img.width / img.height;
+          const targetHeight = 40;
+          const targetWidth = Math.max(1, Math.round(targetHeight * aspectRatio));
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+          ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+          const resizedImg = new Image();
+          resizedImg.src = canvas.toDataURL(); // throws if canvas tainted → caught → try next
+          this.aspectRatio = aspectRatio;
+          this.thumbnailWidth = targetWidth;
+          this.thumbnailCache.setThumbnail("fallback", resizedImg);
+          resolve(true);
+        } catch {
+          resolve(false);
+        }
       };
-      img.onerror = () => resolve();
+      img.onerror = () => resolve(false);
+      img.src = url;
     });
   }
 
