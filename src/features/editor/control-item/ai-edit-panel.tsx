@@ -114,12 +114,18 @@ const isTalkOp = (o: any) => o?.talk === true || (o?.op === "generate" && o?.kin
 // The estimate (words-per-sec, multiplier, min/max) is CONFIGURABLE in editor-config.ts — see the
 // LIPSYNC_* constants there. Falls back to parsing the quoted words out of the prompt if `line` is
 // missing. Returns 0 when there's no spoken line.
-const spokenSecs = (op: any): number => {
+// The EXACT spoken words of a talking shot: the director emits them as op.line; fall back to the words
+// quoted after a speech verb in the prompt. Used both to size the clip AND to speak the line as clean TTS.
+const lineOf = (op: any): string => {
   let line = String(op?.line || "").trim();
   if (!line) {
     const m = String(op?.prompt || "").match(/\b(?:say|says|said|speak|speaks|spoke|whisper|whispers|yell|yells|shout|shouts|ask|asks|announce|announces|reply|replies|tell|tells|call|calls|murmur|murmurs|mutter|mutters|cry|cries)\b[^'"“]*['"“]([^'"”]+)['"”]/i);
     line = m ? m[1] : "";
   }
+  return line;
+};
+const spokenSecs = (op: any): number => {
+  const line = lineOf(op);
   const words = line ? line.trim().split(/\s+/).filter(Boolean).length : 0;
   if (!words) return 0;
   const secs = Math.ceil((words / LIPSYNC_WORDS_PER_SEC) * LIPSYNC_DURATION_MULT);
@@ -1728,9 +1734,12 @@ export default function AiEditPanel() {
     // extra b-roll simply runs silent). Order = the director's op order (it decides the sequence).
     const narratorTexts = beats.filter((b) => b.type === "n").map((b) => b.text);
     let _nq = 0;
+    // EVERY shot gets a spoken line: a talk shot speaks its OWN dialogue (op.line) as clean TTS — the LTX
+    // video's native audio is garbled/unreliable, so we mute it and lay the TTS over it; a b-roll shot
+    // speaks the next narrator line. Both use the SAME (default) voice.
     const plan = shots.map((g: any, k: number) => {
       const talk = isTalkOp(g);
-      return { k, g, talk, type: (talk ? "d" : "n") as "n" | "d", narrText: talk ? "" : (narratorTexts[_nq++] || "") };
+      return { k, g, talk, type: (talk ? "d" : "n") as "n" | "d", narrText: talk ? lineOf(g) : (narratorTexts[_nq++] || "") };
     });
     elog(`[DRAMA v2 ASM] ▶ ${plan.length} shots (${plan.filter((p) => p.talk).length} dialogue, ${narratorTexts.length} narration line(s)) — shot-driven, stitch in order`);
     const total = plan.length;
@@ -1779,24 +1788,28 @@ export default function AiEditPanel() {
       try {
         let vUrl = "";
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
-        // TALKING video → size the clip to the spoken WORDS (LTX cuts the voice if the video is too short);
-        // the director's own duration guess is unreliable, so we derive it from the `line` (LIPSYNC_* knobs).
+        // TALKING video → make it long enough to COVER the spoken line (we overlay clean TTS and mute the
+        // video's own garbled audio, so the video just needs to last as long as the words). Derived from the
+        // `line` word-count via the LIPSYNC_* knobs.
         const genSecs = (vKind === "video" && talk ? spokenSecs(g) : 0) || Number(g.duration) || 5;
-        if (vKind === "video" && talk) elog(`[DRAMA v2 ASM] shot ${k + 1} talk video → ${genSecs}s (fits the spoken line)`);
+        if (vKind === "video" && talk) elog(`[DRAMA v2 ASM] shot ${k + 1} talk video → ${genSecs}s (covers the spoken line)`);
         if (g.op === "search") {
           // match the stock orientation to the shot's aspect (was pulling portrait stock into a 16:9 video)
           const orient = aspectOrientation(g.aspect_ratio);
           const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
-          const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(g.query || narrText || g.prompt || "")}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
+          const query = g.query || narrText || g.prompt || "";
+          const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(query)}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
           const d = await r.json().catch(() => ({}));
           vUrl = d?.photos?.[0]?.details?.src || d?.photos?.[0]?.src || d?.videos?.[0]?.details?.src || d?.videos?.[0]?.src || "";
+          elog(`[DRAMA v2 ASM] shot ${k + 1} STOCK ${vKind} search "${String(query).slice(0, 48)}"${orient ? ` [${orient}]` : ""} → ${vUrl ? "hit" : "MISS (will AI-generate)"}`);
         }
         if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
         if (!vUrl) { elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) VISUAL failed after retry — kept out`); bump(); return; }
         elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) ${vKind} url=…${vUrl.slice(-74)}`);
-        // b-roll shot with an assigned narrator line → its voiceover; talk shots carry their own voice.
+        // EVERY shot speaks its line as clean TTS — talk shots speak their dialogue (op.line), b-roll shots
+        // speak their narrator line. (Talk video's own audio is garbled → muted below, TTS plays instead.)
         let aUrl = "";
-        if (!talk && narrText) aUrl = await genUrl("audio", { text: narrText }, prog);
+        if (narrText) aUrl = await genUrl("audio", { text: narrText }, prog);
         // Preview immediately; then ADD to the timeline. A FRESH R2 object can be slow to load the first
         // time (Cloudflare origin-fetch on a cache MISS), so the load may not land on the first try —
         // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
@@ -1829,12 +1842,15 @@ export default function AiEditPanel() {
             elog(`[DRAMA v2 ASM] shot ${k + 1} audio add try ${att + 1}/3 didn't land — retry`);
             await sleep(2000);
           }
-          if (!aid) elog(`[DRAMA v2 ASM] shot ${k + 1} narrator voice never loaded — visual kept, silent`);
+          if (!aid) elog(`[DRAMA v2 ASM] shot ${k + 1} voice never loaded — visual kept, silent`);
         }
+        // A talk video's OWN audio is LTX-garbled — MUTE it so ONLY the clean TTS is heard. (If the TTS
+        // failed to land, leave the native audio as a fallback rather than a silent talking head.)
+        if (talk && aid) { applyOperations([{ op: "edit", itemId: vid, details: { volume: 0 } }]); elog(`[DRAMA v2 ASM] shot ${k + 1} muted LTX audio → clean TTS voiceover`); }
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
-        // Window = the voice length (talk video's own footage, or the narrator clip); silent b-roll uses its
-        // own footage (video) or the director's guessed seconds (image).
-        let ms = talk ? clipMs(vid) : (aid ? clipMs(aid) : (vKind === "video" ? clipMs(vid) : 0));
+        // Window = the VOICE length (the TTS clip) when there is one; else the video's own footage (silent
+        // b-roll video / talk video with no TTS), else the director's guessed seconds (silent image).
+        let ms = aid ? clipMs(aid) : (vKind === "video" ? clipMs(vid) : 0);
         if (!ms) ms = (Number(g.duration) || 4) * 1000;
         // Just DROP it on the timeline as it lands (it's already added above) — do NOT re-arrange per clip.
         // The single category-row arrange happens ONCE at the end, when everything is in.
