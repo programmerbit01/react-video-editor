@@ -126,6 +126,16 @@ const spokenSecs = (op: any): number => {
   return Math.min(LIPSYNC_MAX_SECS, Math.max(LIPSYNC_MIN_SECS, secs));
 };
 
+// Map a shot's aspect_ratio → the Pexels `orientation` filter so a stock search returns media that
+// matches the video (was pulling 9:16 portrait stock into a 16:9 project). "" = no filter.
+const aspectOrientation = (ar?: string): string => {
+  const a = String(ar || "").trim();
+  if (a === "9:16" || a === "4:5") return "portrait";
+  if (a === "1:1") return "square";
+  if (a === "16:9") return "landscape";
+  return "";
+};
+
 // Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
 // SSE fetch closes → the SERVER stops the LLM stream too (a TRUE stop). Generation jobs are NOT
 // stopped — they run in parallel on the vApp queue (good) and can't be pulled back anyway.
@@ -1146,8 +1156,9 @@ export default function AiEditPanel() {
       try {
         s.updateAt(i, { genStatus: `Searching stock ${kind}…` });
         const path = kind === "video" ? "/api/pexels-videos" : "/api/pexels";
+        const orient = aspectOrientation(g.aspect_ratio); // match stock orientation to the shot's aspect
         const res = await fetch(
-          withEditorBase(`${path}?query=${encodeURIComponent(g.query || g.prompt || "")}&per_page=${n}`)
+          withEditorBase(`${path}?query=${encodeURIComponent(g.query || g.prompt || "")}&per_page=${n}${orient ? `&orientation=${orient}` : ""}`)
         );
         const data = await res.json().catch(() => ({}));
         const results = (kind === "video" ? data.videos : data.photos) || [];
@@ -1686,37 +1697,43 @@ export default function AiEditPanel() {
   };
 
   // ── DRAMA v2 ASSEMBLER — deterministic, ordered, NO relevance-matcher, NO transcribe ──────────────
-  // The screenplay is an ORDERED list of NARRATOR / DIALOGUE beats; the director made ONE shot per beat.
-  // We build each shot + lay them BACK-TO-BACK in that order. Each NARRATOR beat gets its OWN narrator
-  // voice clip (its length = the beat's window). Each DIALOGUE beat is a talking video carrying its OWN
-  // voice (its footage length = the window). Sequential → narrator + dialogue audio NEVER overlap (the
-  // exact bug the matcher path hit). Falls back to the standard arrange if the shots aren't 1:1 with beats.
+  // SHOT-DRIVEN: we build the DIRECTOR's ordered shot-list and lay the shots BACK-TO-BACK. A talking shot
+  // is a video carrying its OWN voice (clip length fits the spoken line). A b-roll shot gets the next
+  // NARRATOR line from the screenplay as its own voice clip (best-effort — extra b-roll runs silent).
+  // Sequential → narrator + dialogue audio NEVER overlap. This path does NOT fall back to the matcher on a
+  // screenplay/shot count drift (that fallback caused the audio overlap + the missing voiceover); it only
+  // defers to the standard builder when there are literally no visual shots to place.
   const runBuildDrama = async (i: number, gens: any[], screenplay: string) => {
     const token = getToken();
+    // Parse the screenplay into NARRATOR / DIALOGUE beats — TOLERANT of tag typos the LLM sometimes emits
+    // (e.g. "DIALOGATOR:" instead of "DIALOGUE [Name]:", or "NARRATION" / "VO"): anything starting DIALOG… is
+    // dialogue, NARRATOR / NARRATION / VOICEOVER / VO is narration. We only use the NARRATOR text as the
+    // voiceover POOL below, so a mis-tag can never drop a shot.
     const beats = (screenplay || "").split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => {
-      const nm = l.match(/^NARRATOR\s*:\s*(.+)$/i);
+      const nm = l.match(/^\s*(?:NARRATOR|NARRATION|VOICE\s*-?\s*OVER|VOICEOVER|VO)\b[^:]*:\s*(.+)$/i);
       if (nm) return { type: "n" as const, text: nm[1].trim() };
-      const dm = l.match(/^DIALOGUE\b[^:]*:\s*(.+)$/i);
+      const dm = l.match(/^\s*DIALOG\w*\b(?:\s*\[[^\]]*\])?[^:]*:\s*(.+)$/i);
       if (dm) return { type: "d" as const, text: dm[1].trim() };
       return null as any;
     }).filter(Boolean) as { type: "n" | "d"; text: string }[];
     const shots = gens.filter((g: any) => (g.op === "generate" && (g.kind === "image" || g.kind === "video")) || g.op === "search");
-    // The director may REORDER its ops (it put a dialogue shot first even though the screenplay opens on a
-    // NARRATOR line). So don't require positional 1:1 — only that the COUNT of each type matches, then
-    // assign shots to beats BY TYPE in screenplay order (k-th dialogue beat → k-th talking shot, etc).
-    const talkShots = shots.filter((s: any) => isTalkOp(s));
-    const brollShots = shots.filter((s: any) => !isTalkOp(s));
-    const dCount = beats.filter((b) => b.type === "d").length;
-    const nCount = beats.filter((b) => b.type === "n").length;
-    const aligned = beats.length > 0 && talkShots.length === dCount && brollShots.length === nCount;
-    if (!aligned) {
-      elog(`[DRAMA v2 ASM] type counts differ (beats n/d=${nCount}/${dCount}, shots broll/talk=${brollShots.length}/${talkShots.length}) → fallback to standard arrange`);
+    if (!shots.length) { // nothing visual — let the standard builder handle whatever ops exist
+      elog(`[DRAMA v2 ASM] no visual shots → standard build`);
       return runBuild(i, gens, [{ op: "arrange", target: "all" }], []);
     }
-    let _ti = 0, _ni = 0;
-    const beatShots: any[] = beats.map((b) => (b.type === "d" ? talkShots[_ti++] : brollShots[_ni++]));
-    elog(`[DRAMA v2 ASM] ▶ ${beats.length} beats (${beats.filter((b) => b.type === "d").length} dialogue) — per-shot, stitch in order`);
-    const total = beats.length;
+    // SHOT-DRIVEN + tolerant: the video IS the DIRECTOR's ordered shot-list. NEVER fall back to the slow
+    // transcribe/matcher path just because the screenplay's line count drifted from the shot count — that
+    // fallback is exactly what caused the audio overlap + the missing voiceover. Talk shots carry their OWN
+    // voice (op.line); each b-roll shot pulls the NEXT narrator line as its voiceover (best-effort — any
+    // extra b-roll simply runs silent). Order = the director's op order (it decides the sequence).
+    const narratorTexts = beats.filter((b) => b.type === "n").map((b) => b.text);
+    let _nq = 0;
+    const plan = shots.map((g: any, k: number) => {
+      const talk = isTalkOp(g);
+      return { k, g, talk, type: (talk ? "d" : "n") as "n" | "d", narrText: talk ? "" : (narratorTexts[_nq++] || "") };
+    });
+    elog(`[DRAMA v2 ASM] ▶ ${plan.length} shots (${plan.filter((p) => p.talk).length} dialogue, ${narratorTexts.length} narration line(s)) — shot-driven, stitch in order`);
+    const total = plan.length;
     s.updateAt(i, { genStatus: "🎬 Generating shots…", buildProgress: `0/${total}` });
     let doneN = 0;
     const bump = () => { doneN += 1; s.updateAt(i, { buildProgress: `${doneN}/${total}` }); };
@@ -1755,33 +1772,36 @@ export default function AiEditPanel() {
       if (aItems.length) placeAudioClips(aItems);                             // narrator voice → ONE narration row
       if (imgIds.length) applyMotionBatch(imgIds.map((id, kk) => ({ id, kenBurns: kk % 2 ? "zoomOut" : "zoomIn", intensity: 18, duration: 100 })));
     };
-    // GENERATE each beat in parallel; the moment one is ready → add + preview + re-stitch (show it NOW).
-    await Promise.all(beats.map(async (b, k) => {
+    // GENERATE each shot in parallel; the moment one is ready → add + preview + re-stitch (show it NOW).
+    await Promise.all(plan.map(async ({ k, g, talk, type, narrText }) => {
       if (_stopBuild) return;
-      const g: any = beatShots[k];
       const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
         let vUrl = "";
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
         // TALKING video → size the clip to the spoken WORDS (LTX cuts the voice if the video is too short);
-        // the director's own duration guess is unreliable, so we derive it from the `says '…'` line.
-        const genSecs = (vKind === "video" && isTalkOp(g) ? spokenSecs(g) : 0) || Number(g.duration) || 5;
-        if (vKind === "video" && isTalkOp(g)) elog(`[DRAMA v2 ASM] beat ${k + 1} talk video → ${genSecs}s (fits the spoken line)`);
+        // the director's own duration guess is unreliable, so we derive it from the `line` (LIPSYNC_* knobs).
+        const genSecs = (vKind === "video" && talk ? spokenSecs(g) : 0) || Number(g.duration) || 5;
+        if (vKind === "video" && talk) elog(`[DRAMA v2 ASM] shot ${k + 1} talk video → ${genSecs}s (fits the spoken line)`);
         if (g.op === "search") {
-          const r = await fetch(withEditorBase(`/api/pexels?query=${encodeURIComponent(g.query || b.text)}&per_page=1`));
+          // match the stock orientation to the shot's aspect (was pulling portrait stock into a 16:9 video)
+          const orient = aspectOrientation(g.aspect_ratio);
+          const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
+          const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(g.query || narrText || g.prompt || "")}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
           const d = await r.json().catch(() => ({}));
-          vUrl = d?.photos?.[0]?.src || d?.videos?.[0]?.src || "";
+          vUrl = d?.photos?.[0]?.details?.src || d?.photos?.[0]?.src || d?.videos?.[0]?.details?.src || d?.videos?.[0]?.src || "";
         }
         if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
-        if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return; }
-        elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) ${vKind} url=…${vUrl.slice(-74)}`);
+        if (!vUrl) { elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) VISUAL failed after retry — kept out`); bump(); return; }
+        elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) ${vKind} url=…${vUrl.slice(-74)}`);
+        // b-roll shot with an assigned narrator line → its voiceover; talk shots carry their own voice.
         let aUrl = "";
-        if (b.type === "n") aUrl = await genUrl("audio", { text: b.text }, prog);
+        if (!talk && narrText) aUrl = await genUrl("audio", { text: narrText }, prog);
         // Preview immediately; then ADD to the timeline. A FRESH R2 object can be slow to load the first
         // time (Cloudflare origin-fetch on a cache MISS), so the load may not land on the first try —
         // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
         const nowP = useAiEditStore.getState().messages[i];
-        // show the shot's VISUAL and (for a narrator beat) its VOICE clip in the chat, both as they land
+        // show the shot's VISUAL and (when narrated) its VOICE clip in the chat, both as they land
         s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl }] : [])] });
         // KNOWN dims (from the aspect-ratio + requested seconds) let designcombo add the VIDEO WITHOUT
         // downloading it first → instant land; the pixels stream in the player afterward. Videos are the
@@ -1794,21 +1814,34 @@ export default function AiEditPanel() {
           const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot", vDims) : addImage(vUrl, "shot")), 22000);
           if (id && (useStore.getState().trackItemsMap || {})[id]) { vid = id; break; }
           if (id) applyOperations([{ op: "delete", itemId: id }]); // drop the dead attempt before retrying
-          elog(`[DRAMA v2 ASM] beat ${k + 1} add try ${att + 1}/3 didn't land — CDN warming, retry`);
+          elog(`[DRAMA v2 ASM] shot ${k + 1} add try ${att + 1}/3 didn't land — CDN warming, retry`);
           await sleep(2500);
         }
-        if (!vid) { elog(`[DRAMA v2 ASM] beat ${k + 1} media never loaded after retries — dropped`); bump(); return; }
+        if (!vid) { elog(`[DRAMA v2 ASM] shot ${k + 1} media never loaded after retries — dropped`); bump(); return; }
+        // ADD the narrator voice — RETRY like the video. A fresh R2 mp3 can be slow to load the first time,
+        // which was silently DROPPING the voiceover off the timeline ("ab audio hi ni timeline me").
         let aid = "";
-        if (b.type === "n" && aUrl) aid = await serializedAdd("audio", () => addAudio(aUrl, "narration"));
+        if (aUrl) {
+          for (let att = 0; att < 3 && !_stopBuild; att++) {
+            const id = await serializedAdd("audio", () => addAudio(aUrl, "narration"), 22000);
+            if (id && (useStore.getState().trackItemsMap || {})[id]) { aid = id; break; }
+            if (id) applyOperations([{ op: "delete", itemId: id }]);
+            elog(`[DRAMA v2 ASM] shot ${k + 1} audio add try ${att + 1}/3 didn't land — retry`);
+            await sleep(2000);
+          }
+          if (!aid) elog(`[DRAMA v2 ASM] shot ${k + 1} narrator voice never loaded — visual kept, silent`);
+        }
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
-        let ms = b.type === "d" ? clipMs(vid) : (aid ? clipMs(aid) : 0);
+        // Window = the voice length (talk video's own footage, or the narrator clip); silent b-roll uses its
+        // own footage (video) or the director's guessed seconds (image).
+        let ms = talk ? clipMs(vid) : (aid ? clipMs(aid) : (vKind === "video" ? clipMs(vid) : 0));
         if (!ms) ms = (Number(g.duration) || 4) * 1000;
         // Just DROP it on the timeline as it lands (it's already added above) — do NOT re-arrange per clip.
         // The single category-row arrange happens ONCE at the end, when everything is in.
-        landed.push({ k, type: b.type, vid, aid, vKind, ms });
+        landed.push({ k, type, vid, aid, vKind, ms });
         bump();
         s.updateAt(i, { genStatus: `🎬 ${landed.length}/${total} shots ready…` });
-      } catch (e) { elog(`[DRAMA v2 ASM] beat ${k + 1} failed: ${e}`); bump(); }
+      } catch (e) { elog(`[DRAMA v2 ASM] shot ${k + 1} failed: ${e}`); bump(); }
     }));
     if (_stopBuild) { s.updateAt(i, { genStatus: "⏹ Stopped", buildProgress: "" }); return; }
     if (!landed.length) { s.updateAt(i, { genStatus: "⚠️ Drama: nothing landed — check the PROBE logs (url/CORS)" }); return; }

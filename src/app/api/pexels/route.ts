@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
   const query = searchParams.get("query");
   const page = searchParams.get("page") || "1";
   const perPage = searchParams.get("per_page") || "20";
+  const orientation = searchParams.get("orientation"); // landscape | portrait | square — match the shot's aspect
 
   const apiKey = PEXELS_API_KEY || process.env.PEXELS_API_KEY;
 
@@ -61,9 +62,14 @@ export async function GET(request: NextRequest) {
   try {
     let url: string;
 
+    const orientationParam =
+      orientation && ["landscape", "portrait", "square"].includes(orientation)
+        ? `&orientation=${orientation}`
+        : "";
+
     if (query) {
       // Search for specific images
-      url = `${PEXELS_API_BASE_URL}/search?query=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`;
+      url = `${PEXELS_API_BASE_URL}/search?query=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}${orientationParam}`;
     } else {
       // Get curated images
       url = `${PEXELS_API_BASE_URL}/curated?page=${page}&per_page=${perPage}`;

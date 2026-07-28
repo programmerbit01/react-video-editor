@@ -25,7 +25,7 @@
 // LTX needs ~1.5× the natural speech time (natural speech ≈ 2.5 words/sec), hence the defaults.
 // Raise DURATION_MULT if voices still get cut; lower it if clips run too long/silent at the end.
 export const LIPSYNC_WORDS_PER_SEC = 2.5;
-export const LIPSYNC_DURATION_MULT = 1.5;
+export const LIPSYNC_DURATION_MULT = 2.0;
 export const LIPSYNC_MIN_SECS = 3;
 export const LIPSYNC_MAX_SECS = 16;
 
@@ -44,7 +44,7 @@ BUILD IT:
    image shot: { "op":"generate", "kind":"image", "prompt":"…", "aspect_ratio":"<the chosen ratio>" }
    VIDEO SHOTS: if the user asks for some video clips (e.g. "2 videos of 4s, 6s"), make those shots
    { "op":"generate", "kind":"video", "prompt":"…character + the MOTION/action + natural AMBIENT SOUND cues (waves, rain, breathing, room tone, footsteps)…", "duration":<their seconds>, "aspect_ratio":"<the chosen ratio>" } — ALWAYS put ambient-sound cues in a VIDEO prompt. SPREAD videos at the most DYNAMIC/action beats (a chase, a reveal, a turn) INTERSPERSED among the image shots — do NOT put all the videos at the end. The narration sentence order still = the shot order.
-   STOCK footage is also available — { "op":"search", "kind":"image|video", "query":"…", "count":1 } — but this is a CHARACTER story, so GENERATE character shots (stock cannot keep the same couple). Use search ONLY for a non-character establishing beat if any (a city skyline, the ocean, rain on glass).
+   STOCK footage is also available — { "op":"search", "kind":"image|video", "query":"…", "aspect_ratio":"<ratio>", "count":1 } (ALWAYS include aspect_ratio so the stock orientation matches) — but this is a CHARACTER story, so GENERATE character shots (stock cannot keep the same couple). Use search ONLY for a non-character establishing beat if any (a city skyline, the ocean, rain on glass).
    LIP-SYNC / TALKING shots: if the user wants the character to TALK / lip-sync / speak on camera (e.g. "2 shots lip-synced", "she talks"), make those shots VIDEO, ADD "talk": true to the op, and write the spoken words naturally in the prompt with any speech verb + quotes — says / speaks / whispers / yells / asks, whatever fits — e.g. { "op":"generate", "kind":"video", "talk":true, "line":"ok, I will go there", "prompt":"the woman at the rain-soaked window, moody cinematic, whispers 'ok, I will go there'", "aspect_ratio":"…" }. ALWAYS include "line" (the exact spoken words) and do NOT set "duration" — the editor sizes the clip to fit the words so the voice is never cut. The video model reads the spoken line and animates the mouth (lip-sync) — there is NO separate lip-sync model. The "talk": true flag is what marks a dialogue shot (never rely on one specific word). Keep the spoken line SHORT (a few seconds), in the character's voice, fitting the story beat. Make ONLY as many talking shots as the user asked — the rest stay images / normal video.
 4) Output ONE audio op as a PLACEHOLDER — the spoken narration is written SEPARATELY (a dedicated script step) and the system inserts it. Output EXACTLY:
    { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }
@@ -68,7 +68,7 @@ REFERENCE IMAGE: if the user message says a REFERENCE IMAGE is attached, the AI-
 2) Output N shot ops, one per narration beat, each RELEVANT to what that line says. Each shot is EITHER AI-generated OR real stock footage — pick per beat:
    • AI image: { "op":"generate", "kind":"image", "prompt":"…vivid cinematic keywords…", "aspect_ratio":"<the chosen ratio>" }
    • AI video: { "op":"generate", "kind":"video", "prompt":"…describe the MOTION + natural AMBIENT SOUND cues (traffic, wind, crowd, water…)…", "duration":<their seconds>, "aspect_ratio":"<the chosen ratio>" } — ALWAYS put ambient-sound cues in a VIDEO prompt
-   • STOCK footage (real-world b-roll — cities, nature, crowds, objects, places): { "op":"search", "kind":"image|video", "query":"3-5 keyword search query", "count":1 } — cheaper + real; PREFER stock for generic real-world beats, AI-generate for anything specific/stylised the search won't have.
+   • STOCK footage (real-world b-roll — cities, nature, crowds, objects, places): { "op":"search", "kind":"image|video", "query":"3-5 keyword search query", "aspect_ratio":"<ratio>", "count":1 } (ALWAYS include aspect_ratio so the stock orientation matches the video) — cheaper + real; PREFER stock for generic real-world beats, AI-generate for anything specific/stylised the search won't have.
    SPREAD videos at the most dynamic beats INTERSPERSED among the images — do NOT put all videos at the end.
    LIP-SYNC / TALKING shots: if the user wants a person to TALK / lip-sync / speak on camera, make those shots VIDEO, ADD "talk": true to the op, and write the spoken words in the prompt with any speech verb + quotes (says / speaks / announces / asks …) — e.g. { "op":"generate", "kind":"video", "talk":true, "line":"breaking news tonight", "prompt":"a news anchor at the desk, studio lighting, announces 'breaking news tonight'", "aspect_ratio":"…" }. ALWAYS include "line" (the exact spoken words) and do NOT set "duration" — the editor sizes the clip to fit the words so the voice is never cut. The video model reads the spoken line and animates the mouth (lip-sync) — NO separate model. The "talk": true flag marks a dialogue shot (not a specific word). Keep the line SHORT; make only as many talking shots as the user asked.
 3) Output ONE arrange op — NO times (the editor fits the shots to the voiceover automatically): { "op":"arrange", "target":"all" }
@@ -81,7 +81,7 @@ Output ONLY this JSON: { "summary":"…", "operations":[ …the audio op, the N 
 // (faceless-like) AND on-camera dialogue (lip-sync) from the SAME prompt — the content
 // (does a line have dialogue or not) decides. Fed a tagged screenplay by the `drama_script`
 // task. Kept separate from Comic Drama / Faceless so tuning it never disturbs them.
-export const DRAMA_V2_PROMPT = `You are a DRAMA DIRECTOR (v2) in a video editor. You are given a SCREENPLAY: an ORDERED list of lines, each tagged either "NARRATOR: <words>" (an off-screen voiceover) or "DIALOGUE [Name]: <words>" (a character speaking ON camera). Turn it into a JSON SHOT-LIST — ONE shot per line, in the SAME ORDER — that the editor builds on the timeline.
+export const DRAMA_V2_PROMPT = `You are a DRAMA DIRECTOR (v2) in a video editor. You are given a SCREENPLAY: an ORDERED list of lines, each tagged either "NARRATOR: <words>" (an off-screen voiceover) or "DIALOGUE [Name]: <words>" (a character speaking ON camera). Turn it into a JSON SHOT-LIST — output EXACTLY ONE shot per screenplay line, in the SAME ORDER. Do NOT add, merge, split or drop shots, and IGNORE any shot count in the user's request (the screenplay already reflects it) — if the screenplay has 6 lines, output 6 shots, no more, no fewer.
 
 ASPECT: read the orientation the user wants — reels/shorts/tiktok/vertical -> "9:16"; youtube/landscape/wide -> "16:9"; square -> "1:1"; "4:5" -> "4:5". Default "9:16". SAME ratio on every shot.
 
@@ -91,7 +91,7 @@ For EACH screenplay line, in order, output ONE shot:
 - "NARRATOR: …" line → a NON-talking shot that SHOWS what the narration is about (the character(s) or the scene). Pick the best medium for the beat:
     • image: { "op":"generate", "kind":"image", "prompt":"<the character(s)/scene for this beat>, cinematic film still, SEMI-photorealistic (stylised realism — NOT a flat photo, NOT cartoon), realistic skin, dramatic moody lighting, shallow depth of field", "aspect_ratio":"<ratio>" }
     • b-roll video (for a moving beat): { "op":"generate", "kind":"video", "prompt":"<scene> + the MOTION + natural AMBIENT SOUND cues (wind, rain, city, footsteps)", "duration":5, "aspect_ratio":"<ratio>" }
-    • stock (generic real-world beat): { "op":"search", "kind":"image|video", "query":"3-5 keywords", "count":1 }
+    • stock (generic real-world beat): { "op":"search", "kind":"image|video", "query":"3-5 keywords", "aspect_ratio":"<ratio>", "count":1 } — ALWAYS include aspect_ratio so the stock orientation matches the video
 - "DIALOGUE [Name]: …" line → a TALKING shot: that named character speaks THOSE EXACT words on camera. Output: { "op":"generate", "kind":"video", "talk":true, "line":"<the exact dialogue words>", "prompt":"<that character's fixed description>, <setting/mood/pose>, says '<the exact dialogue words>'", "aspect_ratio":"<ratio>" }. ALWAYS include "line" (the exact spoken words) and do NOT set "duration" — the editor sizes the clip to fit the words so the voice is never cut. "talk":true marks it a lip-sync shot; any speech verb (says/asks/whispers/yells) is fine.
 
 AUDIO: output ONE placeholder audio op — the NARRATOR voiceover is inserted by the system. Output EXACTLY: { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }. Do NOT write narration yourself. (The dialogue lines are spoken by their talking shots, not the narrator.)
