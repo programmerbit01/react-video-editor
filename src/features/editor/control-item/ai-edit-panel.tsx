@@ -202,18 +202,19 @@ async function _pollJobsOnce() {
   try {
     const r = await fetch(withEditorBase(`/api/jobs-status?ids=${encodeURIComponent(ids.join(","))}`), { cache: "no-store" });
     m = await r.json().catch(() => ({}));
-  } catch { m = {}; }
+  } catch (e) { elog(`[jobs] poll FETCH FAILED: ${e}`); m = {}; }
+  elog(`[jobs] poll ${ids.length}: ${ids.map((id) => `${id.slice(0, 8)}=${m?.[id]?.status || "?"}${m?.[id]?.progress != null ? `(${m[id].progress}%)` : ""}`).join(" ")}`);
   for (const id of ids) {
     const w = _jobWaiters.get(id);
     if (!w) continue;
     const d = m?.[id];
     if (d) {
       const st = String(d.status || "").toLowerCase();
-      if (st === "completed" && d.output_url) { _jobWaiters.delete(id); w.resolve(String(d.output_url)); continue; }
-      if (st === "failed" || st === "cancelled") { _jobWaiters.delete(id); w.reject(new Error(d.error || "generation failed")); continue; }
+      if (st === "completed" && d.output_url) { _jobWaiters.delete(id); elog(`[jobs] ✓ ${id.slice(0, 8)} DONE → …${String(d.output_url).slice(-46)}`); w.resolve(String(d.output_url)); continue; }
+      if (st === "failed" || st === "cancelled") { _jobWaiters.delete(id); elog(`[jobs] ✖ ${id.slice(0, 8)} ${st}: ${d.error || ""}`); w.reject(new Error(d.error || "generation failed")); continue; }
       w.onStatus(d);
     }
-    if (Date.now() - w.started > 12 * 60 * 1000) { _jobWaiters.delete(id); w.reject(new Error("timed out")); } // 12-min safety
+    if (Date.now() - w.started > 12 * 60 * 1000) { _jobWaiters.delete(id); elog(`[jobs] ⏱ ${id.slice(0, 8)} 12-min timeout`); w.reject(new Error("timed out")); } // 12-min safety
   }
 }
 function waitGen(id: string, onStatus: (d: any) => void): Promise<string> {
@@ -1698,6 +1699,16 @@ export default function AiEditPanel() {
         }
         if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: g.duration, optimize: g.optimize }, prog);
         if (!vUrl) { elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) VISUAL failed after retry — kept out`); bump(); return null; }
+        // DIAGNOSTIC PROBE: can the browser actually LOAD this media? (the timeline add needs it) — logs
+        // the url + load time so a "never landed" is pinpointed: bad url vs slow CDN vs designcombo.
+        elog(`[DRAMA v2 ASM] beat ${k + 1} (${b.type}) ${vKind} url=…${vUrl.slice(-74)}`);
+        const probe = await new Promise<number>((res) => {
+          const t0 = Date.now();
+          if (vKind === "video") { const el = document.createElement("video"); el.preload = "metadata"; el.muted = true; el.onloadedmetadata = () => res(Date.now() - t0); el.onerror = () => res(-1); el.src = vUrl; }
+          else { const im = new Image(); im.onload = () => res(Date.now() - t0); im.onerror = () => res(-1); im.src = vUrl; }
+          setTimeout(() => res(-2), 40000);
+        });
+        elog(`[DRAMA v2 ASM] beat ${k + 1} media PROBE: ${probe === -1 ? "❌ LOAD ERROR (bad url / CORS / CDN)" : probe === -2 ? "⏱ >40s TIMEOUT (CDN too slow)" : `✓ loaded ${probe}ms`}`);
         let aUrl = "";
         if (b.type === "n") aUrl = await genUrl("audio", { text: b.text }, prog);
         // add to the timeline NOW (incremental) + preview in the chat — like the old build felt
