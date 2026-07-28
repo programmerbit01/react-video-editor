@@ -367,7 +367,7 @@ async function llmTextStream(
 // voiceover), so addImage/addAudio return an id BEFORE the item exists. Awaiting this inside runGen
 // makes Promise.all(gens) resolve only once every generated clip is truly on the timeline — so the
 // arrange never runs early on a half-built timeline (the "2/4 clips, waiting for audio" bug).
-async function waitForItem(id: string, timeoutMs = 90000): Promise<boolean> {
+async function waitForItem(id: string, timeoutMs = 45000): Promise<boolean> {
   if (!id) return false;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -1701,14 +1701,15 @@ export default function AiEditPanel() {
         let aUrl = "";
         if (b.type === "n") aUrl = await genUrl("audio", { text: b.text }, prog);
         // add to the timeline NOW (incremental) + preview in the chat — like the old build felt
+        // add the VISUAL; if the media fails to LOAD into the timeline (a network blip → the item never
+        // lands), still show the chat preview but DROP this beat from the stitch — never block on it.
         const vid = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot") : addImage(vUrl, "shot")));
+        const now = useAiEditStore.getState().messages[i];
+        s.updateAt(i, { genPreviews: [...(now?.genPreviews || []), { kind: vKind, url: vUrl }] });
+        if (!vid || !(useStore.getState().trackItemsMap || {})[vid]) { elog(`[DRAMA v2 ASM] beat ${k + 1} media didn't land (network?) — dropped from the stitch`); bump(); return null; }
         let aid = "";
         if (b.type === "n" && aUrl) aid = await serializedAdd("audio", () => addAudio(aUrl, "narration"));
-        const now = useAiEditStore.getState().messages[i];
-        s.updateAt(i, {
-          genPreviews: [...(now?.genPreviews || []), { kind: vKind, url: vUrl }],
-          snapshot: { ...(now?.snapshot || {}), ...(vid ? { [vid]: null } : {}), ...(aid ? { [aid]: null } : {}) },
-        });
+        s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
         let ms = b.type === "d" ? clipMs(vid) : (aid ? clipMs(aid) : 0); // real length from the just-added item
         if (!ms) ms = (Number(g.duration) || 4) * 1000; // fallback length
         bump();
