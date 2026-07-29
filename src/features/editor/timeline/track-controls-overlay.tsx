@@ -34,8 +34,9 @@ const canMute = (type: string) =>
   type === "radialAudioBars" || type === "waveAudioBars" || type === "hillAudioBars";
 
 export default function TrackControlsOverlay() {
-  const { tracks } = useStore();
+  const { tracks, activeIds } = useStore();
   const { hidden, muted, toggleHidden, toggleMuted } = useTrackVisibilityStore();
+  const selected = new Set(activeIds);
 
   // cumY starts at CANVAS_TRACK_OFFSET_Y to match canvas internal track positioning
   let cumY = CANVAS_TRACK_OFFSET_Y;
@@ -50,52 +51,81 @@ export default function TrackControlsOverlay() {
 
         if (!isMediaTrack(track.type as string)) return null;
 
+        const ids = (track.items as string[] | undefined) ?? [];
         const isHidden = !!hidden[track.id];
         const isMuted = !!muted[track.id];
         const showMute = canMute(track.type as string);
+        // Row is "selected" when every clip in it is in the current selection (whole-row select).
+        const isSelected = ids.length > 0 && ids.every((id) => selected.has(id));
 
+        // Left status bar — selection wins, then muted (red), then hidden (yellow).
+        const barClass = isSelected
+          ? "bg-emerald-400"
+          : isMuted
+            ? "bg-red-400"
+            : isHidden
+              ? "bg-yellow-400"
+              : "";
+
+        // Click the left strip to select the whole row; click again to clear it.
         const selectRow = () => {
-          const ids = (track.items as string[] | undefined) ?? [];
-          if (ids.length) dispatch(LAYER_SELECTION, { payload: { activeIds: [...ids] } });
+          if (!ids.length) return;
+          dispatch(LAYER_SELECTION, { payload: { activeIds: isSelected ? [] : [...ids] } });
         };
 
         return (
-          <div
-            key={track.id}
-            onClick={selectRow}
-            title="Select whole row"
-            className="absolute left-0 flex cursor-pointer items-center justify-center gap-1 pointer-events-auto"
-            style={{ top, height: h, width: "32px" }}
-          >
-            {showMute ? (
+          <div key={track.id}>
+            {/* Full-width row highlight — pointer-events-none so it never eats a click on a clip.
+                Selected row gets an accent wash + inset ring so you can SEE the whole row is picked;
+                a colored left edge marks selected / muted / hidden even at a glance. */}
+            <div
+              className={`absolute left-0 right-0 pointer-events-none transition-colors ${
+                isSelected ? "bg-emerald-400/10 ring-1 ring-inset ring-emerald-400/40" : ""
+              }`}
+              style={{ top, height: h }}
+            >
+              {barClass && <span className={`absolute left-0 top-0 h-full w-[3px] ${barClass}`} />}
+            </div>
+
+            {/* Left controls — clicking here (not on a button) selects the whole row. */}
+            <div
+              onClick={selectRow}
+              title={isSelected ? "Row selected — click to clear" : "Click to select whole row"}
+              className={`absolute left-0 flex cursor-pointer items-center justify-center gap-1 pointer-events-auto rounded-sm transition-colors hover:bg-white/10 ${
+                isSelected ? "bg-emerald-400/20" : ""
+              }`}
+              style={{ top, height: h, width: "32px" }}
+            >
+              {showMute ? (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); toggleMuted(track.id); }}
+                  title={isMuted ? "Unmute" : "Mute"}
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
+                    isMuted
+                      ? "bg-red-500/20 text-red-400"
+                      : "text-zinc-600 hover:bg-zinc-700 hover:text-zinc-200"
+                  }`}
+                >
+                  {isMuted ? <VolumeX size={10} /> : <Volume2 size={10} />}
+                </button>
+              ) : (
+                <span className="h-4 w-4 shrink-0" />
+              )}
+
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); toggleMuted(track.id); }}
-                title={isMuted ? "Unmute" : "Mute"}
+                onClick={(e) => { e.stopPropagation(); toggleHidden(track.id); }}
+                title={isHidden ? "Show" : "Hide"}
                 className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
-                  isMuted
-                    ? "bg-red-500/20 text-red-400"
+                  isHidden
+                    ? "bg-yellow-500/20 text-yellow-400"
                     : "text-zinc-600 hover:bg-zinc-700 hover:text-zinc-200"
                 }`}
               >
-                {isMuted ? <VolumeX size={10} /> : <Volume2 size={10} />}
+                {isHidden ? <EyeOff size={10} /> : <Eye size={10} />}
               </button>
-            ) : (
-              <span className="h-4 w-4 shrink-0" />
-            )}
-
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); toggleHidden(track.id); }}
-              title={isHidden ? "Show" : "Hide"}
-              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
-                isHidden
-                  ? "bg-yellow-500/20 text-yellow-400"
-                  : "text-zinc-600 hover:bg-zinc-700 hover:text-zinc-200"
-              }`}
-            >
-              {isHidden ? <EyeOff size={10} /> : <Eye size={10} />}
-            </button>
+            </div>
           </div>
         );
       })}
