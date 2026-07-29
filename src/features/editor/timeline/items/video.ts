@@ -599,6 +599,33 @@ class Video extends Trimmable {
     this.drawTranscriptZone(ctx);
     this.drawAnimationIndicators(ctx);
     this.updateSelected(ctx);
+    this.drawVideoBadge(ctx);
+  }
+
+  // A small play badge marks this clip as a VIDEO on the timeline, so it reads instantly as distinct
+  // from an image clip (which draws NO badge — so the badge's presence/absence is the whole tell).
+  // Timeline-only: this fabric canvas is never part of the export (that's server ffmpeg), so it can
+  // never leak into a rendered video.
+  private drawVideoBadge(ctx: CanvasRenderingContext2D) {
+    const bw = 18, bh = 13, pad = 4;
+    if (this.width < bw + pad * 2) return; // clip too narrow — skip so the badge never overflows it
+    ctx.save();
+    ctx.translate(-this.width / 2, -this.height / 2);
+    // dark rounded pill, top-left
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.beginPath();
+    ctx.roundRect(pad, pad, bw, bh, 3);
+    ctx.fill();
+    // white play triangle centred in the pill
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    const cx = pad + bw / 2, cy = pad + bh / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 3, cy - 3.5);
+    ctx.lineTo(cx - 3, cy + 3.5);
+    ctx.lineTo(cx + 4, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   private drawTranscriptZone(ctx: CanvasRenderingContext2D) {
