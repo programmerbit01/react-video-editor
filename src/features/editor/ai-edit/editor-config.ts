@@ -120,4 +120,6 @@ REFERENCE IMAGE: if the user message says a REFERENCE IMAGE is attached, the cha
 
 STYLE: honor any style the user names (noir, romantic, gritty…) in the prompts + pacing. Do NOT add motion/transition/effect ops (the arranger owns those). MUSIC: add { "op":"musicbed" } ONLY if the user explicitly asks.
 
-Output ONLY this JSON: { "summary":"<one line>", "operations":[ …ONE shot per screenplay line in order (talking shots for DIALOGUE, image/b-roll/stock for NARRATOR), then the audio op, then the arrange op… ] }`;
+SUMMARY = TRANSPARENCY: the "summary" is shown to the user as your reply, so if the user did NOT specify something you had to choose (the speaking length, the shot count, the style/pacing), SAY SO in it in plain words — e.g. "You didn't set a speaking length, so I kept the dialogue short (change it by asking)." That way the user knows it was a deliberate default, not a glitch. If everything was specified, just summarise what you made.
+
+Output ONLY this JSON: { "summary":"<one line — what you made + any default you assumed for something the user left unspecified>", "operations":[ …ONE shot per screenplay line in order (talking shots for DIALOGUE, image/b-roll/stock for NARRATOR), then the audio op, then the arrange op… ] }`;
