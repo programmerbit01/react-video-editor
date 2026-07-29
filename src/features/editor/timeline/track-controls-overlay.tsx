@@ -1,5 +1,7 @@
 import { Eye, EyeOff, Volume2, VolumeX } from "lucide-react";
 import { ITrack } from "@designcombo/types";
+import { dispatch } from "@designcombo/events";
+import { LAYER_SELECTION } from "@designcombo/state";
 import useStore from "../store/use-store";
 import useTrackVisibilityStore from "../store/use-track-visibility-store";
 
@@ -52,16 +54,23 @@ export default function TrackControlsOverlay() {
         const isMuted = !!muted[track.id];
         const showMute = canMute(track.type as string);
 
+        const selectRow = () => {
+          const ids = (track.items as string[] | undefined) ?? [];
+          if (ids.length) dispatch(LAYER_SELECTION, { payload: { activeIds: [...ids] } });
+        };
+
         return (
           <div
             key={track.id}
-            className="absolute left-0 flex items-center justify-center gap-1 pointer-events-auto"
+            onClick={selectRow}
+            title="Select whole row"
+            className="absolute left-0 flex cursor-pointer items-center justify-center gap-1 pointer-events-auto"
             style={{ top, height: h, width: "32px" }}
           >
             {showMute ? (
               <button
                 type="button"
-                onClick={() => toggleMuted(track.id)}
+                onClick={(e) => { e.stopPropagation(); toggleMuted(track.id); }}
                 title={isMuted ? "Unmute" : "Mute"}
                 className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
                   isMuted
@@ -77,7 +86,7 @@ export default function TrackControlsOverlay() {
 
             <button
               type="button"
-              onClick={() => toggleHidden(track.id)}
+              onClick={(e) => { e.stopPropagation(); toggleHidden(track.id); }}
               title={isHidden ? "Show" : "Hide"}
               className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
                 isHidden
