@@ -37,11 +37,12 @@ export const LIPSYNC_MAX_SECS = 16;
 // the `says '…'` text using its OWN (garbled) audio, which we then mute + overlay the TTS on top of. Kept
 // as a fallback so the old behaviour is one flag away.
 export const LIPSYNC_WITH_AUDIO = true;
-// The ceiling (seconds) for a SINGLE continuous lip-sync clip. The video model caps the clip to the
-// actual TTS audio anyway, so this is just the max that lets a LONG spoken line (several sentences) play
-// as ONE continuous take instead of being truncated. The old 20s cap was cramming a long line's audio
-// into a 20s video → garbled/hallucinated output; the model itself handles ~40s fine. Raise/lower here.
-export const LIPSYNC_VIDEO_MAX_SECS = 60;
+// TIMELINE dims hint (seconds) for a talking clip — NOT a generation cap. The real video length is set
+// server-side from the TTS audio (the pipeline sends duration:0 → the vApp makes video = audio + 1s), and
+// the clip's actual window comes from the audio itself. This value is only the duration we DECLARE to the
+// timeline engine so it can land the video instantly (skip the download) without ever clamping the window;
+// keep it comfortably above the longest dialogue you expect (a very long line beyond this could truncate).
+export const LIPSYNC_VIDEO_MAX_SECS = 120;
 // i2v with a reference image: the video model ANIMATES its input image AS-IS — it does NOT restyle it from
 // the prompt. So to get this shot's outfit/scene, first EDIT the reference into that look (Flux edit) and
 // feed THAT image to i2v, not the raw reference (otherwise every shot just animates the original photo).

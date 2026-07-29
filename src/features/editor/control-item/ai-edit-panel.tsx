@@ -1780,10 +1780,10 @@ export default function AiEditPanel() {
       const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, optimize: false };
       if (baseImg) vOpts.image_url = baseImg;
       if (LIPSYNC_WITH_AUDIO && aUrl) {
-        // Ask for the ceiling — the vApp caps the video to the ACTUAL TTS audio length, so a long line plays
-        // as ONE continuous take. (A short cap crammed a long audio into a short video → the garbled output.)
-        vOpts.audio = aUrl; vOpts.duration = LIPSYNC_VIDEO_MAX_SECS;
-        elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (video = full audio length, up to ${LIPSYNC_VIDEO_MAX_SECS}s)`);
+        // duration:0 → the vApp sizes the video to the REAL TTS audio (+1s tail) — no client/LLM guess of
+        // length, so a long line always plays as ONE continuous take and is never cut or crammed.
+        vOpts.audio = aUrl; vOpts.duration = 0;
+        elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (duration:0 → vApp sets video = audio + 1s)`);
       } else {
         vOpts.duration = spokenSecs(g) || 5;
       }
