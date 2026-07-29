@@ -36,6 +36,7 @@ import {
   LIPSYNC_MAX_SECS,
   LIPSYNC_WITH_AUDIO,
   LIPSYNC_I2V_EDIT_FIRST,
+  LIPSYNC_VIDEO_MAX_SECS,
 } from "../ai-edit/editor-config";
 
 // Editor is served under Next basePath `/editor` — its API is /editor/api/*.
@@ -1776,9 +1777,16 @@ export default function AiEditPanel() {
         if (edited) { baseImg = edited; elog(`[DRAMA v2 ASM] talk shot: edited the reference into the shot look → i2v from THAT`); }
         else elog(`[DRAMA v2 ASM] talk shot: ref edit failed — animating the raw reference`);
       }
-      const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, duration: spokenSecs(g) || 5, optimize: false };
+      const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, optimize: false };
       if (baseImg) vOpts.image_url = baseImg;
-      if (LIPSYNC_WITH_AUDIO && aUrl) { vOpts.audio = aUrl; elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (exact length, no hallucination)`); }
+      if (LIPSYNC_WITH_AUDIO && aUrl) {
+        // Ask for the ceiling — the vApp caps the video to the ACTUAL TTS audio length, so a long line plays
+        // as ONE continuous take. (A short cap crammed a long audio into a short video → the garbled output.)
+        vOpts.audio = aUrl; vOpts.duration = LIPSYNC_VIDEO_MAX_SECS;
+        elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (video = full audio length, up to ${LIPSYNC_VIDEO_MAX_SECS}s)`);
+      } else {
+        vOpts.duration = spokenSecs(g) || 5;
+      }
       const vUrl = await genUrl("video", vOpts, onProg);
       return { vUrl, aUrl };
     };
@@ -1849,7 +1857,10 @@ export default function AiEditPanel() {
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
         const ar = String(g.aspect_ratio || "16:9");
         const wh: [number, number] = ar === "9:16" ? [720, 1280] : ar === "1:1" ? [1024, 1024] : ar === "4:5" ? [1024, 1280] : [1280, 720];
-        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: genSecs * 1000 } : undefined;
+        // A talk video's real length = its (unknown-yet) TTS audio, up to the ceiling. Claim the ceiling so a
+        // long dialogue window is never clamped by a too-short declared duration; the real window = clipMs(aid).
+        const vDurMs = (talk ? LIPSYNC_VIDEO_MAX_SECS : genSecs) * 1000;
+        const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: vDurMs } : undefined;
         let vid = "";
         for (let att = 0; att < 3 && !_stopBuild; att++) {
           const id = await serializedAdd(vKind, () => (vKind === "video" ? addVideo(vUrl, "shot", vDims) : addImage(vUrl, "shot")), 22000);

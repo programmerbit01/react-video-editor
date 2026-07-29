@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { LIPSYNC_VIDEO_MAX_SECS } from "@/features/editor/ai-edit/editor-config";
 
 // Editor-owned media generation (audio / image / video). Two steps so the client
 // can run it in the BACKGROUND without blocking the chat:
@@ -75,10 +76,14 @@ export async function POST(request: Request) {
         ...(images.length ? { images_list: images, image_url: images[0] } : body.image_url ? { image_url: body.image_url } : {}),
       };
     } else if (kind === "video") {
+      // A LIP-SYNC request (audio present) may run long — the vApp caps the video to the audio anyway, so
+      // allow up to the lip-sync ceiling. A PLAIN video stays capped short. The old flat 20s cap crammed a
+      // long line's audio into a 20s video → garbled/hallucinated output.
+      const maxDur = body.audio ? LIPSYNC_VIDEO_MAX_SECS : 20;
       reqBody = {
         prompt: genPrompt,
         aspect_ratio: body.aspect_ratio || "16:9",
-        duration: Math.min(20, Number(body.duration) || 5),
+        duration: Math.min(maxDur, Number(body.duration) || 5),
         ...(body.image_url ? { image_url: body.image_url } : {}), // image-to-video (animate a still → LTX i2v)
         // LIP-SYNC: an audio URL → the vApp runs the video model in talking mode (it auto-sets
         // audio_prompt_type "A" and CAPS the video length to the audio), so the character lip-syncs to THIS
