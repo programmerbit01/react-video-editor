@@ -34,6 +34,7 @@ Video Editor application using React and TypeScript.
 - 👀 Real-time Preview: See immediate previews of edits.
 - 💬 Captions: word‑synced captions from a transcript, generated and styled in one panel — see [CAPTIONS.md](CAPTIONS.md).
 - ✦ AI Edit: turn natural‑language prompts into timeline edits + generated/stock media + script‑synced captions — see [AI_EDIT.md](AI_EDIT.md).
+- ✂️ Manual editing: select a whole row from a gutter checkbox, apply one panel edit/effect to **every** selected clip, and preview stock sounds before adding — see the **Timeline editing** section below.
 
 > **Working on captions?** Read [CAPTIONS.md](CAPTIONS.md) first. Captions had three UIs and three
 > builders; the copies disagreeing with each other caused every caption bug we've chased. That doc
@@ -624,6 +625,73 @@ Use a Zustand `alignmentReady` flag. While `false`, show a subtle "syncing…" i
 | `src/features/editor/navbar.tsx` | Script button + save/load integration |
 
 ---
+
+---
+
+## ✂️ Timeline editing — selection, multi-edit & sound preview
+
+Three manual-editing conveniences that live around the timeline gutter and the control panel.
+
+---
+
+### Whole-row select — pick every clip in a track at once
+
+`LAYER_SELECTION` sets the store's `activeIds`. Each **media** row's left gutter
+(`timeline/track-controls-overlay.tsx`) leads with a **checkbox** — click it to select / clear that
+track's clips in one go, sitting right next to the mute and hide toggles. A selected row gets an
+emerald wash + inset ring (and a colored left bar: emerald selected / red muted / yellow hidden) so
+it's obvious what's picked. Clicking the empty gutter still selects too; the checkbox just makes it
+discoverable, and it `stopPropagation`s so it doesn't double-toggle against the gutter's own click.
+
+The gutter is `TIMELINE_OFFSET_X_LARGE` (**56px**, in `constants/constants.ts`) so all three icons
+fit; that width flows through `useTimelineOffsetX` to the ruler, playhead and canvas, which stay
+aligned. Only media rows (video / audio / image) get the gutter — **text and caption rows don't**;
+multi-select those by marquee-dragging across the canvas.
+
+---
+
+### Multi-edit — one panel change applies to every selected clip
+
+`control-item.tsx` treats a selection as **multi** only when every `activeId` shares a type (a
+whole-row select is, by definition, one type). It then shows a **"N clips · edits apply to all"**
+banner and renders that type's panel for a representative clip. Every control handler calls
+`editSelected(changes)` (`control-item/edit-selected.ts`), which fans one change object across
+**all** `activeIds` in a **single** `EDIT_OBJECT` payload `{ [id]: changes, … }`.
+
+One dispatch, not N, on purpose: `@designcombo/state`'s reducer is async and only the last dispatch
+sticks, so N separate `EDIT_OBJECT`s would clobber each other (the same trap `applyMotionBatch` in
+the AI-Edit pipeline already avoids). A single-clip selection is just a one-entry payload, so
+single-edit behaviour is byte-for-byte unchanged.
+
+Converted panels: `basic-audio`, `basic-video`, `basic-image`, `basic-text`, and
+`common/animations` + `common/animation-duration` (opacity, volume, speed, borders, shadow, Ken
+Burns, quick fade, animation in/out/loop durations). The floating custom-animation picker still
+targets a single clip.
+
+---
+
+### Sound preview — hear a stock track before adding it
+
+Each **Stock → Sound** result (`menu-item/archival.tsx`, `SoundRow`) leads with a **play / pause**
+button. A single module-level `<audio>` singleton + `useSyncExternalStore` means only one preview
+plays at a time — starting another stops the previous, and every row reflects whether it's the one
+playing (emerald + pause icon). `stopPropagation` keeps the preview click from dropping the sound
+onto the timeline (the ♪ / ⚡ buttons and a row click still add to Music bed / SFX / timeline), and
+leaving the Stock tab stops playback. Preview only — **no `crossOrigin`**, so cross-origin audio
+plays (matching the no-CORS display rule used elsewhere).
+
+---
+
+### Relevant files
+
+| File | Role |
+|------|------|
+| `src/features/editor/timeline/track-controls-overlay.tsx` | Per-row gutter — select checkbox + mute / hide, row highlight |
+| `src/features/editor/constants/constants.ts` | `TIMELINE_OFFSET_X_LARGE` — gutter width sized for the three controls |
+| `src/features/editor/control-item/control-item.tsx` | Multi-vs-single selection, "edits apply to all" banner |
+| `src/features/editor/control-item/edit-selected.ts` | `editSelected` — fan one change across all `activeIds` in a single dispatch |
+| `src/features/editor/control-item/basic-{audio,video,image,text}.tsx`, `common/animations.tsx`, `common/animation-duration.tsx` | Panel handlers routed through `editSelected` |
+| `src/features/editor/menu-item/archival.tsx` | Stock search; `SoundRow` preview player |
 
 ---
 
