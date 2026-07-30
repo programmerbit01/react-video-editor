@@ -148,6 +148,17 @@ const aspectOrientation = (ar?: string): string => {
   return "";
 };
 
+// Strip a stray aspect-ratio token (16:9 / 9:16 / …) the director sometimes echoes INTO the prompt text —
+// the aspect belongs in its own field, and in a talk shot it lands right before the appended `says "…"`
+// ("…moody lighting, 16:9 says …"). Removes the token + tidies leftover commas/spaces.
+const stripAspect = (p: string): string =>
+  String(p || "")
+    .replace(/\s*,?\s*\b(?:16:9|9:16|1:1|4:5|21:9|4:3|3:4|2:3|3:2)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s*,\s*,/g, ", ")
+    .replace(/[\s,]+$/g, "")
+    .trim();
+
 // COVER-FIT a just-added item to the WHOLE canvas so off-ratio media (stock is never exactly 16:9/9:16)
 // FILLS the frame instead of letterboxing — no manual fitting. The player already renders media with
 // object-fit:cover, so we only size the item's box to the canvas + reset its crop/position.
@@ -1830,10 +1841,11 @@ export default function AiEditPanel() {
       const vOpts: any = { aspect_ratio: g.aspect_ratio, optimize: false };
       if (baseImg) vOpts.image_url = baseImg;
       let durSecs = 0;
+      const scene = stripAspect(g.prompt); // never let a stray "16:9" the director echoed sit in the prompt
       if (audioDriven && aUrl) {
         // AUDIO-driven (ref/flag): the director's prompt is the scene (words come from the TTS). duration:0
         // → the vApp sizes the video to the audio (+1s tail). Video is muted + the TTS overlaid downstream.
-        vOpts.prompt = g.prompt;
+        vOpts.prompt = scene;
         vOpts.audio = aUrl; vOpts.duration = 0;
         elog(`[DRAMA v2 ASM] talk shot: AUDIO-driven lip-sync (${hasRef ? "ref i2v" : "flag"}) → video = audio length`);
       } else {
@@ -1841,7 +1853,7 @@ export default function AiEditPanel() {
         // that freedom is why we chose t2v); we only guarantee the REQUIRED format by appending the spoken
         // line in the `says "…"` form. Length = word estimate (LIPSYNC_WPM). Uses LTX's own audio (not muted).
         durSecs = spokenSecs(g) || 5;
-        vOpts.prompt = line ? `${g.prompt} says "${line}"` : g.prompt;
+        vOpts.prompt = line ? `${scene} says "${line}"` : scene;
         vOpts.duration = durSecs;
         elog(`[DRAMA v2 ASM] talk shot: T2V lip-sync (no audio, free camera) → LTX speaks the line itself, ~${durSecs}s`);
       }
