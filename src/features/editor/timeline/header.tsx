@@ -109,7 +109,12 @@ const Header = () => {
   const currentFrame = useCurrentPlayerFrame(playerRef);
 
   const doActiveDelete = () => {
-    dispatch(LAYER_DELETE);
+    // Delete the CURRENT selection by id, not whatever the fabric canvas has selected. A whole-row
+    // select (from the track controls) sets the store's activeIds WITHOUT forming a fabric selection,
+    // so a bare dispatch(LAYER_DELETE) deleted nothing. Passing trackItemIds deletes exactly what's
+    // selected — one clip or a whole row — same result for a normal single click.
+    if (activeIds.length) dispatch(LAYER_DELETE, { payload: { trackItemIds: activeIds } });
+    else dispatch(LAYER_DELETE);
   };
 
   const doActiveSplit = () => {

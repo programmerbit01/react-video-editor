@@ -79,8 +79,8 @@ export default function TrackControlsOverlay() {
                 Selected row gets an accent wash + inset ring so you can SEE the whole row is picked;
                 a colored left edge marks selected / muted / hidden even at a glance. */}
             <div
-              className={`absolute left-0 right-0 pointer-events-none transition-colors ${
-                isSelected ? "bg-emerald-400/10 ring-1 ring-inset ring-emerald-400/40" : ""
+              className={`absolute left-0 right-0 pointer-events-none rounded-md transition-colors ${
+                isSelected ? "bg-emerald-400/15 ring-2 ring-inset ring-emerald-400/70" : ""
               }`}
               style={{ top, height: h }}
             >
