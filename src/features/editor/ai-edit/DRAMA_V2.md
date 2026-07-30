@@ -5,8 +5,16 @@ changes the *engine* — whether characters speak on camera:
 
 | Dropdown | id | Engine | Use |
 |---|---|---|---|
+| 🎙️ **Non-lip-sync video** *(default)* | `faceless_video` | full-audio transcription + image-prompt relevance **MATCHER** (`runBuild` + `match_shots`) | narration over images / b-roll, no talking heads — the common case |
 | 🎬 **Lip-sync video (Drama v2)** | `drama_v2` | per-shot screenplay **ASSEMBLER** (`runBuildDrama`) | characters speak on camera (+ narration) |
-| 🎙️ **Non-lip-sync video** | `faceless_video` | full-audio transcription + image-prompt relevance **MATCHER** (`runBuild` + `match_shots`) | narration over images / b-roll, no talking heads |
+
+The dropdown opens with a **"Video type · how it builds"** heading; **hovering** an item reveals a one-line
+description of what that engine does. `faceless_video` is the **default** director (store `pipeline` default).
+
+> **Video prompts = natural sentences.** Every generated-VIDEO prompt (both pipelines: talk shots and
+> b-roll) is written as **plain full sentences**, never a comma-separated keyword/tag list — tag-piles
+> break LTX (garbled lip-sync, weak motion). The directors are instructed accordingly. Image prompts
+> (Flux) are unaffected.
 
 They are genuinely **different engines** — never merged. **Style** (drama / comic / noir / documentary…)
 is a **prompt** concern, not a category. (Plain "Edit" mode and the old `comic_drama` prompt still exist

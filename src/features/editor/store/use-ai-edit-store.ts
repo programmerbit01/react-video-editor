@@ -134,7 +134,7 @@ const useAiEditStore = create<AiEditState>()(
   busy: false,
   model: "",
   refImages: [],
-  pipeline: "drama_v2", // default Director = Drama (v2, the main pipeline); "" = plain Edit
+  pipeline: "faceless_video", // default Director = Non-lip-sync (the common case); "" = plain Edit
   vibe: "",
   customVibes: [],
   customDirectors: [],

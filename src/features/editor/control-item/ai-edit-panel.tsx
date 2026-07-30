@@ -672,8 +672,8 @@ export default function AiEditPanel() {
   const [dirOverrides, setDirOverrides] = useState<Record<string, { label?: string; systemPrompt: string }>>({});
   const [isAdmin, setIsAdmin] = useState(false);
   const builtinLabel = (id: string, def: string) => dirOverrides[id]?.label || def;
-  const BUILTIN_DIRECTORS = [...PIPELINES, { id: "", label: "✦ Edit / General" }].map((d) => ({ id: d.id, label: builtinLabel(d.id, d.label) }));
-  const allDirectors = [...BUILTIN_DIRECTORS, ...s.customDirectors.map((d) => ({ id: d.id, label: d.label }))];
+  const BUILTIN_DIRECTORS = [...PIPELINES, { id: "", label: "✦ Edit / General", desc: "Plain assistant — edit the current timeline (trim, effects, captions…). No auto-generation." }].map((d: any) => ({ id: d.id, label: builtinLabel(d.id, d.label), desc: d.desc as string | undefined }));
+  const allDirectors = [...BUILTIN_DIRECTORS, ...s.customDirectors.map((d) => ({ id: d.id, label: d.label, desc: undefined as string | undefined }))];
   const curDirector = allDirectors.find((d) => d.id === s.pipeline) || allDirectors[0];
   // Resolve the system prompt for a director id: admin override → built-in pipeline prompt →
   // custom prompt → the plain Edit assistant.
@@ -2781,19 +2781,24 @@ export default function AiEditPanel() {
                       <span className="opacity-60">▾</span>
                     </button>
                     {dirMenuOpen && (
-                      <div className="absolute bottom-full right-0 z-50 mb-1 max-h-[300px] w-[240px] overflow-auto rounded-lg border border-border bg-background p-1 shadow-xl">
+                      <div className="absolute bottom-full right-0 z-50 mb-1 max-h-[340px] w-[248px] overflow-auto rounded-lg border border-border bg-background p-1 shadow-xl">
+                        <div className="px-2 pb-1 pt-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Video type · how it builds</div>
                         {allDirectors.map((d) => {
                           const custom = d.id.startsWith("dir_");
                           const overridden = !custom && !!dirOverrides[d.id];
                           return (
-                            <div key={d.id || "edit"} className="group flex items-center rounded-md hover:bg-muted/60">
+                            <div key={d.id || "edit"} className="group flex items-start rounded-md hover:bg-muted/60">
                               <button
                                 type="button"
+                                title={d.desc || undefined}
                                 onClick={() => { s.setPipeline(d.id); setDirMenuOpen(false); setDirEdit(null); setDirErr(""); }}
-                                className={`flex-1 truncate px-2 py-1 text-left text-[11px] ${s.pipeline === d.id ? "font-medium text-violet-600 dark:text-violet-300" : "text-foreground"}`}
+                                className={`flex-1 px-2 py-1 text-left text-[11px] ${s.pipeline === d.id ? "font-medium text-violet-600 dark:text-violet-300" : "text-foreground"}`}
                               >
-                                {d.label}
-                                {overridden && <span title="edited by admin (global)" className="ml-1 text-[8px] text-violet-500">✎</span>}
+                                <span className="flex items-center gap-1 truncate">
+                                  {d.label}
+                                  {overridden && <span title="edited by admin (global)" className="text-[8px] text-violet-500">✎</span>}
+                                </span>
+                                {d.desc && <span className="mt-0.5 hidden leading-snug text-[9px] text-muted-foreground group-hover:block">{d.desc}</span>}
                               </button>
                               {custom ? (
                                 <>

@@ -727,9 +727,9 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 // changes the engine: whether characters speak on camera (lip-sync) or not. These are DIFFERENT engines —
 // Lip-sync = the Drama v2 per-shot screenplay ASSEMBLER; Non-lip-sync = the full-audio transcription +
 // image-prompt relevance MATCHER (faceless). Style (drama/comic/noir…) is a PROMPT concern, not a category.
-export const PIPELINES: { id: string; label: string }[] = [
-  { id: "drama_v2", label: "🎬 Lip-sync" },
-  { id: "faceless_video", label: "🎙️ Non-lip-sync" },
+export const PIPELINES: { id: string; label: string; desc?: string }[] = [
+  { id: "faceless_video", label: "🎙️ Non-lip-sync", desc: "Narration over images & b-roll — no talking heads. Full-audio voiceover, then visuals matched to it. The common case." },
+  { id: "drama_v2", label: "🎬 Lip-sync", desc: "Characters speak ON camera (+ narration). Per-shot screenplay: each talking shot is its own generated video with matching lips." },
 ];
 
 // VIBE presets — one-click "look & pace" shortcuts. Each is just a STYLE PHRASE injected into the LLM
