@@ -60,6 +60,9 @@ const getBaseUrl = () => {
 // direction ("punchy zoom-ins", "slow holds", "hard cuts") into match_shots, which decides motion +
 // pacing. Without this, only the Vibe preset drives motion; with it, the PROMPT drives it too.
 let _lastPipelineRequest = "";
+// The pipeline's aspect ratio (all shots share ONE), captured from the plan's generate ops — used as a
+// FALLBACK for stock `search` ops the director forgot to tag, so stock orientation always matches the video.
+let _pipeAspect = "";
 
 // Pipeline generation mode. false = the director writes FULL cinematic prompts that go straight to the
 // model (best quality — what worked). true = "director writes SHORT hints → global optimizer expands
@@ -1059,6 +1062,7 @@ export default function AiEditPanel() {
           elog(`[REF IMAGE] ${refSrcs.length} reference(s) → image shots${lip ? ` + ${lip} lip-sync video(s) i2v from ref` : ""} (${s.refImages.length ? "attached" : "selected"})`);
         }
         elog(`[PLAN] "${env.summary || ""}" → ${env.operations.length} ops: ${env.operations.map((o: any) => o.op + (o.kind ? `(${o.kind})` : "")).join(", ")}`);
+        _pipeAspect = String(env.operations.find((o: any) => o.aspect_ratio)?.aspect_ratio || ""); // fallback for search ops missing aspect_ratio
         const aud = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
         if (aud?.text) elog(`[SCRIPT] ${String(aud.text).replace(/\s+/g, " ")}`);
         env.operations.filter((o: any) => o.op === "generate" && o.kind !== "audio").forEach((o: any, k: number) => elog(`[GEN PROMPT ${k + 1}] ${o.kind}${o.image_url ? " (i2v-ref)" : o.images ? ` (edit ×${o.images.length})` : ""}: ${String(o.prompt || o.text || "").replace(/\s+/g, " ")}`));
@@ -1165,7 +1169,7 @@ export default function AiEditPanel() {
       try {
         s.updateAt(i, { genStatus: `Searching stock ${kind}…` });
         const path = kind === "video" ? "/api/pexels-videos" : "/api/pexels";
-        const orient = aspectOrientation(g.aspect_ratio); // match stock orientation to the shot's aspect
+        const orient = aspectOrientation(g.aspect_ratio || _pipeAspect); // match stock orientation to the shot's aspect (fallback = the pipeline aspect)
         const res = await fetch(
           withEditorBase(`${path}?query=${encodeURIComponent(g.query || g.prompt || "")}&per_page=${n}${orient ? `&orientation=${orient}` : ""}`)
         );
@@ -1847,8 +1851,9 @@ export default function AiEditPanel() {
         } else {
           // B-ROLL shot → stock search or a plain gen, then its narrator voiceover.
           if (g.op === "search") {
-            // match the stock orientation to the shot's aspect (was pulling portrait stock into a 16:9 video)
-            const orient = aspectOrientation(g.aspect_ratio);
+            // match the stock orientation to the shot's aspect (fallback = the pipeline aspect if the
+            // director forgot to tag the search op) — was pulling portrait stock into a 16:9 video.
+            const orient = aspectOrientation(g.aspect_ratio || _pipeAspect);
             const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
             const query = g.query || narrText || g.prompt || "";
             const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(query)}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
