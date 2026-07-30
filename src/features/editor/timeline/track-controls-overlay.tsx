@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Volume2, VolumeX } from "lucide-react";
+import { Eye, EyeOff, Square, SquareCheck, Volume2, VolumeX } from "lucide-react";
 import { ITrack } from "@designcombo/types";
 import { dispatch } from "@designcombo/events";
 import { LAYER_SELECTION } from "@designcombo/state";
@@ -87,15 +87,29 @@ export default function TrackControlsOverlay() {
               {barClass && <span className={`absolute left-0 top-0 h-full w-[3px] ${barClass}`} />}
             </div>
 
-            {/* Left controls — clicking here (not on a button) selects the whole row. */}
+            {/* Left controls — a dedicated select icon (plus mute / hide). Clicking the empty
+                strip also selects the row, but the explicit checkbox makes it discoverable. */}
             <div
               onClick={selectRow}
               title={isSelected ? "Row selected — click to clear" : "Click to select whole row"}
               className={`absolute left-0 flex cursor-pointer items-center justify-center gap-1 pointer-events-auto rounded-sm transition-colors hover:bg-white/10 ${
                 isSelected ? "bg-emerald-400/20" : ""
               }`}
-              style={{ top, height: h, width: "32px" }}
+              style={{ top, height: h, width: "56px" }}
             >
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); selectRow(); }}
+                title={isSelected ? "Row selected — click to clear" : "Select whole row"}
+                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
+                  isSelected
+                    ? "bg-emerald-500/25 text-emerald-300"
+                    : "text-zinc-600 hover:bg-zinc-700 hover:text-zinc-200"
+                }`}
+              >
+                {isSelected ? <SquareCheck size={11} /> : <Square size={11} />}
+              </button>
+
               {showMute ? (
                 <button
                   type="button"
