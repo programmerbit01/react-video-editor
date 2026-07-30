@@ -148,6 +148,16 @@ const aspectOrientation = (ar?: string): string => {
   return "";
 };
 
+// COVER-FIT a just-added item to the WHOLE canvas so off-ratio media (stock is never exactly 16:9/9:16)
+// FILLS the frame instead of letterboxing — no manual fitting. The player already renders media with
+// object-fit:cover, so we only size the item's box to the canvas + reset its crop/position.
+const coverFitToCanvas = (itemId: string): void => {
+  if (!itemId) return;
+  const sz: any = (useStore.getState() as any)?.size || { width: 1920, height: 1080 };
+  const w = Number(sz.width) || 1920, h = Number(sz.height) || 1080;
+  applyOperations([{ op: "edit", itemId, details: { top: 0, left: 0, width: w, height: h, crop: { x: 0, y: 0, width: w, height: h } } }]);
+};
+
 // Abort controller for the LLM chat request (the streaming plan). The Stop button aborts it → the
 // SSE fetch closes → the SERVER stops the LLM stream too (a TRUE stop). Generation jobs are NOT
 // stopped — they run in parallel on the vApp queue (good) and can't be pulled back anyway.
@@ -1194,6 +1204,7 @@ export default function AiEditPanel() {
           const desc = String(results[k]?.alt || results[k]?.title || results[k]?.description || g.query || "stock").slice(0, 120);
           // serialized add (+ waits for landing) so concurrent stock adds never clobber each other
           const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, desc) : addImage(src, desc)));
+          coverFitToCanvas(nid); // off-ratio stock → fill the 16:9/9:16 frame (no letterbox, no manual fit)
           snap[nid] = null;
           previews.push({ kind, url: results[k]?.preview || src, prompt: `🔎 stock: ${String(g.query || g.prompt || desc).slice(0, 80)}` });
           added++;
@@ -1901,6 +1912,7 @@ export default function AiEditPanel() {
           await sleep(2500);
         }
         if (!vid) { elog(`[DRAMA v2 ASM] shot ${k + 1} media never loaded after retries — dropped`); bump(); return; }
+        if (g.op === "search") coverFitToCanvas(vid); // off-ratio stock → fill the frame (no letterbox)
         // ADD the narrator voice — RETRY like the video. A fresh R2 mp3 can be slow to load the first time,
         // which was silently DROPPING the voiceover off the timeline ("ab audio hi ni timeline me").
         let aid = "";
