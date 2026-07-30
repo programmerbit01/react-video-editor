@@ -78,12 +78,14 @@ export async function POST(request: Request) {
       // LIP-SYNC (audio present): pass the client's duration THROUGH — the pipeline sends 0, which the vApp
       // reads as "size the video to the real TTS audio + 1s tail" (it probes the audio server-side). So the
       // length is never a client/LLM guess and a long line is never cut or crammed. A PLAIN video (no audio)
-      // stays capped short (20s) with a 5s default.
+      // stays capped short (5s default) but allowed up to 30s so a long T2V lip-sync line (sized to a
+      // natural speaking rate) reaches its full length — b-roll requests small values so this doesn't affect
+      // them.
       const dur = Number(body.duration);
       reqBody = {
         prompt: genPrompt,
         aspect_ratio: body.aspect_ratio || "16:9",
-        duration: body.audio ? (Number.isFinite(dur) ? dur : 0) : Math.min(20, dur || 5),
+        duration: body.audio ? (Number.isFinite(dur) ? dur : 0) : Math.min(30, dur || 5),
         ...(body.image_url ? { image_url: body.image_url } : {}), // image-to-video (animate a still → LTX i2v)
         // LIP-SYNC: an audio URL → the vApp runs the video model in talking mode (it auto-sets
         // audio_prompt_type "A" and sizes the video to the audio), so the character lip-syncs to THIS

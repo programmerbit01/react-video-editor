@@ -14,20 +14,20 @@
 // owns ALL timing + motion + transitions, because only it sees the final clip lengths and the
 // narration it has to fit them to.
 
-// ── LIP-SYNC CLIP LENGTH ─────────────────────────────────────────────────────────────────────
-// A talking (lip-sync) video MUST be long enough for the spoken line, or LTX cuts the voice off
-// mid-sentence. The director can't count words, so it emits the exact spoken words as `op.line`
-// and the editor sizes the clip from that word count. Tune the estimate HERE — it is the single
-// knob for "how long should a lip-sync clip be for N spoken words":
+// ── LIP-SYNC CLIP LENGTH (T2V) ───────────────────────────────────────────────────────────────
+// KEY MECHANISM: in T2V LTX FITS the spoken words into whatever duration we give — a shorter clip
+// makes it talk faster, a longer clip makes it talk slower. So the DURATION is effectively the
+// speech-PACE control, and the reliable way to size it is to pick a NATURAL speaking rate:
 //
-//   seconds = clamp( ceil( words / WORDS_PER_SEC * DURATION_MULT ), MIN, MAX )
+//   seconds = clamp( round( words * 60 / LIPSYNC_WPM ), MIN, MAX )
 //
-// LTX needs ~1.5× the natural speech time (natural speech ≈ 2.5 words/sec), hence the defaults.
-// Raise DURATION_MULT if voices still get cut; lower it if clips run too long/silent at the end.
-export const LIPSYNC_WORDS_PER_SEC = 2.5;
-export const LIPSYNC_DURATION_MULT = 2.0;
-export const LIPSYNC_MIN_SECS = 3;
-export const LIPSYNC_MAX_SECS = 16;
+// LIPSYNC_WPM = words-per-minute. ~130-145 WPM = natural (community LTX estimators + testing);
+// higher = faster/snappier, lower = slower/dramatic. (The old `words/2.5 * 2.0` worked out to ~75
+// WPM → the "extreme slow" talking; 140 fixes it.) This sizes ONLY the T2V path; the audio-driven
+// (reference-image) path is sized by the TTS audio instead.
+export const LIPSYNC_WPM = 140;
+export const LIPSYNC_MIN_SECS = 2;
+export const LIPSYNC_MAX_SECS = 25;
 
 // ── LIP-SYNC MODE (Drama v2 talking shots) ───────────────────────────────────────────────────
 // WITH_AUDIO (recommended, default): the dialogue is generated as clean TTS and that mp3 is fed to the

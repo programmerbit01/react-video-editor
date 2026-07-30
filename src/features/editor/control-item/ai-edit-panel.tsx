@@ -30,8 +30,7 @@ import {
   PIPELINE_PROMPTS,
 } from "../ai-edit/operations";
 import {
-  LIPSYNC_WORDS_PER_SEC,
-  LIPSYNC_DURATION_MULT,
+  LIPSYNC_WPM,
   LIPSYNC_MIN_SECS,
   LIPSYNC_MAX_SECS,
   LIPSYNC_WITH_AUDIO,
@@ -131,7 +130,8 @@ const spokenSecs = (op: any): number => {
   const line = lineOf(op);
   const words = line ? line.trim().split(/\s+/).filter(Boolean).length : 0;
   if (!words) return 0;
-  const secs = Math.ceil((words / LIPSYNC_WORDS_PER_SEC) * LIPSYNC_DURATION_MULT);
+  // LTX fits the words into the duration → size for a NATURAL speaking rate (words × 60 / WPM).
+  const secs = Math.round((words * 60) / LIPSYNC_WPM);
   return Math.min(LIPSYNC_MAX_SECS, Math.max(LIPSYNC_MIN_SECS, secs));
 };
 
