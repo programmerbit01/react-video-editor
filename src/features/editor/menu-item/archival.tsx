@@ -1,12 +1,12 @@
 import { dispatch } from "@designcombo/events";
 import { generateId } from "@designcombo/timeline";
 import Draggable from "@/components/shared/draggable";
-import React, { useState } from "react";
+import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { ADD_ITEMS, ADD_AUDIO } from "@designcombo/state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, Music, Music2, Zap, Check } from "lucide-react";
+import { Search, Loader2, Music2, Zap, Check, Play, Pause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import useAudioLibraryStore, { SavedSound } from "../store/use-audio-library-store";
 
@@ -97,6 +97,9 @@ export const Archival = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+
+  // Don't let a sound preview keep playing after the user leaves the Stock tab.
+  useEffect(() => stopPreview, []);
 
   const supports = (id: string) => SOURCES.find((s) => s.id === id)?.formats.includes(type);
   const toggleSource = (id: string) => setSelected((p) => ({ ...p, [id]: !p[id] }));
@@ -400,12 +403,52 @@ const MediaTile = ({
   );
 };
 
+// One shared preview player for the whole sound list: playing a new sound stops whatever was
+// playing, and every row can tell whether IT is the one playing (via useSyncExternalStore).
+// Preview only — no crossOrigin (never canvas-read), so cross-origin audio plays fine.
+let _preview: HTMLAudioElement | null = null;
+let _previewSrc: string | null = null;
+const _previewSubs = new Set<() => void>();
+const _previewEmit = () => _previewSubs.forEach((f) => f());
+const _previewEnsure = (): HTMLAudioElement => {
+  if (!_preview) {
+    _preview = new Audio();
+    _preview.preload = "none";
+    const clear = () => { _previewSrc = null; _previewEmit(); };
+    _preview.addEventListener("ended", clear);
+    _preview.addEventListener("error", clear);
+  }
+  return _preview;
+};
+const togglePreview = (src: string) => {
+  const a = _previewEnsure();
+  if (_previewSrc === src && !a.paused) {
+    a.pause();
+    _previewSrc = null;
+    _previewEmit();
+    return;
+  }
+  if (a.src !== src) a.src = src;
+  try { a.currentTime = 0; } catch {}
+  _previewSrc = src;
+  _previewEmit();
+  a.play().catch(() => { _previewSrc = null; _previewEmit(); });
+};
+export const stopPreview = () => {
+  if (_preview && !_preview.paused) _preview.pause();
+  if (_previewSrc !== null) { _previewSrc = null; _previewEmit(); }
+};
+const subscribePreview = (cb: () => void) => { _previewSubs.add(cb); return () => { _previewSubs.delete(cb); }; };
+const getPreviewSrc = () => _previewSrc;
+
 const SoundRow = ({ item, handleAdd }: { item: MediaItem; handleAdd: (i: MediaItem) => void }) => {
   const dur = item.details.duration || 0;
   const [adding, setAdding] = useState(false);
   const { addSfx, addMusic, hasSfx, hasMusic } = useAudioLibraryStore();
   const inSfx = hasSfx(item.details.src);
   const inMusic = hasMusic(item.details.src);
+  const playingSrc = useSyncExternalStore(subscribePreview, getPreviewSrc, () => null);
+  const isPlaying = playingSrc === item.details.src;
   const onAddClick = () => {
     setAdding(true);
     handleAdd(item);
@@ -426,7 +469,20 @@ const SoundRow = ({ item, handleAdd }: { item: MediaItem; handleAdd: (i: MediaIt
       title={`${item.source_name} · ${item.author} · ${item.license}`}
       className="flex items-center gap-2 rounded-md bg-background hover:bg-white/5 px-2 py-1.5 cursor-pointer"
     >
-      <Music className="h-4 w-4 shrink-0 text-muted-foreground" />
+      {/* Preview: hear the sound before adding. stopPropagation so it doesn't drop on the timeline. */}
+      <button
+        type="button"
+        title={isPlaying ? "Pause preview" : "Play preview"}
+        aria-label={isPlaying ? "Pause preview" : "Play preview"}
+        onClick={(e) => { e.stopPropagation(); togglePreview(item.details.src); }}
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors ${
+          isPlaying
+            ? "border-emerald-400/60 bg-emerald-400/15 text-emerald-300"
+            : "border-white/15 text-white/80 hover:bg-white/10"
+        }`}
+      >
+        {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 translate-x-[1px]" />}
+      </button>
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs text-white/90">{item.title || "Untitled"}</div>
         <div className="truncate text-[10px] text-muted-foreground">
