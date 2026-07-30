@@ -1,8 +1,7 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import useDataState from "../store/use-data-state";
 import { loadFonts } from "../utils/fonts";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT } from "@designcombo/state";
+import { editSelected } from "./edit-selected";
 import React, { useEffect, useState } from "react";
 import { IBoxShadow, IText, ITrackItem } from "@designcombo/types";
 import Outline from "./common/outline";
@@ -130,107 +129,33 @@ const BasicText = ({
       }
     ]);
     setSelectedFont({ ...selectedFont, name: styleName });
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            fontFamily: fontName,
-            fontUrl: fontUrl
-          }
-        }
-      }
-    });
+    // Every text control fans out to all selected clips (whole-row = all). Single select = 1 clip.
+    editSelected({ details: { fontFamily: fontName, fontUrl } });
   };
 
   const onChangeBorderWidth = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderWidth: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        borderWidth: v
-      } as ITextControlProps;
-    });
+    editSelected({ details: { borderWidth: v } });
+    setProperties((prev) => ({ ...prev, borderWidth: v }) as ITextControlProps);
   };
 
   const onChangeBorderColor = (v: string) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderColor: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        borderColor: v
-      } as ITextControlProps;
-    });
+    editSelected({ details: { borderColor: v } });
+    setProperties((prev) => ({ ...prev, borderColor: v }) as ITextControlProps);
   };
 
   const handleChangeOpacity = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            opacity: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        opacity: v
-      } as ITextControlProps;
-    }); // Update local state
+    editSelected({ details: { opacity: v } });
+    setProperties((prev) => ({ ...prev, opacity: v }) as ITextControlProps);
   };
 
   const onChangeBoxShadow = (boxShadow: IBoxShadow) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            boxShadow: boxShadow
-          }
-        }
-      }
-    });
-
-    setProperties((prev) => {
-      return {
-        ...prev,
-        boxShadow
-      } as ITextControlProps;
-    });
+    editSelected({ details: { boxShadow } });
+    setProperties((prev) => ({ ...prev, boxShadow }) as ITextControlProps);
   };
 
   const onChangeFontSize = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            fontSize: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        fontSize: v
-      } as ITextControlProps;
-    });
+    editSelected({ details: { fontSize: v } });
+    setProperties((prev) => ({ ...prev, fontSize: v }) as ITextControlProps);
   };
 
   const onChangeFontFamily = async (font: ICompactFont) => {
@@ -250,72 +175,22 @@ const BasicText = ({
       fontFamilyDisplay: font.default.family
     });
 
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            fontFamily: fontName,
-            fontUrl: fontUrl
-          }
-        }
-      }
-    });
+    editSelected({ details: { fontFamily: fontName, fontUrl } });
   };
 
   const handleColorChange = (color: string) => {
-    setProperties((prev) => {
-      return {
-        ...prev,
-        color: color
-      } as ITextControlProps;
-    });
-
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            color: color
-          }
-        }
-      }
-    });
+    setProperties((prev) => ({ ...prev, color }) as ITextControlProps);
+    editSelected({ details: { color } });
   };
 
   const handleBackgroundChange = (color: string) => {
-    setProperties((prev) => {
-      return {
-        ...prev,
-        backgroundColor: color
-      } as ITextControlProps;
-    });
-
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            backgroundColor: color
-          }
-        }
-      }
-    });
+    setProperties((prev) => ({ ...prev, backgroundColor: color }) as ITextControlProps);
+    editSelected({ details: { backgroundColor: color } });
   };
 
   const onChangeTextAlign = (v: string) => {
-    setProperties((prev) => {
-      return {
-        ...prev,
-        textAlign: v
-      } as ITextControlProps;
-    });
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            textAlign: v
-          }
-        }
-      }
-    });
+    setProperties((prev) => ({ ...prev, textAlign: v }) as ITextControlProps);
+    editSelected({ details: { textAlign: v } });
   };
 
   const onChangeTextDecoration = (v: string) => {
@@ -323,16 +198,7 @@ const BasicText = ({
       ...properties,
       textDecoration: v
     });
-
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            textDecoration: v
-          }
-        }
-      }
-    });
+    editSelected({ details: { textDecoration: v } });
   };
 
   const components = [

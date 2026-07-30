@@ -11,8 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { AnimationDuration } from "./animation-duration";
 import { presets } from "../../player/animated";
 import type { PresetName } from "../../player/animated/presets";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT } from "@designcombo/state";
+import { editSelected } from "../edit-selected";
 import { Easing } from "remotion";
 import useGlobalAnimationStore, { GlobalAnimationType } from "../../store/use-global-animation-store";
 
@@ -43,33 +42,29 @@ const QUICK_FADE_FRAMES = 9; // 0.3s at 30fps
 
 function applyQuickFade(activeId: string) {
   if (!activeId) return;
-  dispatch(EDIT_OBJECT, {
-    payload: {
-      [activeId]: {
-        animations: {
-          in: {
-            name: "fadeIn",
-            composition: [{
-              property: "opacity",
-              from: 0,
-              to: 1,
-              durationInFrames: QUICK_FADE_FRAMES,
-              easing: "linear",
-              ease: Easing.linear,
-            }],
-          },
-          out: {
-            name: "fadeOut",
-            composition: [{
-              property: "opacity",
-              from: 1,
-              to: 0,
-              durationInFrames: QUICK_FADE_FRAMES,
-              easing: "linear",
-              ease: Easing.linear,
-            }],
-          },
-        },
+  editSelected({
+    animations: {
+      in: {
+        name: "fadeIn",
+        composition: [{
+          property: "opacity",
+          from: 0,
+          to: 1,
+          durationInFrames: QUICK_FADE_FRAMES,
+          easing: "linear",
+          ease: Easing.linear,
+        }],
+      },
+      out: {
+        name: "fadeOut",
+        composition: [{
+          property: "opacity",
+          from: 1,
+          to: 0,
+          durationInFrames: QUICK_FADE_FRAMES,
+          easing: "linear",
+          ease: Easing.linear,
+        }],
       },
     },
   });
@@ -124,7 +119,7 @@ const KenBurnsSelect = () => {
 
   const edit = (patch: Record<string, any>) => {
     if (!activeIds[0]) return;
-    dispatch(EDIT_OBJECT, { payload: { [activeIds[0]]: { details: patch } } });
+    editSelected({ details: patch }); // Ken Burns / effect → every selected clip (whole row)
   };
 
   return (

@@ -8,8 +8,7 @@ import AspectRatio from "./common/aspect-ratio";
 import { Button } from "@/components/ui/button";
 import { Crop } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT } from "@designcombo/state";
+import { editSelected } from "./edit-selected";
 import Blur from "./common/blur";
 import Brightness from "./common/brightness";
 import useLayoutStore from "../store/use-layout-store";
@@ -30,151 +29,39 @@ const BasicImage = ({
     setProperties(trackItem);
   }, [trackItem]);
 
+  // Every control fans out to all selected clips (editSelected). Single selection = just that clip.
   const onChangeBorderWidth = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderWidth: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          borderWidth: v
-        }
-      };
-    });
+    editSelected({ details: { borderWidth: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, borderWidth: v } }));
   };
 
   const onChangeBorderColor = (v: string) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderColor: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          borderColor: v
-        }
-      };
-    });
+    editSelected({ details: { borderColor: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, borderColor: v } }));
   };
 
   const handleChangeOpacity = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            opacity: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          opacity: v
-        }
-      };
-    });
+    editSelected({ details: { opacity: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, opacity: v } }));
   };
 
   const onChangeBlur = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            blur: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          blur: v
-        }
-      };
-    });
+    editSelected({ details: { blur: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, blur: v } }));
   };
   const onChangeBrightness = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            brightness: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          brightness: v
-        }
-      };
-    });
+    editSelected({ details: { brightness: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, brightness: v } }));
   };
 
   const onChangeBorderRadius = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderRadius: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          borderRadius: v
-        }
-      };
-    });
+    editSelected({ details: { borderRadius: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, borderRadius: v } }));
   };
 
   const onChangeBoxShadow = (boxShadow: IBoxShadow) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            boxShadow: boxShadow
-          }
-        }
-      }
-    });
-
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          boxShadow
-        }
-      };
-    });
+    editSelected({ details: { boxShadow } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, boxShadow } }));
   };
 
   const components = [

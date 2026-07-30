@@ -1,8 +1,7 @@
 import { Slider } from "@/components/ui/slider";
 import useStore from "../../store/use-store";
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT } from "@designcombo/state";
+import { editSelected } from "../edit-selected";
 
 function formatearNumero(num: number): number {
   return Number.isInteger(num) ? num : parseFloat(num.toFixed(2));
@@ -37,25 +36,23 @@ export const AnimationDuration = () => {
     (type: "in" | "out" | "loop", duration: number) => {
       if (!item) return;
 
-      dispatch(EDIT_OBJECT, {
-        payload: {
-          [activeIds[0]]: {
-            animations: {
-              [type]: {
-                name: item.animations?.[type]?.name,
-                composition: [
-                  {
-                    ...item.animations?.[type]?.composition?.[0],
-                    durationInFrames: (duration * 30) / 1000
-                  }
-                ]
+      // Fan out to every selected clip — a whole-row (multi) select shares one animation, so its
+      // In/Out/Loop duration slider should retime all of them, not just the representative.
+      editSelected({
+        animations: {
+          [type]: {
+            name: item.animations?.[type]?.name,
+            composition: [
+              {
+                ...item.animations?.[type]?.composition?.[0],
+                durationInFrames: (duration * 30) / 1000
               }
-            }
+            ]
           }
         }
       });
     },
-    [activeIds, item]
+    [item]
   );
 
   const handleInChange = useCallback(

@@ -5,8 +5,7 @@ import Speed from "./common/speed";
 import VolumeEnvelope from "./common/volume-envelope";
 import { VolumeKeyframe } from "../utils/volume-envelope";
 import React, { useEffect, useState } from "react";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT, LAYER_REPLACE } from "@designcombo/state";
+import { editSelected } from "./edit-selected";
 import { Button } from "@/components/ui/button";
 
 const BasicAudio = ({
@@ -24,15 +23,7 @@ const BasicAudio = ({
   }, [trackItem]);
 
   const handleChangeVolume = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            volume: v
-          }
-        }
-      }
-    });
+    editSelected({ details: { volume: v } }); // applies to every selected clip (whole-row = all)
 
     setProperties((prev) => {
       return {
@@ -46,13 +37,7 @@ const BasicAudio = ({
   };
 
   const handleChangeSpeed = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          playbackRate: v
-        }
-      }
-    });
+    editSelected({ playbackRate: v });
 
     setProperties((prev) => {
       return {
@@ -63,15 +48,7 @@ const BasicAudio = ({
   };
 
   const handleChangeEnvelope = (kf: VolumeKeyframe[]) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            volumeKeyframes: kf
-          }
-        }
-      }
-    });
+    editSelected({ details: { volumeKeyframes: kf } });
 
     setProperties((prev) => {
       return {

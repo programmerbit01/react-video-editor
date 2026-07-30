@@ -9,8 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Crop } from "lucide-react";
 import Volume from "./common/volume";
 import React, { useEffect, useState } from "react";
-import { dispatch } from "@designcombo/events";
-import { EDIT_OBJECT } from "@designcombo/state";
+import { editSelected } from "./edit-selected";
 import Speed from "./common/speed";
 import useLayoutStore from "../store/use-layout-store";
 import { Label } from "@/components/ui/label";
@@ -26,152 +25,44 @@ const BasicVideo = ({
   const showAll = !type;
   const [properties, setProperties] = useState(trackItem);
   const { setCropTarget } = useLayoutStore();
+  // Each control fans out to EVERY selected clip (editSelected). A single selection = just that
+  // clip, so single-edit is unchanged; a whole-row (multi) selection edits all clips at once.
   const handleChangeVolume = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            volume: v
-          }
-        }
-      }
-    });
-
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          volume: v
-        }
-      };
-    });
+    editSelected({ details: { volume: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, volume: v } }));
   };
 
   const onChangeBorderWidth = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderWidth: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          borderWidth: v
-        }
-      };
-    });
+    editSelected({ details: { borderWidth: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, borderWidth: v } }));
   };
 
   const onChangeBorderColor = (v: string) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderColor: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          borderColor: v
-        }
-      };
-    });
+    editSelected({ details: { borderColor: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, borderColor: v } }));
   };
 
   const handleChangeOpacity = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            opacity: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          opacity: v
-        }
-      };
-    });
+    editSelected({ details: { opacity: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, opacity: v } }));
   };
 
   const onChangeBorderRadius = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            borderRadius: v
-          }
-        }
-      }
-    });
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          borderRadius: v
-        }
-      };
-    });
+    editSelected({ details: { borderRadius: v } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, borderRadius: v } }));
   };
 
   const onChangeBoxShadow = (boxShadow: IBoxShadow) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          details: {
-            boxShadow: boxShadow
-          }
-        }
-      }
-    });
-
-    setProperties((prev) => {
-      return {
-        ...prev,
-        details: {
-          ...prev.details,
-          boxShadow
-        }
-      };
-    });
+    editSelected({ details: { boxShadow } });
+    setProperties((prev) => ({ ...prev, details: { ...prev.details, boxShadow } }));
   };
   useEffect(() => {
     setProperties(trackItem);
   }, [trackItem]);
 
   const handleChangeSpeed = (v: number) => {
-    dispatch(EDIT_OBJECT, {
-      payload: {
-        [trackItem.id]: {
-          playbackRate: v
-        }
-      }
-    });
-
-    setProperties((prev) => {
-      return {
-        ...prev,
-        playbackRate: v
-      };
-    });
+    editSelected({ playbackRate: v });
+    setProperties((prev) => ({ ...prev, playbackRate: v }));
   };
 
   const components = [

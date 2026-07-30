@@ -113,7 +113,14 @@ const CaptionStyleTab = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => 
   <BasicCaption trackItem={trackItem as ITrackItem & ICaption} />
 );
 
-const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) => {
+const SelectedTrackPanel = ({
+  trackItem,
+  multiCount = 1
+}: {
+  trackItem: ITrackItemAndDetails;
+  multiCount?: number;
+}) => {
+  const isMulti = multiCount > 1;
   const tabs = TAB_CONFIG[trackItem.type] ?? [];
   const getDefaultTab = () => {
     // Images open on Motion — Ken Burns / animations are what you reach for first on a still.
@@ -145,16 +152,24 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background/80">
             <Icon className="h-3.5 w-3.5 text-foreground" />
           </div>
-          <p className="truncate text-xs font-semibold text-foreground">{clipName}</p>
+          <p className="truncate text-xs font-semibold text-foreground">
+            {isMulti ? `${multiCount} ${meta.label.toLowerCase()} clips` : clipName}
+          </p>
           <Badge variant="secondary" className="shrink-0 rounded-full px-1.5 py-0 text-[9px] uppercase tracking-[0.1em]">
             {meta.label}
           </Badge>
           <div className="flex shrink-0 items-center gap-1 ml-auto">
-            {summary.slice(1).map((item) => (
-              <span key={item} className="rounded-full border border-border/60 bg-background/75 px-2 py-0.5 text-[10px] text-muted-foreground">
-                {item}
+            {isMulti ? (
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-300">
+                edits apply to all
               </span>
-            ))}
+            ) : (
+              summary.slice(1).map((item) => (
+                <span key={item} className="rounded-full border border-border/60 bg-background/75 px-2 py-0.5 text-[10px] text-muted-foreground">
+                  {item}
+                </span>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -199,54 +214,49 @@ const SelectedTrackPanel = ({ trackItem }: { trackItem: ITrackItemAndDetails }) 
   );
 };
 
+// The selection reduced to ONE unified panel: a representative clip + how many are selected. Multi
+// only when every selected clip shares a type (a whole-row select — rows are one type) so the panel
+// makes sense and its edits (which fan out via editSelected) apply cleanly. Mixed types → no panel.
+function selectedRepresentative(
+  activeIds: string[],
+  trackItemsMap: Record<string, ITrackItem>
+): { item: ITrackItem | null; count: number } {
+  if (!activeIds.length) return { item: null, count: 0 };
+  const first = trackItemsMap[activeIds[0]];
+  if (!first) return { item: null, count: 0 };
+  const allSame = activeIds.every((id) => trackItemsMap[id]?.type === first.type);
+  return allSame ? { item: first, count: activeIds.length } : { item: null, count: 0 };
+}
+
 export const PropertiesPanel = () => {
   const { activeIds, trackItemsMap } = useStore();
-  const [trackItem, setTrackItem] = useState<ITrackItem | null>(null);
-
-  useEffect(() => {
-    if (activeIds.length === 1) {
-      const [id] = activeIds;
-      const item = trackItemsMap[id];
-      setTrackItem(item ?? null);
-    } else {
-      setTrackItem(null);
-    }
-  }, [activeIds, trackItemsMap]);
-
-  if (!trackItem) return null;
-  return <SelectedTrackPanel trackItem={trackItem} />;
+  const { item, count } = selectedRepresentative(activeIds, trackItemsMap);
+  if (!item) return null;
+  return <SelectedTrackPanel trackItem={item as ITrackItemAndDetails} multiCount={count} />;
 };
 
 export const ControlItem = () => {
   const { activeIds, trackItemsMap, transitionsMap } = useStore();
-  const [trackItem, setTrackItem] = useState<ITrackItem | null>(null);
   const { setTrackItem: setLayoutTrackItem } = useLayoutStore();
+  const { item, count } = selectedRepresentative(activeIds, trackItemsMap);
 
-  // `layout.trackItem` is a single global slot shared with editor.tsx and the left Captions
-  // menu, and FloatingControl renders nothing while it's empty — so nulling it closes whoever's
-  // picker is open, not just ours. This effect re-runs on every trackItemsMap change, so with a
-  // blanket null it fired on each edit: applying a preset from the left menu rewrote the map,
-  // this ran with an empty selection, and the picker the click came from disappeared. Only
-  // release the slot when we're still the one holding it.
+  // `layout.trackItem` is a single global slot the floating pickers read. Only OWN it for a single
+  // selection (multi has no one "current" clip); release it when we stop holding it — nulling it
+  // blindly would close whatever picker another surface opened.
   const heldItemRef = useRef<string | null>(null);
   useEffect(() => {
-    const item = activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
-    if (item) {
-      setTrackItem(item);
-      heldItemRef.current = item.id;
-      setLayoutTrackItem(item);
+    const single = activeIds.length === 1 ? trackItemsMap[activeIds[0]] : undefined;
+    if (single) {
+      heldItemRef.current = single.id;
+      setLayoutTrackItem(single);
       return;
     }
-    setTrackItem(null);
     if (useLayoutStore.getState().trackItem?.id === heldItemRef.current) {
       heldItemRef.current = null;
       setLayoutTrackItem(null);
     }
   }, [activeIds, trackItemsMap, transitionsMap, setLayoutTrackItem]);
 
-  if (!trackItem) {
-    return <MenuItem />;
-  }
-
-  return <SelectedTrackPanel trackItem={trackItem} />;
+  if (!item) return <MenuItem />;
+  return <SelectedTrackPanel trackItem={item as ITrackItemAndDetails} multiCount={count} />;
 };
