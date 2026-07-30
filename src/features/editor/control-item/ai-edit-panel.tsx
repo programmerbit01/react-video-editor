@@ -1186,31 +1186,40 @@ export default function AiEditPanel() {
       const n = Math.min(Math.max(1, g.count || 1), 10);
       try {
         s.updateAt(i, { genStatus: `Searching stock ${kind}…` });
-        const path = kind === "video" ? "/api/pexels-videos" : "/api/pexels";
-        const orient = aspectOrientation(g.aspect_ratio || _pipeAspect); // match stock orientation to the shot's aspect (fallback = the pipeline aspect)
-        const res = await fetch(
-          withEditorBase(`${path}?query=${encodeURIComponent(g.query || g.prompt || "")}&per_page=${n}${orient ? `&orientation=${orient}` : ""}`)
-        );
-        const data = await res.json().catch(() => ({}));
-        const results = (kind === "video" ? data.videos : data.photos) || [];
+        // Fetch results into ONE shape {src, preview, desc}. Default = Pexels (with orientation). A
+        // non-pexels `source` (archive=Internet Archive, openverse, wikimedia — the user asked for IA's
+        // better quality) goes through the shared /api/archival route (same one the Stock panel uses, so
+        // its URLs already play here); archival has no orientation filter → cover-fit handles the aspect.
+        const src0 = String(g.source || "pexels").toLowerCase().trim();
+        const type = kind === "video" ? "video" : "image";
+        let results: { src: string; preview?: string; desc: string }[] = [];
+        let orientTag = "";
+        if (src0 && src0 !== "pexels") {
+          const r = await fetch(withEditorBase(`/api/archival?query=${encodeURIComponent(g.query || g.prompt || "")}&type=${type}&sources=${encodeURIComponent(src0)}&per_page=${Math.max(6, n)}`));
+          const d = await r.json().catch(() => ({}));
+          results = (d.items || []).filter((it: any) => it?.details?.src).map((it: any) => ({ src: it.details.src, preview: it.preview, desc: String(it.title || g.query || "stock").slice(0, 120) }));
+        } else {
+          const path = type === "video" ? "/api/pexels-videos" : "/api/pexels";
+          const orient = aspectOrientation(g.aspect_ratio || _pipeAspect); orientTag = orient ? ` [${orient}]` : "";
+          const res = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(g.query || g.prompt || "")}&per_page=${n}${orient ? `&orientation=${orient}` : ""}`));
+          const data = await res.json().catch(() => ({}));
+          results = ((type === "video" ? data.videos : data.photos) || []).filter((x: any) => x?.details?.src).map((x: any) => ({ src: x.details.src, preview: x.preview, desc: String(x.alt || x.title || x.description || g.query || "stock").slice(0, 120) }));
+        }
         const snap = { ...(useAiEditStore.getState().messages[i]?.snapshot || {}) };
         const previews = [...(useAiEditStore.getState().messages[i]?.genPreviews || [])];
         let added = 0;
         for (let k = 0; k < Math.min(n, results.length); k++) {
-          const src = results[k]?.details?.src;
+          const { src, preview, desc } = results[k];
           if (!src) continue;
-          // Stock has no gen-prompt → use the result's TITLE/alt (or the search query) as the
-          // description, so the arrange's relevancy (match_shots) still knows what this clip shows.
-          const desc = String(results[k]?.alt || results[k]?.title || results[k]?.description || g.query || "stock").slice(0, 120);
           // serialized add (+ waits for landing) so concurrent stock adds never clobber each other
           const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, desc) : addImage(src, desc)));
           coverFitToCanvas(nid); // off-ratio stock → fill the 16:9/9:16 frame (no letterbox, no manual fit)
           snap[nid] = null;
-          previews.push({ kind, url: results[k]?.preview || src, prompt: `(stock) ${String(g.query || g.prompt || desc).slice(0, 80)}` });
+          previews.push({ kind, url: preview || src, prompt: `(stock:${src0}) ${String(g.query || g.prompt || desc).slice(0, 80)}` });
           added++;
         }
         const q = String(g.query || g.prompt || "").slice(0, 48);
-        elog(`[AI-Edit] STOCK ${kind} search "${q}"${orient ? ` [${orient}]` : ""} → ${added ? added + " added" : "MISS (0 results)"}`);
+        elog(`[AI-Edit] STOCK ${kind} search "${q}" [${src0}]${orientTag} → ${added ? added + " added" : "MISS (0 results)"}`);
         s.updateAt(i, {
           genStatus: added ? `✓ ${added} stock ${kind}${added > 1 ? "s" : ""} added` : `⚠️ no stock ${kind} found`,
           snapshot: snap,
@@ -1875,15 +1884,23 @@ export default function AiEditPanel() {
         } else {
           // B-ROLL shot → stock search or a plain gen, then its narrator voiceover.
           if (g.op === "search") {
-            // match the stock orientation to the shot's aspect (fallback = the pipeline aspect if the
-            // director forgot to tag the search op) — was pulling portrait stock into a 16:9 video.
-            const orient = aspectOrientation(g.aspect_ratio || _pipeAspect);
-            const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
             const query = g.query || narrText || g.prompt || "";
-            const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(query)}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
-            const d = await r.json().catch(() => ({}));
-            vUrl = d?.photos?.[0]?.details?.src || d?.photos?.[0]?.src || d?.videos?.[0]?.details?.src || d?.videos?.[0]?.src || "";
-            elog(`[DRAMA v2 ASM] shot ${k + 1} STOCK ${vKind} search "${String(query).slice(0, 48)}"${orient ? ` [${orient}]` : ""} → ${vUrl ? "hit" : "MISS (will AI-generate)"}`);
+            const src0 = String(g.source || "pexels").toLowerCase().trim();
+            let orientTag = "";
+            if (src0 && src0 !== "pexels") {
+              // Internet Archive / Openverse / Wikimedia via the shared /api/archival route (no orientation
+              // filter → cover-fit handles aspect). Same route the Stock panel uses.
+              const r = await fetch(withEditorBase(`/api/archival?query=${encodeURIComponent(query)}&type=${vKind}&sources=${encodeURIComponent(src0)}&per_page=6`));
+              const d = await r.json().catch(() => ({}));
+              vUrl = (d.items || []).find((it: any) => it?.details?.src)?.details?.src || "";
+            } else {
+              const orient = aspectOrientation(g.aspect_ratio || _pipeAspect); orientTag = orient ? ` [${orient}]` : "";
+              const path = vKind === "video" ? "/api/pexels-videos" : "/api/pexels";
+              const r = await fetch(withEditorBase(`${path}?query=${encodeURIComponent(query)}&per_page=1${orient ? `&orientation=${orient}` : ""}`));
+              const d = await r.json().catch(() => ({}));
+              vUrl = d?.photos?.[0]?.details?.src || d?.photos?.[0]?.src || d?.videos?.[0]?.details?.src || d?.videos?.[0]?.src || "";
+            }
+            elog(`[DRAMA v2 ASM] shot ${k + 1} STOCK ${vKind} search "${String(query).slice(0, 48)}" [${src0}]${orientTag} → ${vUrl ? "hit" : "MISS (will AI-generate)"}`);
           }
           if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
           if (narrText) aUrl = await genUrl("audio", { text: narrText }, prog);

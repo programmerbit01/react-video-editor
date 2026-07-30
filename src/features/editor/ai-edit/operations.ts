@@ -66,6 +66,7 @@ export interface AiEditOp {
   // search (stock):
   query?: string;
   count?: number;
+  source?: string; // stock source: "pexels" (default) | "archive" (Internet Archive) | "openverse" | "wikimedia" (csv ok)
 }
 
 export interface OpsEnvelope {
