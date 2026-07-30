@@ -861,9 +861,17 @@ export default function AiEditPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.isOpen, s.floatPos.y, s.panelSize.height]);
 
+  // Auto-scroll to the newest content ONLY while the user is pinned to the bottom. If they scroll UP
+  // (e.g. to look at an earlier shot mid-generation), stop yanking them back down; resume once they
+  // return to the bottom. `stickBottomRef` tracks that pin; the onScroll handler updates it.
+  const stickBottomRef = useRef(true);
+  const onChatScroll = () => {
+    const el = scrollRef.current;
+    if (el) stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [s.messages, s.busy]);
 
   const chips = selectionChips(activeIds, trackItemsMap);
@@ -2439,7 +2447,7 @@ export default function AiEditPanel() {
               ))}
             </div>
           ) : (
-            <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-3">
+            <div ref={scrollRef} onScroll={onChatScroll} className="flex-1 space-y-3 overflow-y-auto p-3">
               {s.messages.length === 0 && (
                 <p className="mt-8 text-center text-[11px] text-muted-foreground/50">
                   Try: &ldquo;make this 3 seconds&rdquo; · &ldquo;zoom in&rdquo; · &ldquo;rotate 10°&rdquo; · &ldquo;add a title&rdquo;
