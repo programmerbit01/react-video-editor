@@ -36,7 +36,11 @@ export const LIPSYNC_MAX_SECS = 16;
 // caps the video to the audio). Flip to FALSE for the legacy path: the model makes the mouth move from
 // the `says '…'` text using its OWN (garbled) audio, which we then mute + overlay the TTS on top of. Kept
 // as a fallback so the old behaviour is one flag away.
-export const LIPSYNC_WITH_AUDIO = true;
+// NON-REF talking shots: false = T2V (LTX generates its OWN speech from the quoted words → best lip-sync +
+// full camera freedom; length = word estimate). true = feed clean TTS as audio (exact length but weaker
+// lips/control). Reference-image (i2v) shots ALWAYS use audio regardless — that path lip-syncs great and is
+// left untouched. Kept as a flag (not deleted) so the audio path is one flip away.
+export const LIPSYNC_WITH_AUDIO = false;
 // TIMELINE dims hint (seconds) for a talking clip — NOT a generation cap. The real video length is set
 // server-side from the TTS audio (the pipeline sends duration:0 → the vApp makes video = audio + 1s), and
 // the clip's actual window comes from the audio itself. This value is only the duration we DECLARE to the
@@ -111,13 +115,13 @@ For EACH screenplay line, in order, output ONE shot:
     • image: { "op":"generate", "kind":"image", "prompt":"<the character(s)/scene for this beat>, cinematic film still, SEMI-photorealistic (stylised realism — NOT a flat photo, NOT cartoon), realistic skin, dramatic moody lighting, shallow depth of field", "aspect_ratio":"<ratio>" }
     • b-roll video (for a moving beat): { "op":"generate", "kind":"video", "prompt":"<scene> + the MOTION + natural AMBIENT SOUND cues (wind, rain, city, footsteps)", "duration":5, "aspect_ratio":"<ratio>" }
     • stock (generic real-world beat): { "op":"search", "kind":"image|video", "query":"3-5 keywords", "aspect_ratio":"<ratio>", "count":1 } — ALWAYS include aspect_ratio so the stock orientation matches the video
-- "DIALOGUE [Name]: …" line → a TALKING shot: that named character speaks THOSE EXACT words on camera. Output: { "op":"generate", "kind":"video", "talk":true, "line":"<the exact dialogue words>", "prompt":"<that character's fixed description>, <setting/mood/pose>, says '<the exact dialogue words>'", "aspect_ratio":"<ratio>" }. ALWAYS include "line" (the exact spoken words) and do NOT set "duration" — the editor sizes the clip to fit the words so the voice is never cut. "talk":true marks it a lip-sync shot; any speech verb (says/asks/whispers/yells) is fine.
+- "DIALOGUE [Name]: …" line → a TALKING shot: that named character speaks on camera. Output: { "op":"generate", "kind":"video", "talk":true, "line":"<the EXACT dialogue words>", "prompt":"<ONE natural sentence: the character's fixed look in the setting/mood. Then a second sentence: he/she looks toward the camera and speaks.>", "aspect_ratio":"<ratio>" }. WRITE THE PROMPT AS NATURAL SENTENCES (this is a lip-sync shot — comma-separated tag-piles break the lip-sync), NOT a list of tags, and END it with the character looking at the camera and speaking (e.g. "She stands under a rainy awning in her yellow coat. She looks straight at the camera and speaks."). Put the SPOKEN WORDS ONLY in "line" — do NOT put them in the prompt (the editor adds them). ALWAYS include "line" and do NOT set "duration". "talk":true marks it a lip-sync shot.
 
 AUDIO: output ONE placeholder audio op — the NARRATOR voiceover is inserted by the system. Output EXACTLY: { "op":"generate", "kind":"audio", "text":"__SCRIPT__" }. Do NOT write narration yourself. (The dialogue lines are spoken by their talking shots, not the narrator.)
 
 ARRANGE: output ONE { "op":"arrange", "target":"all" } — NO times.
 
-REFERENCE IMAGE: if the user message says a REFERENCE IMAGE is attached, the character(s) come FROM it — do NOT invent or describe their look. For image shots write a SHORT Flux-EDIT prompt = ONLY the changes (wardrobe/setting/pose), MOST IMPORTANT first, ending "keep the same face and identity, do not change anything else". Talking (talk:true) shots keep the SAME rule — describe only the setting + the spoken line.
+REFERENCE IMAGE: if the user message says a REFERENCE IMAGE is attached, the character(s) come FROM it — do NOT invent or describe their look. For image shots write a SHORT Flux-EDIT prompt = ONLY the changes (wardrobe/setting/pose), MOST IMPORTANT first, ending "keep the same face and identity, do not change anything else". Talking (talk:true) shots keep the SAME rule — describe only the setting/pose as a natural sentence ending in the character looking at the camera and speaking; the spoken words stay in "line", never in the prompt.
 
 STYLE: honor any style the user names (noir, romantic, gritty…) in the prompts + pacing. Do NOT add motion/transition/effect ops (the arranger owns those). MUSIC: add { "op":"musicbed" } ONLY if the user explicitly asks.
 

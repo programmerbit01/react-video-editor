@@ -1766,8 +1766,13 @@ export default function AiEditPanel() {
     //   3) generate the video: WITH_AUDIO → feed the TTS as `audio` so it lip-syncs to the real words
     //      (lips match, exact length, no hallucination); else the legacy text-driven path.
     // Returns the video url + the TTS url (the TTS is still overlaid + sizes the clip downstream).
-    const genTalkShot = async (g: any, narrText: string, onProg: (d: any) => void): Promise<{ vUrl: string; aUrl: string }> => {
-      const aUrl = narrText ? await genUrl("audio", { text: narrText }, onProg) : "";
+    const genTalkShot = async (g: any, narrText: string, onProg: (d: any) => void): Promise<{ vUrl: string; aUrl: string; audioDriven: boolean }> => {
+      // MODE: a REFERENCE-IMAGE (i2v) talking shot ALWAYS uses audio — that path lip-syncs great and is left
+      // untouched. A NON-ref shot uses T2V (LTX generates its OWN speech from the quoted words → best lips +
+      // full camera freedom) unless LIPSYNC_WITH_AUDIO flips it back to the audio path.
+      const hasRef = !!String(g.image_url || "");
+      const audioDriven = hasRef || LIPSYNC_WITH_AUDIO;
+      const aUrl = audioDriven && narrText ? await genUrl("audio", { text: narrText }, onProg) : "";
       let baseImg = String(g.image_url || "");
       if (baseImg && LIPSYNC_I2V_EDIT_FIRST) {
         // Flux EDIT the ref into this shot's look — force it to keep the face (the video prompt is a scene
@@ -1777,18 +1782,27 @@ export default function AiEditPanel() {
         if (edited) { baseImg = edited; elog(`[DRAMA v2 ASM] talk shot: edited the reference into the shot look → i2v from THAT`); }
         else elog(`[DRAMA v2 ASM] talk shot: ref edit failed — animating the raw reference`);
       }
-      const vOpts: any = { prompt: g.prompt, aspect_ratio: g.aspect_ratio, optimize: false };
+      const line = lineOf(g);
+      const vOpts: any = { aspect_ratio: g.aspect_ratio, optimize: false };
       if (baseImg) vOpts.image_url = baseImg;
-      if (LIPSYNC_WITH_AUDIO && aUrl) {
-        // duration:0 → the vApp sizes the video to the REAL TTS audio (+1s tail) — no client/LLM guess of
-        // length, so a long line always plays as ONE continuous take and is never cut or crammed.
+      if (audioDriven && aUrl) {
+        // AUDIO-driven (ref/flag): the director's prompt is scene-only (ends "…and speaks"); the WORDS come
+        // from the TTS. duration:0 → the vApp sizes the video to the audio (+1s tail). Video is muted + the
+        // TTS overlaid downstream.
+        vOpts.prompt = g.prompt;
         vOpts.audio = aUrl; vOpts.duration = 0;
-        elog(`[DRAMA v2 ASM] talk shot: lip-sync to the TTS audio (duration:0 → vApp sets video = audio + 1s)`);
+        elog(`[DRAMA v2 ASM] talk shot: AUDIO-driven lip-sync (${hasRef ? "ref i2v" : "flag"}) → video = audio length`);
       } else {
+        // T2V (no audio): LTX generates the speech itself, so the WORDS go in the prompt in DOUBLE quotes
+        // (LTX's format — the director keeps them out of the prompt and in `line`, we add them here so the
+        // JSON the director emits stays valid). Length = word estimate (spokenSecs, ×2 mult). Uses LTX's own
+        // audio (not muted).
+        vOpts.prompt = line ? `${g.prompt} "${line}"` : g.prompt;
         vOpts.duration = spokenSecs(g) || 5;
+        elog(`[DRAMA v2 ASM] talk shot: T2V lip-sync (no audio) → LTX speaks the line itself, ~${spokenSecs(g) || 5}s`);
       }
       const vUrl = await genUrl("video", vOpts, onProg);
-      return { vUrl, aUrl };
+      return { vUrl, aUrl, audioDriven };
     };
     // Real clip length FROM the just-added timeline item — ADD_VIDEO/ADD_AUDIO already loaded it, so we
     // never download it a 2nd time (that double-load was why placement crawled on a slow CDN).
@@ -1821,14 +1835,13 @@ export default function AiEditPanel() {
       if (_stopBuild) return;
       const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
-        let vUrl = "", aUrl = "";
+        let vUrl = "", aUrl = "", audioDriven = false;
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
-        // A talk video's length is driven by the spoken line (the vApp caps it to the TTS audio anyway).
+        // A talk video's length: t2v = word estimate (spokenSecs); audio-driven = the audio (vApp sizes it).
         const genSecs = (vKind === "video" && talk ? spokenSecs(g) : 0) || Number(g.duration) || 5;
         if (talk && vKind === "video") {
-          // TALKING shot → lip-sync pipeline (TTS → [edit ref] → audio-driven video). See genTalkShot.
-          elog(`[DRAMA v2 ASM] shot ${k + 1} talk video → ${LIPSYNC_WITH_AUDIO ? "lip-sync to TTS (exact length)" : "text-driven, ~" + genSecs + "s"}`);
-          ({ vUrl, aUrl } = await genTalkShot(g, narrText, prog));
+          // TALKING shot → lip-sync pipeline. ref → audio-i2v; non-ref → t2v (see genTalkShot).
+          ({ vUrl, aUrl, audioDriven } = await genTalkShot(g, narrText, prog));
         } else {
           // B-ROLL shot → stock search or a plain gen, then its narrator voiceover.
           if (g.op === "search") {
@@ -1857,9 +1870,10 @@ export default function AiEditPanel() {
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
         const ar = String(g.aspect_ratio || "16:9");
         const wh: [number, number] = ar === "9:16" ? [720, 1280] : ar === "1:1" ? [1024, 1024] : ar === "4:5" ? [1024, 1280] : [1280, 720];
-        // A talk video's real length = its (unknown-yet) TTS audio, up to the ceiling. Claim the ceiling so a
-        // long dialogue window is never clamped by a too-short declared duration; the real window = clipMs(aid).
-        const vDurMs = (talk ? LIPSYNC_VIDEO_MAX_SECS : genSecs) * 1000;
+        // Declared timeline length. AUDIO-driven talk = real length is the (unknown-yet) audio → claim the
+        // ceiling so a long window isn't clamped (real window = clipMs(aid)). T2V talk + b-roll video = we
+        // requested genSecs and LTX fills it → declare genSecs (accurate, so clipMs(vid) = the real window).
+        const vDurMs = (talk && audioDriven ? LIPSYNC_VIDEO_MAX_SECS : genSecs) * 1000;
         const vDims = vKind === "video" ? { width: wh[0], height: wh[1], durationMs: vDurMs } : undefined;
         let vid = "";
         for (let att = 0; att < 3 && !_stopBuild; att++) {
@@ -1883,11 +1897,10 @@ export default function AiEditPanel() {
           }
           if (!aid) elog(`[DRAMA v2 ASM] shot ${k + 1} voice never loaded — visual kept, silent`);
         }
-        // MUTE the talk video and let ONLY the clean TTS clip be heard. WITH_AUDIO: the video is already
-        // lip-synced to this exact TTS, so its lips match the overlaid clip; WITHOUT audio: the video's own
-        // audio is LTX-garbled, so muting it is what makes the dialogue intelligible. Either way, if the TTS
-        // failed to land we leave the native audio as a fallback rather than a silent talking head.
-        if (talk && aid) { applyOperations([{ op: "edit", itemId: vid, details: { volume: 0 } }]); elog(`[DRAMA v2 ASM] shot ${k + 1} muted video audio → clean TTS voiceover`); }
+        // MUTE only for the AUDIO-driven path (ref/flag): the video is lip-synced to the TTS, so mute its own
+        // track and let the overlaid clean TTS be heard. T2V keeps LTX's OWN generated speech (that's the whole
+        // point — perfect lips + audio), so it is NEVER muted. (If the TTS didn't land, keep native audio.)
+        if (talk && audioDriven && aid) { applyOperations([{ op: "edit", itemId: vid, details: { volume: 0 } }]); elog(`[DRAMA v2 ASM] shot ${k + 1} muted video audio → clean TTS voiceover`); }
         s.updateAt(i, { snapshot: { ...(useAiEditStore.getState().messages[i]?.snapshot || {}), [vid]: null, ...(aid ? { [aid]: null } : {}) } });
         // Window = the VOICE length (the TTS clip) when there is one; else the video's own footage (silent
         // b-roll video / talk video with no TTS), else the director's guessed seconds (silent image).
