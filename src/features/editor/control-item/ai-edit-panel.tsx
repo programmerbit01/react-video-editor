@@ -1183,9 +1183,11 @@ export default function AiEditPanel() {
           // serialized add (+ waits for landing) so concurrent stock adds never clobber each other
           const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, desc) : addImage(src, desc)));
           snap[nid] = null;
-          previews.push({ kind, url: results[k]?.preview || src });
+          previews.push({ kind, url: results[k]?.preview || src, prompt: `🔎 stock: ${String(g.query || g.prompt || desc).slice(0, 80)}` });
           added++;
         }
+        const q = String(g.query || g.prompt || "").slice(0, 48);
+        elog(`[AI-Edit] STOCK ${kind} search "${q}"${orient ? ` [${orient}]` : ""} → ${added ? added + " added" : "MISS (0 results)"}`);
         s.updateAt(i, {
           genStatus: added ? `✓ ${added} stock ${kind}${added > 1 ? "s" : ""} added` : `⚠️ no stock ${kind} found`,
           snapshot: snap,
@@ -1233,7 +1235,7 @@ export default function AiEditPanel() {
         applyOperations([{ op: "delete", itemId: g.itemId }]);
         const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
         const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
-        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url }], genStatus: "✓ Image animated → video" });
+        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url, prompt: String(g.prompt || "animate").trim() }], genStatus: "✓ Image animated → video" });
       } catch (e: any) {
         s.updateAt(i, { genStatus: `⚠️ animate: ${e?.message || "failed"}` });
       }
@@ -1303,7 +1305,7 @@ export default function AiEditPanel() {
       const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
       // NO per-item "✓ … added" status — a ✓ here flips the aggregate "working" state (and the timer +
       // Stop button) OFF mid-build. The running counter/stage owns genStatus; the preview shows the clip.
-      s.updateAt(i, { genPreviews: [...prev, { kind: label, url }] });
+      s.updateAt(i, { genPreviews: [...prev, { kind: label, url, prompt: String(g.prompt || g.text || "").trim() }] });
     } catch (e: any) {
       s.updateAt(i, { genStatus: `⚠️ ${label}: ${e?.message || "failed"}` });
     }
@@ -1863,8 +1865,10 @@ export default function AiEditPanel() {
         // time (Cloudflare origin-fetch on a cache MISS), so the load may not land on the first try —
         // RE-ADD a few times (each waits ~22s) to catch it once the edge has cached it.
         const nowP = useAiEditStore.getState().messages[i];
-        // show the shot's VISUAL and (when narrated) its VOICE clip in the chat, both as they land
-        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl }] : [])] });
+        // show the shot's VISUAL and (when narrated) its VOICE clip in the chat, both as they land — each
+        // captioned with the prompt/line it came from (stock = the search query; talk = the spoken line).
+        const vCap = String(g.op === "search" ? `🔎 stock: ${g.query || narrText || ""}` : (g.prompt || narrText || "")).trim();
+        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl, prompt: vCap }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl, prompt: `🎙️ ${narrText}` }] : [])] });
         // KNOWN dims (from the aspect-ratio + requested seconds) let designcombo add the VIDEO WITHOUT
         // downloading it first → instant land; the pixels stream in the player afterward. Videos are the
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
@@ -2538,6 +2542,9 @@ export default function AiEditPanel() {
                     </div>
                     {m.genPreviews?.map((pv, k) => (
                       <div key={k} className="mt-1.5">
+                        {pv.prompt ? (
+                          <div className="mb-1 whitespace-pre-wrap break-words text-[10px] leading-snug text-foreground/55">{pv.prompt}</div>
+                        ) : null}
                         {pv.kind === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={pv.url} alt="" className="max-h-40 rounded-lg border border-border" />
