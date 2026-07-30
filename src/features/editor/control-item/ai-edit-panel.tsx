@@ -1627,28 +1627,33 @@ export default function AiEditPanel() {
               durs[k] -= give;
             }
           }
-          // VIDEO CEILING (physical, not arbitrary): a video can't play past its footage length — cap
-          // each video's dur at its clip length and hand the freed time to the IMAGE shots (they hold
-          // fine via Ken Burns). Kills the "video ends → BLACK screen" when a shot got a long window.
-          const vidCapMs = (id: string) => {
+          // VIDEO = FULL FOOTAGE (never cut a video — a GENERATED video especially): SET each video's dur
+          // to its footage length so it plays ENTIRELY — no early end (black), and no running PAST its
+          // window (that spill is what put a video over the image row = the overlap). The arrange adjusts
+          // AROUND the video: settle the difference with the IMAGE shots (they hold fine via Ken Burns) —
+          // time freed when a window was too long, borrowed when it was too short. (Stock videos are still
+          // full-footage here; trimming stock to fit can be layered on later if a long clip dominates.)
+          const vidFootMs = (id: string) => {
             const it: any = map[id];
-            if (it?.type !== "video") return Infinity;
+            if (it?.type !== "video") return 0;
             const tr = it.trim || {};
             const len = ((tr.to ?? it.duration ?? 0) - (tr.from ?? 0)) / (it.playbackRate || 1);
-            return len > 200 ? len : Infinity;
+            return len > 200 ? len : 0;
           };
-          let freed = 0;
-          for (let k = 0; k < durs.length; k++) { const cap = vidCapMs(bts[k].itemId); if (durs[k] > cap) { freed += durs[k] - cap; durs[k] = cap; } }
-          if (freed > 0.5) {
+          let delta = 0; // >0 = freed to images, <0 = borrowed from images
+          for (let k = 0; k < durs.length; k++) { const foot = vidFootMs(bts[k].itemId); if (foot > 0) { delta += durs[k] - foot; durs[k] = foot; } }
+          if (Math.abs(delta) > 0.5) {
             const imgIdx = bts.map((_, k) => k).filter((k) => (map[bts[k].itemId] as any)?.type !== "video");
-            const imgSlack = imgIdx.reduce((a, k) => a + durs[k], 0);
-            if (imgSlack > 0) for (const k of imgIdx) durs[k] += freed * (durs[k] / imgSlack);
-            else durs = durs.map((d) => d + freed / durs.length);
-            elog(`[VIDEO CEILING] capped video(s) to footage, redistributed ${Math.round(freed)}ms to images`);
+            const imgTotal = imgIdx.reduce((a, k) => a + durs[k], 0);
+            if (imgIdx.length && imgTotal + delta > imgIdx.length * 500)
+              for (const k of imgIdx) durs[k] = Math.max(500, durs[k] + delta * (durs[k] / imgTotal));
+            // else: not enough image slack → videos keep full footage and the sequence just runs a bit longer
+            elog(`[VIDEO=FOOTAGE] locked video(s) to full footage, settled ${Math.round(delta)}ms with images`);
           }
+          // Lay gap-free by the (possibly video-lengthened) durations — do NOT force the last shot back to
+          // the narration length, or a long video would overrun it and corrupt the final window.
           let cur = 0;
-          beats = bts.map((b, k) => { const from = cur; const to = k === bts.length - 1 ? total : Math.round(from + durs[k]); cur = to; return { ...b, fromMs: from, toMs: Math.max(from + 300, to) }; });
-          beats[beats.length - 1].toMs = total;
+          beats = bts.map((b, k) => { const from = cur; const to = Math.round(from + durs[k]); cur = to; return { ...b, fromMs: from, toMs: Math.max(from + 300, to) }; });
           elog(`[MIN DURATIONS] enforced img≥2s / vid≥3s → ${beats.map((b) => `${b.itemId.slice(0, 6)}:${b.toMs - b.fromMs}ms`).join(" | ")}`);
         }
         try {
