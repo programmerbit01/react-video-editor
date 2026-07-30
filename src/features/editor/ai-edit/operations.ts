@@ -728,8 +728,8 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 // Lip-sync = the Drama v2 per-shot screenplay ASSEMBLER; Non-lip-sync = the full-audio transcription +
 // image-prompt relevance MATCHER (faceless). Style (drama/comic/noir…) is a PROMPT concern, not a category.
 export const PIPELINES: { id: string; label: string }[] = [
-  { id: "drama_v2", label: "🎬 Lip-sync video (Drama v2)" },
-  { id: "faceless_video", label: "🎙️ Non-lip-sync video" },
+  { id: "drama_v2", label: "🎬 Lip-sync" },
+  { id: "faceless_video", label: "🎙️ Non-lip-sync" },
 ];
 
 // VIBE presets — one-click "look & pace" shortcuts. Each is just a STYLE PHRASE injected into the LLM

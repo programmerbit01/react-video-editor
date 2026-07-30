@@ -1810,10 +1810,10 @@ export default function AiEditPanel() {
     //   3) generate the video: WITH_AUDIO → feed the TTS as `audio` so it lip-syncs to the real words
     //      (lips match, exact length, no hallucination); else the legacy text-driven path.
     // Returns the video url + the TTS url (the TTS is still overlaid + sizes the clip downstream).
-    const genTalkShot = async (g: any, narrText: string, onProg: (d: any) => void): Promise<{ vUrl: string; aUrl: string; audioDriven: boolean }> => {
+    const genTalkShot = async (g: any, narrText: string, onProg: (d: any) => void): Promise<{ vUrl: string; aUrl: string; audioDriven: boolean; promptUsed: string; durSecs: number }> => {
       // MODE: a REFERENCE-IMAGE (i2v) talking shot ALWAYS uses audio — that path lip-syncs great and is left
-      // untouched. A NON-ref shot uses T2V (LTX generates its OWN speech from the quoted words → best lips +
-      // full camera freedom) unless LIPSYNC_WITH_AUDIO flips it back to the audio path.
+      // untouched. A NON-ref shot uses T2V (LTX generates its OWN speech from the spoken line → best lips +
+      // FULL camera freedom, which is the whole point) unless LIPSYNC_WITH_AUDIO flips it back to the audio path.
       const hasRef = !!String(g.image_url || "");
       const audioDriven = hasRef || LIPSYNC_WITH_AUDIO;
       const aUrl = audioDriven && narrText ? await genUrl("audio", { text: narrText }, onProg) : "";
@@ -1829,24 +1829,24 @@ export default function AiEditPanel() {
       const line = lineOf(g);
       const vOpts: any = { aspect_ratio: g.aspect_ratio, optimize: false };
       if (baseImg) vOpts.image_url = baseImg;
+      let durSecs = 0;
       if (audioDriven && aUrl) {
-        // AUDIO-driven (ref/flag): the director's prompt is scene-only (ends "…and speaks"); the WORDS come
-        // from the TTS. duration:0 → the vApp sizes the video to the audio (+1s tail). Video is muted + the
-        // TTS overlaid downstream.
+        // AUDIO-driven (ref/flag): the director's prompt is the scene (words come from the TTS). duration:0
+        // → the vApp sizes the video to the audio (+1s tail). Video is muted + the TTS overlaid downstream.
         vOpts.prompt = g.prompt;
         vOpts.audio = aUrl; vOpts.duration = 0;
         elog(`[DRAMA v2 ASM] talk shot: AUDIO-driven lip-sync (${hasRef ? "ref i2v" : "flag"}) → video = audio length`);
       } else {
-        // T2V (no audio): LTX generates the speech itself, so the WORDS go in the prompt in DOUBLE quotes
-        // (LTX's format — the director keeps them out of the prompt and in `line`, we add them here so the
-        // JSON the director emits stays valid). Length = word estimate (spokenSecs, ×2 mult). Uses LTX's own
-        // audio (not muted).
-        vOpts.prompt = line ? `${g.prompt} "${line}"` : g.prompt;
-        vOpts.duration = spokenSecs(g) || 5;
-        elog(`[DRAMA v2 ASM] talk shot: T2V lip-sync (no audio) → LTX speaks the line itself, ~${spokenSecs(g) || 5}s`);
+        // T2V (no audio): LTX generates the speech ITSELF. The director wrote the scene FREELY (any camera —
+        // that freedom is why we chose t2v); we only guarantee the REQUIRED format by appending the spoken
+        // line in the `says "…"` form. Length = word estimate (LIPSYNC_WPM). Uses LTX's own audio (not muted).
+        durSecs = spokenSecs(g) || 5;
+        vOpts.prompt = line ? `${g.prompt} says "${line}"` : g.prompt;
+        vOpts.duration = durSecs;
+        elog(`[DRAMA v2 ASM] talk shot: T2V lip-sync (no audio, free camera) → LTX speaks the line itself, ~${durSecs}s`);
       }
       const vUrl = await genUrl("video", vOpts, onProg);
-      return { vUrl, aUrl, audioDriven };
+      return { vUrl, aUrl, audioDriven, promptUsed: String(vOpts.prompt || ""), durSecs };
     };
     // Real clip length FROM the just-added timeline item — ADD_VIDEO/ADD_AUDIO already loaded it, so we
     // never download it a 2nd time (that double-load was why placement crawled on a slow CDN).
@@ -1879,13 +1879,14 @@ export default function AiEditPanel() {
       if (_stopBuild) return;
       const prog = (d: any) => { const q = d?.queue_position, p = d?.progress; s.updateAt(i, { genStatus: q != null ? `🎬 Shot ${k + 1} queued #${q}…` : p != null ? `🎬 Shot ${k + 1} · ${p}%…` : `🎬 Shot ${k + 1}…` }); };
       try {
-        let vUrl = "", aUrl = "", audioDriven = false;
+        let vUrl = "", aUrl = "", audioDriven = false, talkPrompt = "", talkDur = 0;
         const vKind = g.op === "search" ? (g.kind === "video" ? "video" : "image") : (g.kind || "image");
         // A talk video's length: t2v = word estimate (spokenSecs); audio-driven = the audio (vApp sizes it).
         const genSecs = (vKind === "video" && talk ? spokenSecs(g) : 0) || Number(g.duration) || 5;
         if (talk && vKind === "video") {
           // TALKING shot → lip-sync pipeline. ref → audio-i2v; non-ref → t2v (see genTalkShot).
-          ({ vUrl, aUrl, audioDriven } = await genTalkShot(g, narrText, prog));
+          const r = await genTalkShot(g, narrText, prog);
+          vUrl = r.vUrl; aUrl = r.aUrl; audioDriven = r.audioDriven; talkPrompt = r.promptUsed; talkDur = r.durSecs;
         } else {
           // B-ROLL shot → stock search or a plain gen, then its narrator voiceover.
           if (g.op === "search") {
@@ -1918,7 +1919,11 @@ export default function AiEditPanel() {
         const nowP = useAiEditStore.getState().messages[i];
         // show the shot's VISUAL and (when narrated) its VOICE clip in the chat, both as they land — each
         // captioned with the prompt/line it came from (stock = the search query; talk = the spoken line).
-        const vCap = g.op === "search" ? `(stock) ${String(g.query || narrText || "").trim()}` : `(gen) ${String(g.prompt || narrText || "").trim()}`;
+        // caption: talk shot → the FULL prompt actually sent (incl. the says "…" line) + its duration;
+        // stock → source+query; b-roll gen → its prompt.
+        const vCap = talk
+          ? `(gen · ${talkDur ? talkDur + "s" : "audio-len"}) ${talkPrompt || String(g.prompt || "").trim()}`
+          : g.op === "search" ? `(stock) ${String(g.query || narrText || "").trim()}` : `(gen) ${String(g.prompt || narrText || "").trim()}`;
         s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl, prompt: vCap }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl, prompt: `(voice) ${narrText}` }] : [])] });
         // KNOWN dims (from the aspect-ratio + requested seconds) let designcombo add the VIDEO WITHOUT
         // downloading it first → instant land; the pixels stream in the player afterward. Videos are the
