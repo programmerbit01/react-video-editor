@@ -722,11 +722,13 @@ Rules: use ONLY the itemId values in the selection context (NEVER invent ids). C
 // timeline. No hardcoded steps — control lives entirely in the prompt. The director prompts
 // themselves now live in ./editor-config.ts (imported + re-exported at the top of this file).
 
-// Shown in the AI-Edit composer dropdown (top → bottom).
+// Shown in the AI-Edit composer dropdown (top → bottom). TWO categories, split by the ONLY thing that
+// changes the engine: whether characters speak on camera (lip-sync) or not. These are DIFFERENT engines —
+// Lip-sync = the Drama v2 per-shot screenplay ASSEMBLER; Non-lip-sync = the full-audio transcription +
+// image-prompt relevance MATCHER (faceless). Style (drama/comic/noir…) is a PROMPT concern, not a category.
 export const PIPELINES: { id: string; label: string }[] = [
-  { id: "drama_v2", label: "🎬 Drama (v2)" },
-  { id: "comic_drama", label: "🎭 Comic Drama" },
-  { id: "faceless_video", label: "🎬 Faceless Video" },
+  { id: "drama_v2", label: "🎬 Lip-sync video (Drama v2)" },
+  { id: "faceless_video", label: "🎙️ Non-lip-sync video" },
 ];
 
 // VIBE presets — one-click "look & pace" shortcuts. Each is just a STYLE PHRASE injected into the LLM
