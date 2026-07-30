@@ -1206,7 +1206,7 @@ export default function AiEditPanel() {
           const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, desc) : addImage(src, desc)));
           coverFitToCanvas(nid); // off-ratio stock → fill the 16:9/9:16 frame (no letterbox, no manual fit)
           snap[nid] = null;
-          previews.push({ kind, url: results[k]?.preview || src, prompt: `🔎 stock: ${String(g.query || g.prompt || desc).slice(0, 80)}` });
+          previews.push({ kind, url: results[k]?.preview || src, prompt: `(stock) ${String(g.query || g.prompt || desc).slice(0, 80)}` });
           added++;
         }
         const q = String(g.query || g.prompt || "").slice(0, 48);
@@ -1258,7 +1258,7 @@ export default function AiEditPanel() {
         applyOperations([{ op: "delete", itemId: g.itemId }]);
         const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
         const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
-        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url, prompt: String(g.prompt || "animate").trim() }], genStatus: "✓ Image animated → video" });
+        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url, prompt: `(gen) ${String(g.prompt || "animate").trim()}` }], genStatus: "✓ Image animated → video" });
       } catch (e: any) {
         s.updateAt(i, { genStatus: `⚠️ animate: ${e?.message || "failed"}` });
       }
@@ -1328,7 +1328,7 @@ export default function AiEditPanel() {
       const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
       // NO per-item "✓ … added" status — a ✓ here flips the aggregate "working" state (and the timer +
       // Stop button) OFF mid-build. The running counter/stage owns genStatus; the preview shows the clip.
-      s.updateAt(i, { genPreviews: [...prev, { kind: label, url, prompt: String(g.prompt || g.text || "").trim() }] });
+      s.updateAt(i, { genPreviews: [...prev, { kind: label, url, prompt: `(${label === "audio" ? "voice" : "gen"}) ${String(g.prompt || g.text || "").trim()}` }] });
     } catch (e: any) {
       s.updateAt(i, { genStatus: `⚠️ ${label}: ${e?.message || "failed"}` });
     }
@@ -1648,7 +1648,12 @@ export default function AiEditPanel() {
           // video row (the executor moves them onto one track — see operations.ts arrange handler).
           s.updateAt(i, { genStatus: "🧩 Arranging clips to the narration…" });
           elog("[AI-Edit arrange] applying arrange (single track, gap-free)");
+          elog(`[ARRANGE IN] ${beats.map((b) => { const t = (map[b.itemId] as any)?.type || "?"; return `${t[0]}${b.itemId.slice(0, 4)}:${Math.round(b.fromMs)}-${Math.round(b.toMs)}`; }).join(" | ")}`);
           applyOperations([{ op: "arrange", items: beats.map((bt) => ({ itemId: bt.itemId, fromMs: bt.fromMs, toMs: bt.toMs })) }]);
+          // DIAGNOSTIC: read back each visual's ACTUAL display + type AFTER the arrange. If a video shows a
+          // wider span than its window here, the item kept its footage-length display (overlap cause).
+          const _rb = useStore.getState().trackItemsMap || {};
+          elog(`[ARRANGE READBACK] ${beats.map((b) => { const it: any = _rb[b.itemId]; return `${(String(it?.type || "?"))[0]}${b.itemId.slice(0, 4)}:${Math.round(it?.display?.from || 0)}-${Math.round(it?.display?.to || 0)}`; }).join(" | ")}`);
           // MOTION: DIRECTED per shot by the LLM (match_shots' `motion` = punchIn/zoomIn/hold/… fitting
           // the dramatic beat + the Vibe) → mapped to Ken Burns kind + intensity. Falls back to an
           // alternating default when there's no directed motion (transcript/even paths). IMAGE shots only
@@ -1891,8 +1896,8 @@ export default function AiEditPanel() {
         const nowP = useAiEditStore.getState().messages[i];
         // show the shot's VISUAL and (when narrated) its VOICE clip in the chat, both as they land — each
         // captioned with the prompt/line it came from (stock = the search query; talk = the spoken line).
-        const vCap = String(g.op === "search" ? `🔎 stock: ${g.query || narrText || ""}` : (g.prompt || narrText || "")).trim();
-        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl, prompt: vCap }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl, prompt: `🎙️ ${narrText}` }] : [])] });
+        const vCap = g.op === "search" ? `(stock) ${String(g.query || narrText || "").trim()}` : `(gen) ${String(g.prompt || narrText || "").trim()}`;
+        s.updateAt(i, { genPreviews: [...(nowP?.genPreviews || []), { kind: vKind, url: vUrl, prompt: vCap }, ...(aUrl ? [{ kind: "audio" as const, url: aUrl, prompt: `(voice) ${narrText}` }] : [])] });
         // KNOWN dims (from the aspect-ratio + requested seconds) let designcombo add the VIDEO WITHOUT
         // downloading it first → instant land; the pixels stream in the player afterward. Videos are the
         // big/slow clips, so this is the main win. (Images always load, but they're small — retry covers.)
