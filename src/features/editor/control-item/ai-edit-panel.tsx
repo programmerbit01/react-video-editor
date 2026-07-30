@@ -477,10 +477,21 @@ function serializedAdd(label: string, doAdd: () => string, waitMs = 45000): Prom
     const id = doAdd();
     let landed = false;
     if (id) landed = await waitForItem(id, waitMs);
+    // Small settle so designcombo's async reducer fully commits this add before the next one reads the
+    // base — without it a follow-up read-modify-write can land on a stale map and DROP a sibling item.
+    if (landed) await new Promise((r) => setTimeout(r, 200));
     const after = Object.keys(useStore.getState().trackItemsMap || {}).length;
     elog(`[AI-Edit gen] +${label} ${id.slice(0, 6)} ${landed ? "landed" : "TIMEOUT"} — items ${before}→${after}`);
     return id;
   });
+  _addChain = run.then(() => {}, () => {});
+  return run;
+}
+// Run an arbitrary timeline MUTATION (e.g. a cover-fit EDIT) INSIDE the same add mutex — so it can never
+// race a concurrent add and clobber it (an unserialized applyOperations edit during the parallel gen
+// batch was dropping just-landed items: "3/8 visuals, 5 vanished").
+function serializedRun(fn: () => void): Promise<void> {
+  const run = _addChain.then(async () => { try { fn(); } catch { /* noop */ } await new Promise((r) => setTimeout(r, 120)); });
   _addChain = run.then(() => {}, () => {});
   return run;
 }
@@ -1224,7 +1235,7 @@ export default function AiEditPanel() {
           if (!src) continue;
           // serialized add (+ waits for landing) so concurrent stock adds never clobber each other
           const nid = await serializedAdd(kind, () => (kind === "video" ? addVideo(src, desc) : addImage(src, desc)));
-          coverFitToCanvas(nid); // off-ratio stock → fill the 16:9/9:16 frame (no letterbox, no manual fit)
+          await serializedRun(() => coverFitToCanvas(nid)); // off-ratio stock → fill the frame (INSIDE the mutex so it can't clobber a concurrent add)
           snap[nid] = null;
           previews.push({ kind, url: preview || src, prompt: `(stock:${src0}) ${String(g.query || g.prompt || desc).slice(0, 80)}` });
           added++;
@@ -1956,7 +1967,7 @@ export default function AiEditPanel() {
           await sleep(2500);
         }
         if (!vid) { elog(`[DRAMA v2 ASM] shot ${k + 1} media never loaded after retries — dropped`); bump(); return; }
-        if (g.op === "search") coverFitToCanvas(vid); // off-ratio stock → fill the frame (no letterbox)
+        if (g.op === "search") await serializedRun(() => coverFitToCanvas(vid)); // off-ratio stock → fill the frame (INSIDE the mutex)
         // ADD the narrator voice — RETRY like the video. A fresh R2 mp3 can be slow to load the first time,
         // which was silently DROPPING the voiceover off the timeline ("ab audio hi ni timeline me").
         let aid = "";
