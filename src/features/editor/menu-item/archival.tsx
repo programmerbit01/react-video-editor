@@ -86,6 +86,8 @@ export const Archival = () => {
   const isDraggingOverTimeline = useIsDraggingOverTimeline();
   const [query, setQuery] = useState("");
   const [type, setType] = useState<MediaType>("video");
+  // Sound sub-filter: SFX = short sound effects, Music = long beds. Only used when type === "sound".
+  const [soundKind, setSoundKind] = useState<"all" | "music" | "sfx">("all");
   const [selected, setSelected] = useState<Record<string, boolean>>({
     pexels: true,
     openverse: false,
@@ -113,6 +115,7 @@ export const Archival = () => {
     setSearched(true);
     try {
       const params = new URLSearchParams({ query: q, type, sources: sources.join(","), per_page: "20" });
+      if (type === "sound" && soundKind !== "all") params.set("sound_kind", soundKind);
       const res = await fetch(withEditorBase(`/api/archival?${params.toString()}`));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -241,6 +244,28 @@ export const Archival = () => {
           </button>
         ))}
       </div>
+
+      {/* Sound sub-filter — Music beds vs short SFX (Openverse category + duration cap) */}
+      {type === "sound" && (
+        <div className="flex-none flex items-center gap-1 px-3 pb-1">
+          {([
+            { id: "all", label: "All" },
+            { id: "music", label: "Music" },
+            { id: "sfx", label: "SFX" },
+          ] as const).map((k) => (
+            <button
+              key={k.id}
+              onClick={() => setSoundKind(k.id)}
+              className={cn(
+                "px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors",
+                soundKind === k.id ? "bg-white/10 text-white" : "text-muted-foreground hover:bg-white/5"
+              )}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Search */}
       <div className="flex-none flex items-center gap-1.5 px-3 pb-1">

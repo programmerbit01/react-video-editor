@@ -112,10 +112,17 @@ async function fromPexels(q: string, type: MediaType, n: number): Promise<NormIt
   })) as NormItem[];
 }
 
-async function fromOpenverse(q: string, type: MediaType, n: number): Promise<NormItem[]> {
+async function fromOpenverse(q: string, type: MediaType, n: number, soundKind?: string): Promise<NormItem[]> {
   if (type === "video") return []; // Openverse has no video
   const kind = type === "sound" ? "audio" : "images";
-  const url = `https://api.openverse.org/v1/${kind}/?q=${encodeURIComponent(q)}&page_size=${n}&mature=false`;
+  // Openverse audio is mostly long music. `category=sound_effect` is effectively empty on Openverse
+  // (returns 0), so SFX = SHORTEST clips instead — that's where the short sound effects actually live.
+  let extra = "";
+  if (type === "sound") {
+    if (soundKind === "sfx") extra = "&length=shortest";
+    else if (soundKind === "music") extra = "&category=music";
+  }
+  const url = `https://api.openverse.org/v1/${kind}/?q=${encodeURIComponent(q)}&page_size=${n}&mature=false${extra}`;
   const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: timeoutSignal() });
   if (!r.ok) throw new Error(`openverse ${r.status}`);
   const d = await r.json();
@@ -272,12 +279,16 @@ async function fromArchive(q: string, type: MediaType, n: number): Promise<NormI
   return resolved.filter(Boolean) as NormItem[];
 }
 
-const ADAPTERS: Record<string, (q: string, t: MediaType, n: number) => Promise<NormItem[]>> = {
+const ADAPTERS: Record<string, (q: string, t: MediaType, n: number, soundKind?: string) => Promise<NormItem[]>> = {
   pexels: fromPexels,
   openverse: fromOpenverse,
   wikimedia: fromWikimedia,
   archive: fromArchive,
 };
+
+// SFX are short. Sources without a native category filter (Wikimedia / Internet Archive) return
+// long music too, so cap duration client-side; 0 = unknown duration, kept rather than dropped.
+const SFX_MAX_SEC = 30;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -285,6 +296,7 @@ export async function GET(request: NextRequest) {
   const rawType = searchParams.get("type") || "image";
   const type = (["video", "sound"].includes(rawType) ? rawType : "image") as MediaType;
   const perPage = Math.min(Number(searchParams.get("per_page") || "20") || 20, 40);
+  const soundKind = (searchParams.get("sound_kind") || "all").toLowerCase(); // all | music | sfx
   const sources = (searchParams.get("sources") || "pexels,openverse")
     .split(",")
     .map((s) => s.trim().toLowerCase())
@@ -305,8 +317,12 @@ export async function GET(request: NextRequest) {
         // Try full query, then progressively simpler ones, until one returns hits.
         let items: NormItem[] = [];
         for (const cq of candidates) {
-          items = await ADAPTERS[name](cq, type, perPage);
+          items = await ADAPTERS[name](cq, type, perPage, soundKind);
           if (items.length) break;
+        }
+        if (type === "sound" && soundKind === "sfx") {
+          // Keep short clips (and unknown-duration ones); drops the long music WM/IA return.
+          items = items.filter((it) => { const d = it.details.duration || 0; return d === 0 || d <= SFX_MAX_SEC; });
         }
         if (minRes > 0) {
           items = items.filter(
