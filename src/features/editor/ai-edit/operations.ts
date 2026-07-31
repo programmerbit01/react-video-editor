@@ -26,6 +26,7 @@ export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT };
 export interface AiEditOp {
   op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "sfx";
   itemId?: string;
+  voice_id?: string; // audio (TTS) op — the user's chosen voice; forwarded to the vApp (empty = default voice)
   // musicbed / sfx (client picks the src from the curated audio library, then applies):
   src?: string; // audio url
   volume?: number; // 0-100

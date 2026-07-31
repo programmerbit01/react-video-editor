@@ -260,6 +260,15 @@ async function runChat(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Pull a voice id the user typed in their prompt ("voice id = pNInz6obpgDQGcFmaJgB", "voice_id: …",
+// "voice=…"). Requires an explicit id label + separator so it never grabs the word "voiceover" or a
+// stray token. Works for both pipelines: whatever we find is set on the audio op and forwarded to the
+// TTS as `voice_id` (the vApp resolves ElevenLabs / Vapp-library / uploaded ids). Empty = default voice.
+function extractVoiceId(s: string): string {
+  const m = String(s || "").match(/\bvoice[\s_-]*(?:id)?\s*[:=]\s*["']?([A-Za-z0-9]{10,40})["']?/i);
+  return m ? m[1] : "";
+}
+
 // Start a background media generation job → request_id (fast, non-blocking).
 async function startGen(payload: Record<string, any>): Promise<{ id: string; prompt: string }> {
   const res = await fetch(withEditorBase("/api/ai-generate"), {
@@ -1078,6 +1087,15 @@ export default function AiEditPanel() {
           if (audOp) audOp.text = injectedScript;
           else env.operations.push({ op: "generate", kind: "audio", text: injectedScript });
         }
+        // VOICE: if the user typed a voice id in their prompt, stamp it on the audio op → the narration
+        // (faceless) AND the narrator/dialogue TTS (drama, which reads it off this same op) use THAT voice
+        // instead of the default. (T2V lip-sync dialogue makes its own voice in the video model, so a
+        // voice_id can only steer the narrator VO + audio-driven/ref talking shots.)
+        const _vid = extractVoiceId(text);
+        if (_vid) {
+          const a = env.operations.find((o: any) => o.op === "generate" && o.kind === "audio");
+          if (a) { a.voice_id = _vid; elog(`[VOICE] user voice_id ${_vid} → narration/dialogue TTS`); }
+        }
         // Optimizer is OPTIONAL (⚙ "Optimise prompt" toggle = 2 modes). PIPELINE_FORCE_OPTIMIZE keeps the
         // "director writes SHORT hints → optimizer expands" path ONE FLAG away — flip it true if the
         // director ever gets too heavy again (then also switch the director prompt back to short hints).
@@ -1316,6 +1334,7 @@ export default function AiEditPanel() {
         prompt: g.prompt || g.text,
         image_url,
         images, // multi-reference → forwarded as images_list (Flux edit takes several)
+        voice_id: g.voice_id, // audio op only — narration TTS uses the user's chosen voice (undefined = default)
         aspect_ratio: g.aspect_ratio,
         duration: g.duration,
         // Per-op wins (pipeline shots force it ON — the director now writes SHORT hints that the
@@ -1780,6 +1799,9 @@ export default function AiEditPanel() {
   // defers to the standard builder when there are literally no visual shots to place.
   const runBuildDrama = async (i: number, gens: any[], screenplay: string) => {
     const token = getToken();
+    // Voice: the user's chosen voice_id rides on the audio op (stamped upstream). Every TTS clip in this
+    // pipeline — the narrator VO and each audio-driven/ref talking shot — uses it (empty = default voice).
+    const voiceId = String((gens.find((g: any) => g.op === "generate" && g.kind === "audio") as any)?.voice_id || "");
     // Parse the screenplay into NARRATOR / DIALOGUE beats — TOLERANT of tag typos the LLM sometimes emits
     // (e.g. "DIALOGATOR:" instead of "DIALOGUE [Name]:", or "NARRATION" / "VO"): anything starting DIALOG… is
     // dialogue, NARRATOR / NARRATION / VOICEOVER / VO is narration. We only use the NARRATOR text as the
@@ -1838,7 +1860,7 @@ export default function AiEditPanel() {
       // FULL camera freedom, which is the whole point) unless LIPSYNC_WITH_AUDIO flips it back to the audio path.
       const hasRef = !!String(g.image_url || "");
       const audioDriven = hasRef || LIPSYNC_WITH_AUDIO;
-      const aUrl = audioDriven && narrText ? await genUrl("audio", { text: narrText }, onProg) : "";
+      const aUrl = audioDriven && narrText ? await genUrl("audio", { text: narrText, voice_id: voiceId }, onProg) : "";
       let baseImg = String(g.image_url || "");
       if (baseImg && LIPSYNC_I2V_EDIT_FIRST) {
         // Flux EDIT the ref into this shot's look — force it to keep the face (the video prompt is a scene
@@ -1932,7 +1954,7 @@ export default function AiEditPanel() {
             elog(`[DRAMA v2 ASM] shot ${k + 1} STOCK ${vKind} search "${String(query).slice(0, 48)}" [${src0}]${orientTag} → ${vUrl ? "hit" : "MISS (will AI-generate)"}`);
           }
           if (!vUrl) vUrl = await genUrl(vKind, { prompt: g.prompt, text: g.text, image_url: g.image_url, images: g.images, aspect_ratio: g.aspect_ratio, duration: genSecs, optimize: g.optimize }, prog);
-          if (narrText) aUrl = await genUrl("audio", { text: narrText }, prog);
+          if (narrText) aUrl = await genUrl("audio", { text: narrText, voice_id: voiceId }, prog);
         }
         if (!vUrl) { elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) VISUAL failed after retry — kept out`); bump(); return; }
         elog(`[DRAMA v2 ASM] shot ${k + 1} (${type}) ${vKind} url=…${vUrl.slice(-74)}`);

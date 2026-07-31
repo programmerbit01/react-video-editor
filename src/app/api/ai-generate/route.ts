@@ -93,7 +93,9 @@ export async function POST(request: Request) {
         ...(body.audio ? { audio: body.audio, audio_url: body.audio } : {}),
       };
     } else {
-      reqBody = { prompt, model };
+      // AUDIO (TTS). Forward a single voice_id if the caller supplied one — the vApp resolves it
+      // (ElevenLabs / Vapp library / uploaded) via _resolve_voice_for_payload. No voice_id → default voice.
+      reqBody = { prompt, model, ...(body.voice_id ? { voice_id: String(body.voice_id).trim() } : {}) };
     }
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
