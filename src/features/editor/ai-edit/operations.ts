@@ -24,10 +24,13 @@ import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT } from "./edi
 export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT };
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "music" | "sfx" | "stocksfx";
+  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "music" | "sfx" | "stocksfx" | "stockmusic";
   itemId?: string;
   voice_id?: string; // audio (TTS) op — the user's chosen voice; forwarded to the vApp (empty = default voice)
   seed?: number; // music (AI-generate) — optional fixed seed for reproducibility
+  atMs?: number; // stocksfx — place the sound at this timeline moment (ms), from the transcript segment
+  atSec?: number; // stocksfx — same, in seconds (converted to ms if atMs is absent)
+  cues?: { query: string; atMs?: number; atSec?: number }[]; // stocksfx — MANY sounds in ONE op, each timed; all land on ONE sfx row
   // musicbed / sfx (client picks the src from the curated audio library, then applies):
   src?: string; // audio url
   volume?: number; // 0-100
@@ -214,7 +217,12 @@ export function setItemWindows(items: { itemId: string; fromMs: number; toMs: nu
 
 // Place narrator-voice clips at their windows AND consolidate them onto ONE audio row (category layout —
 // all narration on a single track, like images→one row / videos→one row from the arrange executor).
-export function placeAudioClips(items: { itemId: string; fromMs: number; toMs: number }[]): void {
+export function placeAudioClips(
+  items: { itemId: string; fromMs: number; toMs: number }[],
+  opts?: { trackRole?: string; trackName?: string },
+): void {
+  const role = opts?.trackRole || "narration";
+  const name = opts?.trackName || "Narration";
   const sm = getStateManagerRef();
   const st = sm?.getState?.();
   if (!st) return;
@@ -225,12 +233,13 @@ export function placeAudioClips(items: { itemId: string; fromMs: number; toMs: n
     const item = map[it.itemId];
     if (item) { const from = Math.max(0, Math.round(it.fromMs)); map[it.itemId] = { ...item, display: { from, to: Math.max(from + 100, Math.round(it.toMs)) } }; }
   }
-  // pull the narration clips off every track, then drop them ALL onto one dedicated narration audio row.
+  // pull these clips off every track, then drop them ALL onto ONE dedicated audio row for this role
+  // (narration VO, or an "sfx" row for sound effects — so every SFX shares one lane, not a row each).
   let tracks = (st.tracks || []).map((t: any) => ({ ...t, items: (t.items || []).filter((x: string) => !ids.includes(x)) }));
-  const isNarr = (t: any) => t?.type === "audio" && t?.metadata?.trackRole === "narration";
-  let track = tracks.find(isNarr);
+  const isRole = (t: any) => t?.type === "audio" && t?.metadata?.trackRole === role;
+  let track = tracks.find(isRole);
   if (!track) {
-    track = { id: `narration-${nanoid(6)}`, type: "audio", name: "Narration", accepts: ["audio"], items: [], magnetic: false, static: false, metadata: { trackRole: "narration" } };
+    track = { id: `${role}-${nanoid(6)}`, type: "audio", name, accepts: ["audio"], items: [], magnetic: false, static: false, metadata: { trackRole: role } };
     tracks = [...tracks, track];
   }
   tracks = tracks.map((t: any) => (t.id === track.id ? { ...t, items: [...(t.items || []), ...ids] } : t));
@@ -711,7 +720,8 @@ Supported operations:
     generate ops PLUS this single arrange op. CRITICAL: media you generate/search in THIS response has no id
     yet — that's fine, "target":"all" needs no ids.
 - GENERATE ORIGINAL MUSIC (AI) and add it as a background track: { "op":"music", "prompt":"<a SHORT plain description of the MOOD/theme wanted + any genre the user named — e.g. 'tense dramatic war score' or 'calm hopeful piano'>", "duration":<seconds> }. Use when the user says "generate / create / make music", "add a soundtrack / score", or "background music". Keep the prompt SHORT — JUST the mood/theme from the selected clip / narration / topic; a music expert (the optimizer) turns it into the full track prompt, so do NOT list instruments/BPM/tags yourself and do NOT add lyrics unless the user asks. Set "duration" to the SELECTED clip length if it is given in the selection context, else ~20s. Needs NO selection; if a voice/clip IS selected, match the mood + length to it.
-- ADD A STOCK SOUND EFFECT related to the content (REAL curated SFX from Openverse / Wikimedia / Internet Archive — NOT AI-generated, so no artifacts / garbled voices): { "op":"stocksfx", "query":"<2-4 keyword sound, e.g. 'fire crackling', 'sword clash', 'ocean waves', 'crowd cheering'>", "itemId":"<the clip/audio it should sit under — optional>", "volume":40 }. Use this by DEFAULT when the user says "add sfx", "add a sound effect", "add stock sfx", "put a <X> sound". DERIVE the query from what the SELECTED audio / narration / clip is ABOUT (narration mentions a fire → 'fire crackling'). It lays the sound as a layer UNDER the selection. THIS IS THE PREFERRED, RELIABLE SFX PATH.
+- ADD STOCK SOUND EFFECTS driven by the TRANSCRIPT (REAL curated SFX — Openverse / Wikimedia / Internet Archive — no artifacts / garbled voices): read the NARRATION TIMELINE and, for EACH concrete sound it MENTIONS or clearly implies (waves, a door, thunder, footsteps, a crowd, an engine, rain…), add a cue. Emit ONE op that carries ALL the cues: { "op":"stocksfx", "cues":[ {"query":"ocean waves","atMs":3000}, {"query":"seagulls","atMs":8000}, {"query":"ship horn","atMs":15000} ], "volume":40 }. Rules: (1) queries must be SHORT + generic so stock search finds them — 'ocean waves' NOT 'churning harbor water at dusk'; 'door slam' NOT 'heavy oak door creaking shut'. (2) atMs = that segment's start time × 1000, so each sound plays WHEN it is said. (3) put EVERY sound moment as a cue in the SAME op's cues[] (they all land on ONE shared SFX row) — do NOT emit multiple stocksfx ops. (4) SOURCE defaults to Openverse — add "source":"openverse" (or omit). ONLY set "source":"wikimedia" or "source":"archive" (Internet Archive) if the user explicitly names that source. If there is NO narration timeline, use a single cue with a query from the topic and no atMs. Use by DEFAULT for "add sfx / add sound effects / add stock sfx". THIS IS THE PREFERRED, RELIABLE SFX PATH.
+- ADD STOCK BACKGROUND MUSIC (a REAL music track, Openverse by default): { "op":"stockmusic", "query":"<2-3 keyword mood/genre, e.g. 'calm piano', 'epic cinematic', 'lofi chill'>", "source":"openverse", "volume":20 }. Use when the user says "add stock music", "add background music from stock", "add a soundtrack (stock)". Derive the mood from the topic/selection. It lays ONE full-length low-volume music bed. SOURCE defaults to Openverse; only set "wikimedia"/"archive" if the user names it. (Different from "music" which AI-GENERATES an original track via ACE-Step — use stockmusic for a real known track, "music" for a bespoke one.)
 - GENERATE SOUND EFFECTS for a VIDEO (AI — MMAudio watches the video and invents synced foley): { "op":"sfx", "itemId":"<the selected VIDEO id>", "prompt":"<OPTIONAL short description>" }. Use ONLY when the user explicitly wants AI-GENERATED sound matched to a video ("generate sfx from this video", "AI foley"). REQUIRES a VIDEO clip (it watches the frames). For any ordinary "add a <sound>" request, prefer "stocksfx" above — it is a clean known sound. (Neither is music — for music use the "music" op.)
 - Search STOCK footage/photos (Pexels) and add: { "op":"search", "kind":"image", "query":"snowy mountains at sunset", "count":3 }   (kind: "image" | "video")
     Use "search" (stock) when the user says "stock", "find", or "footage". Use "generate" (AI) ONLY when they say "generate", "create", or "make an AI …". Keep queries relevant to the narration/topic.

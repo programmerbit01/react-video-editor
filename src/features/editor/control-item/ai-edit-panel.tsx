@@ -932,7 +932,7 @@ export default function AiEditPanel() {
 
     // Script-sync: if the request is about matching to the narration, transcribe the
     // voiceover once (cached) so the AI gets exact segment times.
-    if (/\b(script|narration|sync|voiceover|subtitles?|captions?)\b/i.test(text) || /when .*(say|said|speak)/i.test(text)) {
+    if (/\b(script|narration|sync|voiceover|subtitles?|captions?|sfx|sound ?effects?|foley|ambien(?:t|ce))\b/i.test(text) || /when .*(say|said|speak)/i.test(text)) {
       const audio: any = Object.values(useStore.getState().trackItemsMap || {}).find((it: any) => it?.type === "audio");
       const asrc: string = audio?.details?.src || "";
       if (asrc && useAiEditStore.getState().transcript?.key !== audio.id) {
@@ -1225,32 +1225,92 @@ export default function AiEditPanel() {
     // → no garbled/hallucinated voices. Reuses the Stock panel's /api/archival sound search.
     if (g.op === "stocksfx") {
       try {
-        const q = String(g.query || g.prompt || g.text || "").trim();
-        if (!q) { s.updateAt(i, { genStatus: "⚠️ sfx: what sound? (e.g. 'fire crackling')" }); return; }
-        s.updateAt(i, { genStatus: `🔎 Finding a "${q}" sound…` });
-        const params = new URLSearchParams({ query: q, type: "sound", sound_kind: "sfx", sources: "openverse,wikimedia,archive", per_page: "8" });
-        const res = await fetch(withEditorBase(`/api/archival?${params.toString()}`));
-        const data = await res.json().catch(() => ({}));
-        const hit = (Array.isArray(data?.items) ? data.items : []).find((it: any) => it?.type === "audio" && it?.details?.src);
-        if (!hit) { s.updateAt(i, { genStatus: `⚠️ sfx: no stock sound found for "${q}"` }); return; }
-        // Sit it UNDER the target (director's itemId, else the current selection, else the main audio).
-        const st = useStore.getState().trackItemsMap || {};
-        const tgt = g.itemId || activeIds[0] || Object.keys(st).find((id) => (st[id] as any)?.type === "audio");
-        const from = (tgt ? (st[tgt] as any) : null)?.display?.from ?? 0;
-        const aid = await serializedAdd("audio", () => addAudio(hit.details.src, `sfx: ${hit.title || q}`));
-        if (aid) {
-          const alen = Number((useStore.getState().trackItemsMap || {})[aid]?.duration) || 3000;
-          applyOperations([
-            { op: "arrange", items: [{ itemId: aid, fromMs: from, toMs: from + alen }] } as any,
-            { op: "edit", itemId: aid, details: { volume: g.volume ?? 40 } },
-          ]);
+        // ONE op carries MANY timed cues → all land on ONE shared "SFX" row at their transcript moments.
+        const st0 = useStore.getState().trackItemsMap || {};
+        const tgt0 = g.itemId || activeIds[0] || Object.keys(st0).find((id) => (st0[id] as any)?.type === "audio");
+        const tgtFrom = (tgt0 ? (st0[tgt0] as any) : null)?.display?.from ?? 0;
+        const cues: any[] = Array.isArray(g.cues) && g.cues.length
+          ? g.cues
+          : [{ query: g.query || g.prompt || g.text, atMs: g.atMs, atSec: g.atSec }];
+        const SFX_MAX_MS = 5000; // an SFX is SHORT — cap the placed clip so a long file never sprawls
+        const source = String(g.source || "openverse").toLowerCase().trim(); // DEFAULT = Openverse only; director sets another if asked
+        // Search the stock SOUND source; prefer the SHORTEST clip (SFX ≠ a 30s bed). Broaden (drop
+        // keywords) if a specific query is empty — 'churning harbor water' → 'harbor water' → 'water'.
+        const doSearch = async (query: string): Promise<any> => {
+          const params = new URLSearchParams({ query, type: "sound", sound_kind: "sfx", sources: source, per_page: "12" });
+          const r = await fetch(withEditorBase(`/api/archival?${params.toString()}`)).catch(() => null);
+          const d = r ? await r.json().catch(() => ({})) : {};
+          const list = (Array.isArray(d?.items) ? d.items : []).filter((it: any) => it?.type === "audio" && it?.details?.src);
+          if (!list.length) return null;
+          const dur = (it: any) => Number(it?.details?.duration) || 999;
+          const short = list.filter((it: any) => dur(it) > 0 && dur(it) <= 10); // real SFX are a few seconds
+          return short[0] || list.slice().sort((a: any, b: any) => dur(a) - dur(b))[0]; // else the shortest available
+        };
+        const placed: { itemId: string; fromMs: number; toMs: number }[] = [];
+        const previews: any[] = [];
+        let done = 0;
+        for (const c of cues) {
+          if (_stopBuild) break;
+          const rawq = String(c?.query || "").trim();
+          if (!rawq) continue;
+          s.updateAt(i, { genStatus: `🔎 SFX ${done + 1}/${cues.length}: "${rawq}"…` });
+          const words = rawq.split(/\s+/).filter(Boolean);
+          let hit = await doSearch(rawq);
+          if (!hit && words.length > 2) hit = await doSearch(words.slice(0, 2).join(" "));
+          if (!hit && words.length > 1) hit = await doSearch(words[words.length - 1]); // head noun (e.g. "waves")
+          if (!hit) { elog(`[STOCK SFX] no sound for "${rawq}"`); continue; }
+          const atMs = Number.isFinite(Number(c?.atMs)) ? Number(c.atMs)
+            : (c?.atSec != null ? Number(c.atSec) * 1000 : tgtFrom);
+          const aid = await serializedAdd("audio", () => addAudio(hit.details.src, `sfx: ${hit.title || rawq}`));
+          if (!aid) { elog(`[STOCK SFX] "${rawq}" found but add failed`); continue; }
+          const it: any = (useStore.getState().trackItemsMap || {})[aid];
+          const realLen = Number(it?.duration) || (it?.display ? it.display.to - it.display.from : 0) || 3000;
+          const len = Math.min(realLen, SFX_MAX_MS); // SFX stays short even if the source file is long
+          const at = Math.max(0, Math.round(atMs));
+          applyOperations([{ op: "edit", itemId: aid, details: { volume: g.volume ?? 40 } }]);
+          placed.push({ itemId: aid, fromMs: at, toMs: at + len });
+          previews.push({ kind: "audio", url: hit.details.src, prompt: `(sfx@${Math.round(at / 1000)}s · ${hit.source_name || "stock"}) ${hit.title || rawq}` });
+          done += 1;
+          elog(`[STOCK SFX] "${rawq}" → ${String(hit.title || "").slice(0, 30)} [${hit.source_name || "?"}] @${Math.round(at / 1000)}s`);
         }
+        // Drop EVERY sfx clip onto ONE dedicated "SFX" row at its own time (not a row each).
+        if (placed.length) placeAudioClips(placed, { trackRole: "sfx", trackName: "SFX" });
         const cur1 = useAiEditStore.getState().messages[i]?.snapshot || {};
-        s.updateAt(i, { snapshot: { ...cur1, ...(aid ? { [aid]: null } : {}) } }); // Revert removes the added SFX
+        s.updateAt(i, { snapshot: { ...cur1, ...Object.fromEntries(placed.map((p) => [p.itemId, null])) } });
         const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
-        s.updateAt(i, { genStatus: `✓ Added stock SFX (${hit.source_name || "stock"})`, genPreviews: [...prev, { kind: "audio", url: hit.details.src, prompt: `(sfx: ${hit.source_name || "stock"}) ${hit.title || q}` }] });
-        elog(`[STOCK SFX] "${q}" → ${String(hit.title || hit.details.src).slice(0, 40)} [${hit.source_name || "?"}] @${g.volume ?? 40}%`);
+        s.updateAt(i, { genStatus: placed.length ? `✓ Added ${placed.length} SFX on one row` : "⚠️ sfx: no stock sounds found for those cues", genPreviews: [...prev, ...previews] });
       } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ sfx: ${e?.message || e}` }); }
+      return;
+    }
+    // STOCK MUSIC — search a REAL music track (Openverse by default) by mood/genre and lay it in as a
+    // full-length background bed (reuses the curated-musicbed placement). Different from "music" which
+    // AI-GENERATES a track via ACE-Step.
+    if (g.op === "stockmusic") {
+      try {
+        const q = String(g.query || g.prompt || g.text || "").trim();
+        if (!q) { s.updateAt(i, { genStatus: "⚠️ music: describe it (e.g. 'calm piano')" }); return; }
+        const source = String(g.source || "openverse").toLowerCase().trim();
+        s.updateAt(i, { genStatus: `🔎 Finding "${q}" music…` });
+        const search = async (query: string): Promise<any> => {
+          const params = new URLSearchParams({ query, type: "sound", sound_kind: "music", sources: source, per_page: "10" });
+          const r = await fetch(withEditorBase(`/api/archival?${params.toString()}`)).catch(() => null);
+          const d = r ? await r.json().catch(() => ({})) : {};
+          const list = (Array.isArray(d?.items) ? d.items : []).filter((it: any) => it?.type === "audio" && it?.details?.src);
+          // music = a LONGER track (a bed), so prefer clips ≥ 20s; else the longest available
+          const dur = (it: any) => Number(it?.details?.duration) || 0;
+          const longs = list.filter((it: any) => dur(it) >= 20);
+          return longs[0] || list.slice().sort((a: any, b: any) => dur(b) - dur(a))[0] || null;
+        };
+        const words = q.split(/\s+/).filter(Boolean);
+        let hit = await search(q);
+        if (!hit && words.length > 2) hit = await search(words.slice(0, 2).join(" "));
+        if (!hit) { s.updateAt(i, { genStatus: `⚠️ music: no stock track found for "${q}"` }); return; }
+        // Full-length low-volume bed via the same placement the curated musicbed uses.
+        applyOperations([{ op: "musicbed", src: hit.details.src, volume: g.volume ?? 20 }]);
+        const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
+        s.updateAt(i, { genStatus: `✓ Added stock music (${hit.source_name || "stock"})`, genPreviews: [...prev, { kind: "audio", url: hit.details.src, prompt: `(music · ${hit.source_name || "stock"}) ${hit.title || q}` }] });
+        elog(`[STOCK MUSIC] "${q}" → ${String(hit.title || "").slice(0, 40)} [${hit.source_name || "?"}] @${g.volume ?? 20}%`);
+      } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ music: ${e?.message || e}` }); }
       return;
     }
     // GENERATE ORIGINAL MUSIC (AI — ACE-Step / vapp-music-gen-1, the SAME model Voice Studio uses). The
@@ -2309,8 +2369,8 @@ export default function AiEditPanel() {
     elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
     if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx", "stockmusic", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx", "stockmusic"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");
