@@ -80,6 +80,11 @@ export const Video = ({
     : null;
   const flatRate = speedZones ? null : flatSpeed(speedKf); // a flat curve = plain constant speed
   const effectiveRate = flatRate ?? playbackRate;
+  // Preload each zone's <Video> a beat BEFORE it goes live, so swapping the clip at a zone boundary
+  // doesn't flash a black frame while the fresh element seeks + decodes (the "black once, gone after
+  // scrubbing" hitch). Only matters in the interactive preview — the offline render extracts frames
+  // and never swaps a live element. ~0.8s of lead.
+  const zonePremount = promoteLayer ? Math.max(6, Math.round(fps * 0.8)) : 0;
 
   // Ken Burns: optional slow pan/zoom (subtle motion on archival footage too).
   const kbTransform = kenBurnsTransform(
@@ -155,11 +160,14 @@ export const Video = ({
             {speedZones
               ? speedZones.map((z, i) => (
                   // Each zone is a constant-speed clip covering its slice of the item timeline.
+                  // Default layout (AbsoluteFill) — premountFor needs it (it hides the premounted
+                  // clip with opacity:0, and throws on layout="none"). The media div is positioned
+                  // at the media's size, so the fill matches the single-clip path exactly.
                   <Sequence
                     key={i}
                     from={z.outFromFrame}
                     durationInFrames={z.outFrames}
-                    layout="none"
+                    premountFor={zonePremount}
                   >
                     {renderClip(Math.round(z.srcStartFrame), z.speed, zoneVolume(z))}
                   </Sequence>
