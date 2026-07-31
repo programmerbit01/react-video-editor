@@ -4,10 +4,11 @@ import { BoxAnim, ContentAnim, MaskAnim } from "@designcombo/animations";
 import { calculateContainerStyles, calculateMediaStyles } from "../styles";
 import { getAnimations } from "../../utils/get-animations";
 import { calculateFrames } from "../../utils/frames";
-import { OffthreadVideo, Video as RemotionVideo, getRemotionEnvironment } from "remotion";
+import { OffthreadVideo, Video as RemotionVideo, Sequence, getRemotionEnvironment } from "remotion";
 import { kenBurnsTransform } from "./ken-burns";
 import { resolveAssetUrl } from "../../utils/asset-url";
 import { makeVolumeFn } from "../../utils/volume-envelope";
+import { hasSpeedEnvelope, buildSpeedZones, flatSpeed } from "../../utils/speed-envelope";
 
 export const Video = ({
   item,
@@ -62,6 +63,24 @@ export const Video = ({
   // Keep OffthreadVideo for the offline render, where exact-frame extraction is what it's for.
   const VideoComp = promoteLayer ? RemotionVideo : OffthreadVideo;
 
+  // Variable speed (speed ramp): sample the curve into constant-speed ZONES, each just a normal
+  // constant-playbackRate <Video> inside its own <Sequence>. A variable ramp is only many small
+  // constant pieces — no per-frame time-remap. No zones (curve flat or absent) → the single clip
+  // renders exactly as before (byte-identical). Zones wrap ONLY the video; the animation wrappers
+  // stay at item level, and constant playbackRate is honoured identically by native <Video> and
+  // <OffthreadVideo>, so preview and render agree.
+  const speedKf = (details as any).speedKeyframes;
+  const speedZones = hasSpeedEnvelope(speedKf)
+    ? buildSpeedZones(speedKf, {
+        durationInFrames: Math.max(1, Math.round(durationInFrames)),
+        srcStartFrame: startFromFrame,
+        srcEndFrame: endAtFrame,
+        slices: 12,
+      })
+    : null;
+  const flatRate = speedZones ? null : flatSpeed(speedKf); // a flat curve = plain constant speed
+  const effectiveRate = flatRate ?? playbackRate;
+
   // Ken Burns: optional slow pan/zoom (subtle motion on archival footage too).
   const kbTransform = kenBurnsTransform(
     (details as any)?.kenBurns,
@@ -72,6 +91,39 @@ export const Video = ({
       smooth: (details as any)?.kenBurnsSmooth,
       duration: (details as any)?.kenBurnsDuration,
     }
+  );
+
+  // One place the <Video> is described, reused by the single-clip path and by each speed zone.
+  const srcUrl = resolveAssetUrl(details.src);
+  const mediaStyle = {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover" as const,
+    display: "block" as const,
+    ...(kbTransform
+      ? {
+          transform: kbTransform,
+          transformOrigin: "center center",
+          ...(promoteLayer ? { willChange: "transform", backfaceVisibility: "hidden" as const } : {}),
+        }
+      : {}),
+  };
+  // A per-frame volume curve is item-relative; inside a zone the frame resets, so sample the curve
+  // once at the zone's midpoint (a constant per zone). Flat volume passes straight through.
+  const zoneVolume = (z: { outFromFrame: number; outFrames: number }) =>
+    typeof volume === "function" ? volume(z.outFromFrame + Math.floor(z.outFrames / 2)) : volume;
+  // NO crossOrigin — the preview only PLAYS the clip (like opening the url in a new tab), so a
+  // plain no-cors load can never be CORS-blocked or die on a poisoned opaque cache entry. Harmless
+  // during headless render (CORS doesn't apply; R2 sends ACAO:*).
+  const renderClip = (startFrom: number, rate: number, vol: number | ((f: number) => number)) => (
+    <VideoComp
+      startFrom={startFrom}
+      endAt={endAtFrame}
+      playbackRate={rate}
+      src={srcUrl}
+      volume={vol}
+      style={mediaStyle}
+    />
   );
 
   const children = (
@@ -100,36 +152,19 @@ export const Video = ({
               ...(kbTransform ? { overflow: "hidden" } : {})
             }}
           >
-            <VideoComp
-              startFrom={startFromFrame}
-              endAt={endAtFrame}
-              playbackRate={playbackRate}
-              src={resolveAssetUrl(details.src)}
-              // NO crossOrigin — the preview player only PLAYS the clip (exactly like opening
-              // the url in a new tab), so a plain no-cors load is correct: it can never be
-              // CORS-blocked, and it plays even off a cache entry another no-cors load created,
-              // so playback never dies with MEDIA_ELEMENT_ERROR code 4 (the black-preview bug).
-              // The filmstrip/crop still load cors to canvas-read frames; if this no-cors load
-              // cached the clip first they simply fall back to the server poster — the player is
-              // never held hostage to a frame-capture surface.
-              // Harmless during headless render (CORS doesn't apply there); R2 sends ACAO:*.
-              volume={volume}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                display: "block",
-                ...(kbTransform
-                  ? {
-                      transform: kbTransform,
-                      transformOrigin: "center center",
-                      ...(promoteLayer
-                        ? { willChange: "transform", backfaceVisibility: "hidden" as const }
-                        : {}),
-                    }
-                  : {})
-              }}
-            />
+            {speedZones
+              ? speedZones.map((z, i) => (
+                  // Each zone is a constant-speed clip covering its slice of the item timeline.
+                  <Sequence
+                    key={i}
+                    from={z.outFromFrame}
+                    durationInFrames={z.outFrames}
+                    layout="none"
+                  >
+                    {renderClip(Math.round(z.srcStartFrame), z.speed, zoneVolume(z))}
+                  </Sequence>
+                ))
+              : renderClip(startFromFrame, effectiveRate, volume)}
           </div>
         </MaskAnim>
       </ContentAnim>

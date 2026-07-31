@@ -3,7 +3,9 @@ import { IAudio, ITrackItem } from "@designcombo/types";
 import Volume from "./common/volume";
 import Speed from "./common/speed";
 import VolumeEnvelope from "./common/volume-envelope";
+import SpeedEnvelope from "./common/speed-envelope";
 import { VolumeKeyframe } from "../utils/volume-envelope";
+import { SpeedKeyframe } from "../utils/speed-envelope";
 import React, { useEffect, useState } from "react";
 import { editSelected } from "./edit-selected";
 import { Button } from "@/components/ui/button";
@@ -61,14 +63,32 @@ const BasicAudio = ({
     });
   };
 
+  // Variable speed (speed ramp) — video only for now (the player reads it in player/items/video.tsx).
+  const handleChangeSpeedEnvelope = (kf: SpeedKeyframe[]) => {
+    editSelected({ details: { speedKeyframes: kf } });
+    setProperties((prev) => ({
+      ...prev,
+      details: { ...prev.details, speedKeyframes: kf } as typeof prev.details,
+    }));
+  };
+  const isVideo = (trackItem as any).type === "video";
+
   const components = [
     {
       key: "speed",
       component: (
-        <Speed
-          value={properties.playbackRate ?? 1}
-          onChange={handleChangeSpeed}
-        />
+        <div className="flex flex-col gap-3">
+          <Speed
+            value={properties.playbackRate ?? 1}
+            onChange={handleChangeSpeed}
+          />
+          {isVideo && (
+            <SpeedEnvelope
+              value={(properties.details as any).speedKeyframes}
+              onChange={handleChangeSpeedEnvelope}
+            />
+          )}
+        </div>
       )
     },
     {
