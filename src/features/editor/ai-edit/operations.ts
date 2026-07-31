@@ -24,9 +24,10 @@ import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT } from "./edi
 export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT };
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "sfx";
+  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "music" | "sfx";
   itemId?: string;
   voice_id?: string; // audio (TTS) op — the user's chosen voice; forwarded to the vApp (empty = default voice)
+  seed?: number; // music (AI-generate) — optional fixed seed for reproducibility
   // musicbed / sfx (client picks the src from the curated audio library, then applies):
   src?: string; // audio url
   volume?: number; // 0-100
@@ -671,7 +672,7 @@ export const CAPABILITIES: { group: string; items: { label: string; example: str
 
 // ── LLM prompt + parsing ──────────────────────────────────────────────────────
 
-export const OPS_SYSTEM_PROMPT = `You are the AI editing assistant inside a video timeline editor. The user selects one or more timeline items and gives an instruction. Translate it into a JSON list of operations that the editor applies.
+export const OPS_SYSTEM_PROMPT = `You are the AI editing assistant inside a video timeline editor. The user gives an instruction — sometimes about the item(s) they have SELECTED, sometimes to CREATE new media (generate an image/video/voiceover, stock-search, or build a video). Translate it into a JSON list of operations that the editor applies. A selection is NOT required to generate or search — those ADD new media; only edits that change an EXISTING clip need a selected item.
 
 Respond with ONLY a fenced \`\`\`json code block containing exactly:
 { "summary": "<one short sentence>", "operations": [ ...ops... ] }
@@ -709,6 +710,7 @@ Supported operations:
     (timing is a mechanic, not your decision). For "generate X,Y,Z and arrange into one video" add the
     generate ops PLUS this single arrange op. CRITICAL: media you generate/search in THIS response has no id
     yet — that's fine, "target":"all" needs no ids.
+- GENERATE ORIGINAL MUSIC (AI — ACE-Step) and add it as a background track: { "op":"music", "prompt":"<style/genre, mood, tempo in BPM, key instruments — e.g. 'dreamy lofi hip-hop, warm and mellow, 80 bpm, soft piano and vinyl crackle'>", "duration":<seconds> }. Use when the user says "generate / create / make music", "add a soundtrack / score", or "background music". WRITE THE MUSIC DESCRIPTION YOURSELF from the MOOD of the selected clip / the narration / the topic (the user rarely gives style words) — do NOT add lyrics unless they ask. Set "duration" to the SELECTED audio/clip length if it is given in the selection context, else ~20s. This GENERATES new music (different from a stock/library bed); it needs NO selection, but if a voice/clip IS selected, match the music's mood + length to it.
 - Search STOCK footage/photos (Pexels) and add: { "op":"search", "kind":"image", "query":"snowy mountains at sunset", "count":3 }   (kind: "image" | "video")
     Use "search" (stock) when the user says "stock", "find", or "footage". Use "generate" (AI) ONLY when they say "generate", "create", or "make an AI …". Keep queries relevant to the narration/topic.
 - For a DYNAMIC look, VARY the kenBurns kind across clips (alternate zoomIn / zoomOut / panLeft / panRight) — don't put the same motion on every clip.
@@ -716,7 +718,7 @@ Supported operations:
 - MAKE A WHOLE VIDEO FROM A TOPIC — one‑shot auto‑director. When the user asks to "make / create / build me a video about X" FROM SCRATCH (there are NO existing clips to assemble), emit EXACTLY ONE op and nothing else: { "op":"direct", "topic":"<the subject, e.g. the Nazca Lines>", "durationSec":40, "mediaKind":"stock", "captions":true }. The editor then auto‑writes the script, generates the voiceover, plans the shots, adds time‑synced visuals (with Ken Burns) and captions — do NOT add generate/voiceover/arrange/captions ops yourself. Set mediaKind:"image" if the user wants AI‑GENERATED visuals (else "stock" = fast real footage); durationSec from the ask (default 40). Use "direct" ONLY to build a NEW video from a topic — NOT for editing or arranging clips that already exist.
 
 IMPORTANT: For "zoom in/out" or "pan" ALWAYS use the kenBurns fields above — NEVER a CSS transform/scale (the player ignores that).
-Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. A "generate" op needs no itemId. If nothing is selected and the request isn't add/generate, return "operations": [] and explain in "summary". Output ONLY the json block.`;
+Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. SELECTION IS NOT NEEDED TO CREATE MEDIA — generate (image/video/audio voiceover), search (stock), add (text), captions, arrange and direct NEVER need a selected item, so ALWAYS emit them when the user asks, whether or not anything is selected. A selection present does NOT change a generate/search request — it still ADDS new media (do not refuse with "nothing selected"). A selection is required ONLY to MODIFY an EXISTING clip (edit, regenerate, animate, lipsync, fade, delete). Return "operations": [] and explain in "summary" ONLY when a MODIFY request has no item to act on — NEVER for a generate / search / create request. Output ONLY the json block.`;
 
 // ─── PIPELINE system prompts ────────────────────────────────────────────────────
 // A "pipeline" is just a DIFFERENT system prompt fed to the SAME ops machinery: the LLM

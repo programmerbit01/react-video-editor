@@ -1220,6 +1220,28 @@ export default function AiEditPanel() {
       } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ music: ${e?.message || e}` }); }
       return;
     }
+    // GENERATE ORIGINAL MUSIC (AI — ACE-Step / vapp-music-gen-1, the SAME model Voice Studio uses). The
+    // director writes the style/mood/tempo prompt (from the selection/topic); we generate the track and
+    // lay it in as a background music bed (reusing the curated-musicbed placement so volume/length are sane).
+    if (g.op === "music") {
+      try {
+        const desc = String(g.prompt || g.text || g.query || "").trim();
+        if (!desc) { s.updateAt(i, { genStatus: "⚠️ music: describe the music (style / mood / tempo)" }); return; }
+        const secs = Math.min(300, Math.max(1, Math.round(Number(g.duration) || 20)));
+        s.updateAt(i, { genStatus: `🎵 Generating music (~${secs}s)…` });
+        const { id } = await startGen({ kind: "music", prompt: desc, duration: secs, seed: g.seed, token: getToken() });
+        if (!id) throw new Error("no job id");
+        const url = await waitGen(id, (d) => {
+          const q = d?.queue_position, p = d?.progress;
+          s.updateAt(i, { genStatus: q != null ? `🎵 Music queued #${q}…` : p != null ? `🎵 Music ${p}%…` : "🎵 Generating music…" });
+        });
+        applyOperations([{ op: "musicbed", src: url, volume: g.volume ?? 35 }]);
+        const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
+        s.updateAt(i, { genStatus: "✓ Music generated & added", genPreviews: [...prev, { kind: "audio", url, prompt: `(music) ${desc}` }] });
+        elog(`[MUSIC GEN] "${desc.slice(0, 48)}" ${secs}s → …${String(url).slice(-40)} @${g.volume ?? 35}%`);
+      } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ music: ${e?.message || e}` }); }
+      return;
+    }
     // Stock search — no generation job; fetch Pexels and add the top result(s).
     if (g.op === "search") {
       const kind = g.kind === "video" ? "video" : "image";
@@ -2208,8 +2230,8 @@ export default function AiEditPanel() {
     elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
     if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "sfx", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "sfx"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");

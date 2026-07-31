@@ -10,6 +10,7 @@ const DEFAULT_VAPP_BASE = process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091
 
 const MODEL_FOR: Record<string, string> = {
   audio: "eleven-multilingual-v2",   // the current + only TTS model for all audio
+  music: "vapp-music-gen-1",         // AI MUSIC (ACE-Step) — the same model Voice Studio "Generate music" uses
   image: "vapp-image",
   video: "vapp-video",
 };
@@ -91,6 +92,15 @@ export async function POST(request: Request) {
         // audio_prompt_type "A" and sizes the video to the audio), so the character lip-syncs to THIS
         // exact audio — no cut, no hallucinated words. Sent under several keys the backend accepts.
         ...(body.audio ? { audio: body.audio, audio_url: body.audio } : {}),
+      };
+    } else if (kind === "music") {
+      // AI MUSIC (ACE-Step, vapp-music-gen-1) — the SAME submit path Voice Studio "Generate music" uses.
+      // `text` = the style/genre/mood description; duration in seconds (1–300); seed optional. No optimizer.
+      const secs = Math.min(300, Math.max(1, Math.round(Number(body.duration) || 20)));
+      reqBody = {
+        text: prompt,
+        duration: secs,
+        ...(body.seed !== undefined && String(body.seed).trim() !== "" ? { seed: Number(body.seed) } : {}),
       };
     } else {
       // AUDIO (TTS). Forward a single voice_id if the caller supplied one — the vApp resolves it
