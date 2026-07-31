@@ -11,6 +11,7 @@ const DEFAULT_VAPP_BASE = process.env.VAPP_SERVER_BASE || "http://127.0.0.1:8091
 const MODEL_FOR: Record<string, string> = {
   audio: "eleven-multilingual-v2",   // the current + only TTS model for all audio
   music: "vapp-music-gen-1",         // AI MUSIC (ACE-Step) — the same model Voice Studio "Generate music" uses
+  sfx: "vapp-sfx",                   // AI SFX/ambience — MMAudio REMUX on an existing video (edit_remux, no regen)
   image: "vapp-image",
   video: "vapp-video",
 };
@@ -24,7 +25,7 @@ const OPTIMIZE_GEN = (process.env.AI_GENERATE_OPTIMIZE ?? "1") !== "0";
 
 async function optimizePrompt(base: string, token: string, kind: string, prompt: string): Promise<string> {
   try {
-    const task = kind === "video" ? "optimize_video" : "optimize_image";
+    const task = kind === "video" ? "optimize_video" : kind === "music" ? "optimize_music" : "optimize_image";
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["X-API-Key"] = token;
     const r = await fetch(`${base}/vapp/llm`, {
@@ -55,14 +56,19 @@ export async function POST(request: Request) {
     const hasRef = kind === "image" && (images.length > 0 || !!body.image_url);
     const model = hasRef ? "vapp-image-edit" : (MODEL_FOR[kind] || MODEL_FOR.audio);
     const prompt = String(body.prompt || body.text || "").trim();
-    if (!prompt) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
+    const sfxSrc = String(body.video_url || body.video || "").trim();
+    // SFX (MMAudio remux) needs a source VIDEO, not a prompt (the prompt is optional — MMAudio infers
+    // from the video). Every other kind requires a prompt/text.
+    if (!prompt && !(kind === "sfx" && sfxSrc)) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
 
     // Optimize text-to-image/video prompts through /vapp/llm (skip audio = verbatim, and
     // img2img/regenerate = an edit instruction, not a fresh prompt). Fail-open to `prompt`.
     // The client toggle (AI Edit "Optimise prompt") wins when provided; else the env default.
-    const wantOptimize = body.optimize !== undefined ? !!body.optimize : OPTIMIZE_GEN;
+    // MUSIC always optimizes (the director writes a SHORT mood; the optimize_music task — an easily
+    // editable config knob — crafts the full ACE-Step track prompt). Image/video follow the toggle.
+    const wantOptimize = body.optimize !== undefined ? !!body.optimize : (kind === "music" ? true : OPTIMIZE_GEN);
     const genPrompt =
-      wantOptimize && (kind === "image" || kind === "video") && !body.image_url && !images.length
+      wantOptimize && (kind === "image" || kind === "video" || kind === "music") && !body.image_url && !images.length
         ? await optimizePrompt(base, token, kind, prompt)
         : prompt;
 
@@ -88,17 +94,28 @@ export async function POST(request: Request) {
         aspect_ratio: body.aspect_ratio || "16:9",
         duration: body.audio ? (Number.isFinite(dur) ? dur : 0) : Math.min(30, dur || 5),
         ...(body.image_url ? { image_url: body.image_url } : {}), // image-to-video (animate a still → LTX i2v)
+        // SOURCE VIDEO (SFX): an existing clip → wan2gp adds MMAudio sound to it (a [bg_sound=…] tag in
+        // the prompt triggers the postprocess). Sent under the keys backend_wan2gp accepts.
+        ...(body.video_url ? { video: body.video_url, video_url: body.video_url, video_source: body.video_url } : {}),
         // LIP-SYNC: an audio URL → the vApp runs the video model in talking mode (it auto-sets
         // audio_prompt_type "A" and sizes the video to the audio), so the character lip-syncs to THIS
         // exact audio — no cut, no hallucinated words. Sent under several keys the backend accepts.
         ...(body.audio ? { audio: body.audio, audio_url: body.audio } : {}),
+      };
+    } else if (kind === "sfx") {
+      // AI SFX / ambience — MMAudio REMUX on an EXISTING video (no regeneration). Send the source
+      // video + an OPTIONAL description; the vApp maps these to edit_remux → generate_soundtrack.
+      reqBody = {
+        video_url: sfxSrc,
+        prompt: prompt, // used as the MMAudio prompt (optional)
+        postprocess_audio_prompt: prompt,
       };
     } else if (kind === "music") {
       // AI MUSIC (ACE-Step, vapp-music-gen-1) — the SAME submit path Voice Studio "Generate music" uses.
       // `text` = the style/genre/mood description; duration in seconds (1–300); seed optional. No optimizer.
       const secs = Math.min(300, Math.max(1, Math.round(Number(body.duration) || 20)));
       reqBody = {
-        text: prompt,
+        text: genPrompt, // the optimize_music-crafted ACE prompt (falls back to the raw prompt on failure)
         duration: secs,
         ...(body.seed !== undefined && String(body.seed).trim() !== "" ? { seed: Number(body.seed) } : {}),
       };

@@ -86,7 +86,9 @@ The LLM returns **only** a fenced JSON block. The envelope never changes — onl
 | `add` | text overlay | `ADD_TEXT` |
 | `generate` | TTS audio (`voice_id` optional) / AI image / AI video | vApp job → poll → `ADD_AUDIO`/`ADD_ITEMS`/`ADD_VIDEO` |
 | `regenerate` | AI image edit (img2img) | vApp job → `EDIT_OBJECT details.src` |
-| `music` | **generate ORIGINAL music** (ACE‑Step `vapp-music-gen-1`, the same model Voice Studio "Generate music" uses); director writes the style/mood/tempo prompt from the selection/topic, picks a duration | vApp job → poll → laid in as a background **music bed** (`musicbed` placement) |
+| `music` | **generate ORIGINAL music** (ACE‑Step `vapp-music-gen-1`, the same model Voice Studio "Generate music" uses); director writes a SHORT mood, the `optimize_music` LLM task crafts the full ACE prompt (instrumental, no vocals) | vApp job → poll → laid in as a background **music bed** (`musicbed` placement) |
+| `stocksfx` | **add a real stock SOUND EFFECT** related to the content (Openverse / Wikimedia / Internet Archive); director derives the query from the selection/narration | `/api/archival?type=sound&sound_kind=sfx` → `ADD_AUDIO` as a layer UNDER the clip (≈40% vol). **Preferred SFX path** — no generation, no artifacts |
+| `sfx` | **AI‑generate foley for a VIDEO** — MMAudio *remux* (`vapp-sfx` → wan2gp `edit_remux`, watches the frames, NO video regeneration); returns an audio‑only `.wav` (worker extracts it) laid UNDER the clip so the original voice is kept. A default negative prompt suppresses MMAudio's speech/music hallucinations | vApp job → poll → `ADD_AUDIO` under the clip |
 | `musicbed` | background bed from the **curated** audio library (Stock→Sound), not AI | client picks src → `upsertMusicBed` |
 | `search` | stock (Pexels / Internet Archive…) image/video | `/api/pexels` · `/api/archival` → add |
 | `arrange` | sequence to build a video: `itemIds`+`totalMs` (equal), `items:[{itemId,fromMs,toMs}]` (smart), or `target:"all"` (all visual items after generation) | `stateManager.updateState` (display timing) |
@@ -106,7 +108,7 @@ computes zoom/pan per frame from `details.kenBurns` (`zoomIn`/`zoomOut`/`panLeft
 |---|---|---|
 | `POST /api/ai-edit` | `POST /v1/chat/completions` (stream:false, `litellm/*`) | plan ops from a prompt |
 | `GET /api/ai-edit` | `GET /v1/models` | model dropdown (litellm/*) |
-| `POST /api/ai-generate` | `POST /api/v1/{model}` (`eleven-multilingual-v2`/`vapp-image`/`vapp-video`/`vapp-music-gen-1`) | start a media job → `request_id` |
+| `POST /api/ai-generate` | `POST /api/v1/{model}` (`eleven-multilingual-v2`/`vapp-image`/`vapp-video`/`vapp-music-gen-1`/`vapp-sfx`) | start a media job → `request_id` (`vapp-sfx` = MMAudio remux: send `video_url` + optional prompt) |
 | `GET /api/ai-generate?id=` | `GET /vapp/wait_job/{id}?timeout=` | long‑poll (done + `output_url`, or `queue_position`/`progress`) |
 | `POST /api/transcribe` | `POST /vapp/transcribe` | start STT job |
 | `GET /api/transcribe/[id]` | `GET /api/v1/predictions/{id}/result` | poll → clean `{status,done,failed,stt}` |

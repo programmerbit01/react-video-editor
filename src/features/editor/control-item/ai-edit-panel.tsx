@@ -1220,6 +1220,39 @@ export default function AiEditPanel() {
       } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ music: ${e?.message || e}` }); }
       return;
     }
+    // STOCK SOUND EFFECT — search REAL curated SFX (Openverse / Wikimedia / Internet Archive) by the
+    // content and lay the top match UNDER the target clip/audio as a related sound layer. No generation
+    // → no garbled/hallucinated voices. Reuses the Stock panel's /api/archival sound search.
+    if (g.op === "stocksfx") {
+      try {
+        const q = String(g.query || g.prompt || g.text || "").trim();
+        if (!q) { s.updateAt(i, { genStatus: "⚠️ sfx: what sound? (e.g. 'fire crackling')" }); return; }
+        s.updateAt(i, { genStatus: `🔎 Finding a "${q}" sound…` });
+        const params = new URLSearchParams({ query: q, type: "sound", sound_kind: "sfx", sources: "openverse,wikimedia,archive", per_page: "8" });
+        const res = await fetch(withEditorBase(`/api/archival?${params.toString()}`));
+        const data = await res.json().catch(() => ({}));
+        const hit = (Array.isArray(data?.items) ? data.items : []).find((it: any) => it?.type === "audio" && it?.details?.src);
+        if (!hit) { s.updateAt(i, { genStatus: `⚠️ sfx: no stock sound found for "${q}"` }); return; }
+        // Sit it UNDER the target (director's itemId, else the current selection, else the main audio).
+        const st = useStore.getState().trackItemsMap || {};
+        const tgt = g.itemId || activeIds[0] || Object.keys(st).find((id) => (st[id] as any)?.type === "audio");
+        const from = (tgt ? (st[tgt] as any) : null)?.display?.from ?? 0;
+        const aid = await serializedAdd("audio", () => addAudio(hit.details.src, `sfx: ${hit.title || q}`));
+        if (aid) {
+          const alen = Number((useStore.getState().trackItemsMap || {})[aid]?.duration) || 3000;
+          applyOperations([
+            { op: "arrange", items: [{ itemId: aid, fromMs: from, toMs: from + alen }] } as any,
+            { op: "edit", itemId: aid, details: { volume: g.volume ?? 40 } },
+          ]);
+        }
+        const cur1 = useAiEditStore.getState().messages[i]?.snapshot || {};
+        s.updateAt(i, { snapshot: { ...cur1, ...(aid ? { [aid]: null } : {}) } }); // Revert removes the added SFX
+        const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
+        s.updateAt(i, { genStatus: `✓ Added stock SFX (${hit.source_name || "stock"})`, genPreviews: [...prev, { kind: "audio", url: hit.details.src, prompt: `(sfx: ${hit.source_name || "stock"}) ${hit.title || q}` }] });
+        elog(`[STOCK SFX] "${q}" → ${String(hit.title || hit.details.src).slice(0, 40)} [${hit.source_name || "?"}] @${g.volume ?? 40}%`);
+      } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ sfx: ${e?.message || e}` }); }
+      return;
+    }
     // GENERATE ORIGINAL MUSIC (AI — ACE-Step / vapp-music-gen-1, the SAME model Voice Studio uses). The
     // director writes the style/mood/tempo prompt (from the selection/topic); we generate the track and
     // lay it in as a background music bed (reusing the curated-musicbed placement so volume/length are sane).
@@ -1240,6 +1273,52 @@ export default function AiEditPanel() {
         s.updateAt(i, { genStatus: "✓ Music generated & added", genPreviews: [...prev, { kind: "audio", url, prompt: `(music) ${desc}` }] });
         elog(`[MUSIC GEN] "${desc.slice(0, 48)}" ${secs}s → …${String(url).slice(-40)} @${g.volume ?? 35}%`);
       } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ music: ${e?.message || e}` }); }
+      return;
+    }
+    // AI SOUND EFFECTS / AMBIENCE — wan2gp MMAudio (watches the VIDEO, adds synced foley). Send the
+    // SELECTED video clip + a [bg_sound=…] tag in the prompt (the tag is OPTIONAL — MMAudio can infer
+    // from the video). Replaces the clip with the same video carrying the new sound.
+    if (g.op === "sfx") {
+      try {
+        const st = useStore.getState().trackItemsMap || {};
+        const vid = g.itemId || activeIds.find((id: string) => (st[id] as any)?.type === "video");
+        const clip: any = vid ? st[vid] : null;
+        const src = clip?.details?.src;
+        if (!src) { s.updateAt(i, { genStatus: "⚠️ sfx: select a VIDEO clip first (MMAudio adds sound to a video, not an image/audio)" }); return; }
+        const desc = String(g.prompt || g.text || g.query || "").trim();
+        // snapshot the clip so Revert restores the silent original
+        s.updateAt(i, { genStatus: "🔊 Generating sound effects…" });
+        // MMAudio REMUX (vapp-sfx): watches THIS video + adds synced sound, NO regeneration. Prompt optional.
+        const { id } = await startGen({
+          kind: "sfx",
+          prompt: desc, // optional MMAudio description (empty = infer from the video)
+          video_url: src,
+          optimize: false,
+          token: getToken(),
+        });
+        if (!id) throw new Error("no job id");
+        const url = await waitGen(id, (d) => {
+          const q = d?.queue_position, p = d?.progress;
+          s.updateAt(i, { genStatus: q != null ? `🔊 SFX queued #${q}…` : p != null ? `🔊 SFX ${p}%…` : "🔊 Generating sound effects…" });
+        });
+        // MMAudio REPLACES the audio (no mix option), so DON'T replace the clip — that would drop the
+        // original voice/vocals. Instead KEEP the clip (voice intact) and lay the SFX as a SEPARATE
+        // background audio track UNDER it, aligned to the clip's window at a lower volume → it MIXES.
+        const from = clip?.display?.from ?? 0;
+        const to = clip?.display?.to ?? (from + (Number(clip?.duration) || 0));
+        const aid = await serializedAdd("audio", () => addAudio(url, `sfx: ${desc || "ambient"}`));
+        if (aid) {
+          applyOperations([
+            { op: "arrange", items: [{ itemId: aid, fromMs: from, toMs: to }] } as any,
+            { op: "edit", itemId: aid, details: { volume: 45 } },
+          ]);
+        }
+        const cur1 = useAiEditStore.getState().messages[i]?.snapshot || {};
+        s.updateAt(i, { snapshot: { ...cur1, ...(aid ? { [aid]: null } : {}) } }); // Revert removes the added SFX track
+        const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
+        s.updateAt(i, { genStatus: "✓ Sound effects added (background, voice kept)", genPreviews: [...prev, { kind: "audio", url, prompt: `(sfx) ${desc || "auto ambient"}` }] });
+        elog(`[SFX] MMAudio on ${String(vid).slice(0, 6)} "${desc.slice(0, 40)}" → …${String(url).slice(-40)}`);
+      } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ sfx: ${e?.message || e}` }); }
       return;
     }
     // Stock search — no generation job; fetch Pexels and add the top result(s).
@@ -2230,8 +2309,8 @@ export default function AiEditPanel() {
     elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
     if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");
