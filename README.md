@@ -34,7 +34,7 @@ Video Editor application using React and TypeScript.
 - 👀 Real-time Preview: See immediate previews of edits.
 - 💬 Captions: word‑synced captions from a transcript, generated and styled in one panel — see [CAPTIONS.md](CAPTIONS.md).
 - ✦ AI Edit: turn natural‑language prompts into timeline edits + generated/stock media + script‑synced captions — see [AI_EDIT.md](AI_EDIT.md).
-- ✂️ Manual editing: select a whole row from a gutter checkbox, apply one panel edit/effect to **every** selected clip, and preview stock sounds before adding — see the **Timeline editing** section below.
+- ✂️ Manual editing: select a whole row from a gutter checkbox, apply one panel edit/effect to **every** selected clip, preview/filter stock sounds (Music vs SFX), and ramp a clip's **speed over time** on one clip — see the **Timeline editing** section below.
 
 > **Working on captions?** Read [CAPTIONS.md](CAPTIONS.md) first. Captions had three UIs and three
 > builders; the copies disagreeing with each other caused every caption bug we've chased. That doc
@@ -628,9 +628,9 @@ Use a Zustand `alignmentReady` flag. While `false`, show a subtle "syncing…" i
 
 ---
 
-## ✂️ Timeline editing — selection, multi-edit & sound preview
+## ✂️ Timeline editing — selection, multi-edit, sound preview & speed ramp
 
-Three manual-editing conveniences that live around the timeline gutter and the control panel.
+Manual-editing conveniences that live around the timeline gutter and the control panel.
 
 ---
 
@@ -680,6 +680,30 @@ onto the timeline (the ♪ / ⚡ buttons and a row click still add to Music bed 
 leaving the Stock tab stops playback. Preview only — **no `crossOrigin`**, so cross-origin audio
 plays (matching the no-CORS display rule used elsewhere).
 
+An **All / Music / SFX** toggle (shown only for the Sound format) narrows the results: Openverse
+audio is almost all long music, so SFX → `length=shortest` (its `category=sound_effect` is empty,
+returns 0) plus a 30 s duration cap applied to every source (Wikimedia / IA return long music too);
+Music → `category=music`.
+
+---
+
+### Speed ramp — variable speed on ONE clip
+
+A **Speed over time** wave under a video clip's Audio tab (Slow-mo / Ramp up / Reset presets, drag
+points) speeds a clip up / slows it down across its length while it stays a **single clip** on the
+timeline. The curve is stored as `details.speedKeyframes` and — the easy model, no per-frame
+time-remap in the data — sampled into a handful of **constant-speed ZONES** (`utils/speed-envelope
+.ts`, pure + node-tested): each zone is one plain constant-`playbackRate` piece, and a ramp is just
+many of them stitched with the source position chained.
+
+- **Offline render (`OffthreadVideo`)** draws one zone per `<Sequence>` — frame extraction, so there's no live element to swap.
+- **Interactive preview** does NOT use the zones. N `<Video>` elements on the *same* source file fought one decoder → a black flash on first play and a hitch at every boundary. Instead one native `<video>` (`SpeedRampPreview`) has its `currentTime` driven per frame by the same zone math — one element, one decoder, smooth. It's **muted** (per-frame seeking would glitch audio); the export carries the audio via `atempo`.
+- **Gotcha that bit us:** `Video()` / `BaseSequence()` in `player/items/video.tsx` are invoked as **plain function calls, not JSX**, so a `useRef` / `useEffect` placed directly in `Video()` lands on the parent fiber → *"rendered more hooks than during the previous render"*. Any hook must live in a real component rendered as `<SpeedRampPreview/>`.
+
+The wave UI (`control-item/common/speed-envelope.tsx`) is **independent of the volume envelope**
+(own file, own colour) so it can't break it. FF‑Local export still uses the flat `playbackRate`; the
+Remotion render path does the ramp, so a queued/Remotion export is already covered.
+
 ---
 
 ### Relevant files
@@ -691,7 +715,11 @@ plays (matching the no-CORS display rule used elsewhere).
 | `src/features/editor/control-item/control-item.tsx` | Multi-vs-single selection, "edits apply to all" banner |
 | `src/features/editor/control-item/edit-selected.ts` | `editSelected` — fan one change across all `activeIds` in a single dispatch |
 | `src/features/editor/control-item/basic-{audio,video,image,text}.tsx`, `common/animations.tsx`, `common/animation-duration.tsx` | Panel handlers routed through `editSelected` |
-| `src/features/editor/menu-item/archival.tsx` | Stock search; `SoundRow` preview player |
+| `src/features/editor/menu-item/archival.tsx` | Stock search; `SoundRow` preview player; Music / SFX filter |
+| `src/app/api/archival/route.ts` | Multi-source search; Openverse `category` / `length` for Music vs SFX |
+| `src/features/editor/utils/speed-envelope.ts` | Pure speed-ramp math — `buildSpeedZones` (node-tested) |
+| `src/features/editor/control-item/common/speed-envelope.tsx` | Speed wave UI (independent of the volume envelope) |
+| `src/features/editor/player/items/video.tsx` | Speed ramp: `SpeedRampPreview` (preview) + zones (render) |
 
 ---
 
