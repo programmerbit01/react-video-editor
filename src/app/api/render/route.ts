@@ -398,13 +398,17 @@ async function generateHighlightedCaptionOverlays(
   const fontSize = Math.max(8, Math.round(rawFontSize * outW / canvasW));
   const color = String(captionItem.details?.color || "#FFFFFF");
   const activeColor = String(captionItem.details?.activeColor || color);
+  // Words already spoken keep this colour in the player (the karaoke "trail"). The export used to
+  // ignore it entirely — so any preset whose highlight is the trail (appearedColor ≠ color, active
+  // ≠ colour or not) lost its highlight on export. Draw it too; same PNG count, no perf change.
+  const appearedColor = String(captionItem.details?.appearedColor || color);
   const activeFillColor = String(captionItem.details?.activeFillColor || "transparent");
   const topStr = String(captionItem.details?.top || "80%");
   const topFrac = topStr.endsWith("%") ? parseFloat(topStr) / 100 : 0.8;
 
   const fromS = Number(captionItem.display?.from || 0) / 1000;
   const toS = Number(captionItem.display?.to || 0) / 1000;
-  const hasWordHighlight = words.length > 0 && activeColor !== color;
+  const hasWordHighlight = words.length > 0 && (activeColor !== color || appearedColor !== color);
 
   // ── Layout ONCE (identical for base + every word variant) ────────────────────
   // Only the highlighted word's COLOUR changes between variants, never the geometry,
@@ -466,6 +470,10 @@ async function generateHighlightedCaptionOverlays(
       for (let wi2 = 0; wi2 < tokens.length; wi2++) {
         const globalWi = indices[wi2];
         const isActive = globalWi === activeWordIdx;
+        // Words before the active one are "appeared" (already spoken) — matches the player's
+        // active / appeared / upcoming three-state colouring. Base overlay (activeWordIdx === null)
+        // has no appeared words, so it stays all-`color`.
+        const isAppeared = activeWordIdx !== null && globalWi < activeWordIdx;
         const wW = widths[wi2];
 
         if (isActive) {
@@ -490,7 +498,7 @@ async function generateHighlightedCaptionOverlays(
           ctx.shadowBlur = 8;
           ctx.shadowOffsetX = 2;
           ctx.shadowOffsetY = 2;
-          ctx.fillStyle = color;
+          ctx.fillStyle = isAppeared ? appearedColor : color;
         }
         ctx.fillText(tokens[wi2], x, y);
         x += wW + (wi2 < tokens.length - 1 ? spaceW : 0);
@@ -949,7 +957,9 @@ async function runExport(
   const MAX_CAPTION_INPUTS = Number(process.env.FF_MAX_CAPTION_INPUTS) || 4000;
   const estWordPngs = captionItems.reduce((n: number, it: any) => {
     const words = Array.isArray(it.details?.words) ? it.details.words.length : 0;
-    const hl = words > 0 && String(it.details?.activeColor || "") && it.details?.activeColor !== it.details?.color;
+    const col = it.details?.color;
+    // Mirror generateHighlightedCaptionOverlays: per-word PNGs happen when active OR appeared differs.
+    const hl = words > 0 && ((it.details?.activeColor && it.details.activeColor !== col) || (it.details?.appearedColor && it.details.appearedColor !== col));
     return n + 1 + (hl ? words : 0);
   }, 0);
   const captionBaseOnly = estWordPngs > MAX_CAPTION_INPUTS;
