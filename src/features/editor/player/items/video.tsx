@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { IVideo } from "@designcombo/types";
 import { BaseSequence, SequenceItemOptions } from "../base-sequence";
 import { BoxAnim, ContentAnim, MaskAnim } from "@designcombo/animations";
@@ -9,6 +10,33 @@ import { kenBurnsTransform } from "./ken-burns";
 import { resolveAssetUrl } from "../../utils/asset-url";
 import { makeVolumeFn } from "../../utils/volume-envelope";
 import { hasSpeedEnvelope, buildSpeedZones, flatSpeed } from "../../utils/speed-envelope";
+
+// Interactive-preview renderer for a speed ramp: ONE native <video>, whose source time is driven
+// per output frame (like Remotion's <Video> but with a variable mapping). One element = one decoder
+// → none of the black-flash / boundary-hitch that N separate <Video>s on the same file caused.
+// Muted (seeking each frame would glitch audio; the export carries real audio via atempo). MUST be a
+// real component rendered as <SpeedRampPreview/> — video.tsx's Video()/BaseSequence() are invoked as
+// plain functions, so hooks may not live there (they'd land on the parent fiber → "more hooks" crash).
+const SpeedRampPreview = ({
+  src,
+  srcSec,
+  style,
+}: {
+  src: string;
+  srcSec: number;
+  style: React.CSSProperties;
+}) => {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    // Follow the remapped time; only correct when off by >~2 frames so we don't fight the decoder.
+    if (Math.abs(v.currentTime - srcSec) > 0.06) {
+      try { v.currentTime = srcSec; } catch {}
+    }
+  }, [srcSec]);
+  return <video ref={ref} src={src} muted playsInline preload="auto" style={style} />;
+};
 
 export const Video = ({
   item,
@@ -80,11 +108,22 @@ export const Video = ({
     : null;
   const flatRate = speedZones ? null : flatSpeed(speedKf); // a flat curve = plain constant speed
   const effectiveRate = flatRate ?? playbackRate;
-  // Preload each zone's <Video> a beat BEFORE it goes live, so swapping the clip at a zone boundary
-  // doesn't flash a black frame while the fresh element seeks + decodes (the "black once, gone after
-  // scrubbing" hitch). Only matters in the interactive preview — the offline render extracts frames
-  // and never swaps a live element. ~0.8s of lead.
-  const zonePremount = promoteLayer ? Math.max(6, Math.round(fps * 0.8)) : 0;
+
+  // PREVIEW of a speed ramp uses ONE native <video>, time-remapped per frame — NOT the zones. N
+  // separate <Video>s on the same source file fought one decoder: a fresh element flashed black on
+  // first play and hitched at every zone boundary. One element, one decoder, source time driven by
+  // the SAME zone math → smooth, no black. The offline render keeps the zones (frame extraction,
+  // no live element to swap). Source seconds at output frame f: walk the zones and interpolate.
+  const usePreviewRamp = promoteLayer && !!speedZones;
+  const previewSrcSec = (() => {
+    if (!usePreviewRamp || !speedZones) return 0;
+    const f = Math.max(0, Math.round(currentFrame));
+    for (const z of speedZones) {
+      if (f < z.outFromFrame + z.outFrames) return (z.srcStartFrame + (f - z.outFromFrame) * z.speed) / fps;
+    }
+    const last = speedZones[speedZones.length - 1];
+    return (last.srcStartFrame + last.outFrames * last.speed) / fps;
+  })();
 
   // Ken Burns: optional slow pan/zoom (subtle motion on archival footage too).
   const kbTransform = kenBurnsTransform(
@@ -157,22 +196,19 @@ export const Video = ({
               ...(kbTransform ? { overflow: "hidden" } : {})
             }}
           >
-            {speedZones
-              ? speedZones.map((z, i) => (
-                  // Each zone is a constant-speed clip covering its slice of the item timeline.
-                  // Default layout (AbsoluteFill) — premountFor needs it (it hides the premounted
-                  // clip with opacity:0, and throws on layout="none"). The media div is positioned
-                  // at the media's size, so the fill matches the single-clip path exactly.
-                  <Sequence
-                    key={i}
-                    from={z.outFromFrame}
-                    durationInFrames={z.outFrames}
-                    premountFor={zonePremount}
-                  >
-                    {renderClip(Math.round(z.srcStartFrame), z.speed, zoneVolume(z))}
-                  </Sequence>
-                ))
-              : renderClip(startFromFrame, effectiveRate, volume)}
+            {usePreviewRamp ? (
+              <SpeedRampPreview src={srcUrl} srcSec={previewSrcSec} style={mediaStyle} />
+            ) : speedZones ? (
+              speedZones.map((z, i) => (
+                // Offline render: one constant-speed OffthreadVideo per zone. Frame extraction, so
+                // no live element to swap → none of the preview's black/hitch applies here.
+                <Sequence key={i} from={z.outFromFrame} durationInFrames={z.outFrames} layout="none">
+                  {renderClip(Math.round(z.srcStartFrame), z.speed, zoneVolume(z))}
+                </Sequence>
+              ))
+            ) : (
+              renderClip(startFromFrame, effectiveRate, volume)
+            )}
           </div>
         </MaskAnim>
       </ContentAnim>
