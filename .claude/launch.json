@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "editor-dev-3021",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "3021"],
+      "port": 3021,
+      "url": "http://localhost:3021/editor/edit"
+    }
+  ]
+}
