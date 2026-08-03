@@ -34,7 +34,7 @@ Video Editor application using React and TypeScript.
 - 👀 Real-time Preview: See immediate previews of edits.
 - 💬 Captions: word‑synced captions from a transcript, generated and styled in one panel — see [CAPTIONS.md](CAPTIONS.md).
 - ✦ AI Edit: turn natural‑language prompts into timeline edits + generated/stock media + script‑synced captions — see [AI_EDIT.md](AI_EDIT.md).
-- ✂️ Manual editing: select a whole row from a gutter checkbox, apply one panel edit/effect to **every** selected clip, preview/filter stock sounds (Music vs SFX), and ramp a clip's **speed over time** on one clip — see the **Timeline editing** section below.
+- ✂️ Manual editing: select a whole row from a gutter checkbox, apply one panel edit/effect to **every** selected clip, preview/filter stock sounds (Music vs SFX), ramp a clip's **speed over time** on one clip, and have clips **re-fit automatically when the canvas aspect ratio changes** — see the **Timeline editing** section below.
 - 💾 Projects: save / load / autosave / update / delete **server‑side, per‑user** (PocketBase `vapp_jobs`, `type="project"`) — no more browser‑localStorage quota crashes, and no cross‑user mixing. Media stays on R2; only the reference JSON is stored. See [PROJECT_PERSISTENCE.md](PROJECT_PERSISTENCE.md).
 
 > **Working on captions?** Read [CAPTIONS.md](CAPTIONS.md) first. Captions had three UIs and three
@@ -707,6 +707,30 @@ Remotion render path does the ramp, so a queued/Remotion export is already cover
 
 ---
 
+### Canvas resize — clips re-fit to the new aspect ratio
+
+Changing the **Canvas** aspect ratio (the footer dropdown, `timeline/header.tsx` → `CanvasSelector`)
+used to leave every clip at its old placement, so a 9:16 clip ended up small and off‑centre in a fresh
+9:16 canvas. Root cause: `@designcombo/state`'s `DESIGN_RESIZE` **only** updates `size` — a clip's
+`left` / `top` / `transform: scale(...)` are absolute values baked into `details` on add (a contain
+fit for the canvas that was current *then*), and `player/styles.ts` renders them verbatim with no
+re-fit.
+
+The fix re-fits every clip into the new canvas right after the resize, exactly the way the library
+places a clip on **add** (the standard **contain** fit):
+
+- **video / image** → recompute `left` / `top` (centred) + `transform: scale(min(cw/iw, ch/ih))`. A
+  9:16 clip now fills a 9:16 canvas; cross‑aspect clips are letterboxed, never cropped.
+- **text / caption** → only `left` / `top` are remapped proportionally (relative position kept); size
+  and scale are untouched so nothing reflows.
+- **audio** → no on‑screen geometry, skipped.
+
+It's one merged `EDIT_OBJECT` dispatch for all clips (partial `details` patch → nothing else on the
+clip changes; single undo step, no per‑item races). Pure math lives in
+`utils/refit-on-canvas-resize.ts`. Browser‑verified both directions (16:9 ⇄ 9:16).
+
+---
+
 ### Relevant files
 
 | File | Role |
@@ -721,6 +745,8 @@ Remotion render path does the ramp, so a queued/Remotion export is already cover
 | `src/features/editor/utils/speed-envelope.ts` | Pure speed-ramp math — `buildSpeedZones` (node-tested) |
 | `src/features/editor/control-item/common/speed-envelope.tsx` | Speed wave UI (independent of the volume envelope) |
 | `src/features/editor/player/items/video.tsx` | Speed ramp: `SpeedRampPreview` (preview) + zones (render) |
+| `src/features/editor/utils/refit-on-canvas-resize.ts` | Canvas resize re-fit — contain fit per clip (pure) |
+| `src/features/editor/timeline/header.tsx` | `CanvasSelector` — canvas dropdown; dispatches resize + re-fit |
 
 ---
 

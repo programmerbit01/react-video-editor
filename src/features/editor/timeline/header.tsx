@@ -3,10 +3,12 @@ import { dispatch } from "@designcombo/events";
 import {
   ACTIVE_SPLIT,
   DESIGN_RESIZE,
+  EDIT_OBJECT,
   LAYER_CLONE,
   LAYER_DELETE,
   TIMELINE_SCALE_CHANGED
 } from "@designcombo/state";
+import { buildCanvasRefitPayload } from "../utils/refit-on-canvas-resize";
 import { PLAYER_PAUSE, PLAYER_PLAY } from "../constants/events";
 import { frameToTimeString, getCurrentTime, timeToString } from "../utils/time";
 import useStore from "../store/use-store";
@@ -323,7 +325,7 @@ const CANVAS_OPTIONS = [
 ] as const;
 
 const CanvasSelector = () => {
-  const { size } = useStore();
+  const { size, trackItemsMap } = useStore();
   const activeCanvas =
     CANVAS_OPTIONS.find(o => o.width === size.width && o.height === size.height)?.label ??
     `${size.width}:${size.height}`;
@@ -331,7 +333,14 @@ const CanvasSelector = () => {
   const handleChange = (value: string) => {
     const selected = CANVAS_OPTIONS.find(o => o.label === value);
     if (!selected) return;
-    dispatch(DESIGN_RESIZE, { payload: { width: selected.width, height: selected.height, name: selected.label } });
+    const newSize = { width: selected.width, height: selected.height };
+    dispatch(DESIGN_RESIZE, { payload: { ...newSize, name: selected.label } });
+    // DESIGN_RESIZE only changes `size`; re-fit each clip into the new canvas so a
+    // 9:16 clip fills a 9:16 canvas instead of keeping its old-canvas placement.
+    const refit = buildCanvasRefitPayload(size, newSize, trackItemsMap);
+    if (Object.keys(refit).length) {
+      dispatch(EDIT_OBJECT, { payload: refit });
+    }
   };
 
   return (
