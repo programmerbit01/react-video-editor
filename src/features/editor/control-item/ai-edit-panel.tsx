@@ -180,6 +180,7 @@ let _work: AbortController | null = null;
 // The Stop button also halts the BACKGROUND build (gens already queued can't be pulled, but we skip
 // the remaining stages — arrange etc). Reset on every send.
 let _stopBuild = false;
+let _creditHalt = false; // set when a gen 402s (insufficient credits) → the rest of the batch stops trying
 // A run id shared by EVERY LLM call this send makes (script → director → optimizer → match_shots).
 // Stop POSTs it to /vapp/llm/stop → the server kills whichever call is live, regardless of the model
 // or preset. This is the RELIABLE stop (disconnect-through-the-proxy was the flaky part). Reset per send.
@@ -297,7 +298,7 @@ async function startGen(payload: Record<string, any>): Promise<{ id: string; pro
     body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  if (!res.ok) { const err: any = new Error(data?.error || `HTTP ${res.status}`); err.code = String(data?.code || ""); err.status = res.status; throw err; }
   // `prompt` is what the job actually ran with (image/video prompts are optimized via /vapp/llm).
   return { id: String(data?.request_id || ""), prompt: String(data?.prompt || "") };
 }
@@ -966,6 +967,7 @@ export default function AiEditPanel() {
   const runPrompt = async (text: string) => {
     if (!text.trim() || working) return; // block re-entry while ANY part (plan OR background build) runs
     _stopBuild = false; // fresh run — clear any previous Stop
+    _creditHalt = false;
     _work = new AbortController(); // Stop button aborts this
     _session = _newSession(); // one id for every LLM call this run → Stop kills them server-side
     _lastPipelineRequest = text; // so the arrange's match_shots hears the user's direction (any P-preset style is now IN this text)
@@ -1581,6 +1583,7 @@ export default function AiEditPanel() {
 
     const isRegen = g.op === "regenerate";
     const label = isRegen ? "image" : g.kind || "audio";
+    if (_creditHalt) return; // a sibling gen already 402'd — don't fire more paid calls that will all fail
     try {
       s.updateAt(i, { genStatus: `Starting ${isRegen ? "image edit" : label}…` });
       const images: string[] | undefined = Array.isArray(g.images) && g.images.length ? g.images.filter(Boolean) : undefined; // multi-reference (character consistency)
@@ -1665,7 +1668,14 @@ export default function AiEditPanel() {
       // Stop button) OFF mid-build. The running counter/stage owns genStatus; the preview shows the clip.
       s.updateAt(i, { genPreviews: [...prev, { kind: label, url, prompt: `(${label === "audio" ? "voice" : "gen"}) ${String(g.prompt || g.text || "").trim()}` }] });
     } catch (e: any) {
-      s.updateAt(i, { genStatus: `⚠️ ${label}: ${e?.message || "failed"}` });
+      const isCredit = e?.code === "insufficient_credits" || e?.status === 402 || /insufficient|not enough credit/i.test(String(e?.message || ""));
+      if (isCredit) _creditHalt = true;
+      const line = `${label}${isCredit ? "" : ""}: ${e?.message || "failed"}`;
+      const prevErr = useAiEditStore.getState().messages[i]?.genErrors || [];
+      // Record it PERSISTENTLY (a red block) — a fleeting genStatus was overwritten by the next parallel
+      // gen, so the user never saw WHY a shot went missing (esp. "insufficient credits").
+      s.updateAt(i, { genErrors: [...prevErr, line], genStatus: `⚠️ ${isCredit ? "Out of credits" : line}` });
+      elog(`[AI-Edit gen] ✖ ${line}${isCredit ? " (CREDITS — halting the batch)" : ""}`);
     }
   };
 
@@ -1688,7 +1698,7 @@ export default function AiEditPanel() {
     const setProg = () => { if (total > 1) s.updateAt(i, { buildProgress: `${doneN}/${total}` }); }; // compact — sits inline after the task
     // A stable in-progress STAGE for the whole gen phase — keeps "working" TRUE (Stop button + timer stay
     // on) even as individual clips land. Per-clip live % from runGen just refines this text.
-    if (total) s.updateAt(i, { genStatus: "🎨 Generating…" });
+    if (total) s.updateAt(i, { genStatus: "🎨 Generating…", genErrors: [] }); // clear any prior-run failures (Retry)
     setProg();
     // Run the generations in parallel, with the live counter (so the user sees it working).
     await Promise.all(
@@ -2934,6 +2944,19 @@ export default function AiEditPanel() {
                         </span>
                       )}
                     </div>
+                    {/* PERSISTENT gen failures (esp. out-of-credits) — a red block so a swallowed error
+                        is never silent. The fleeting genStatus gets overwritten by the next parallel gen. */}
+                    {m.genErrors?.length ? (
+                      <div className="mt-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[10px] leading-snug text-red-600 dark:text-red-300">
+                        <div className="font-semibold">⚠️ {m.genErrors.length} generation{m.genErrors.length > 1 ? "s" : ""} failed</div>
+                        {Array.from(new Set(m.genErrors)).slice(0, 6).map((er, k) => (
+                          <div key={k} className="mt-0.5 break-words opacity-90">• {er}</div>
+                        ))}
+                        {m.genErrors.some((e) => /credit/i.test(e)) ? (
+                          <div className="mt-1 opacity-80">Top up credits and retry — the shots that failed were skipped.</div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {m.genPreviews?.map((pv, k) => {
                       // DRAG-AND-DROP a chat result onto the timeline — same payload the vApp/Stock media
                       // tiles drag (id/type/details.src/preview/metadata); the timeline drop handler adds it.

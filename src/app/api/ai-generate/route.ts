@@ -143,8 +143,19 @@ export async function POST(request: Request) {
       /* non-JSON */
     }
     if (!startRes.ok) {
-      const msg = data?.error?.message || data?.detail || txt.slice(0, 200) || `start failed (${startRes.status})`;
-      return NextResponse.json({ error: msg }, { status: startRes.status || 500 });
+      const eStr = typeof data?.error === "string" ? data.error : "";
+      let msg = data?.error?.message || data?.detail || eStr || txt.slice(0, 200) || `start failed (${startRes.status})`;
+      let code = String(data?.error?.code || eStr || "");
+      // Insufficient credits → a CLEAN, actionable message (the vApp returns {error:"insufficient_credits",
+      // balance, cost}). Otherwise the editor just showed raw JSON and swallowed it silently.
+      if (startRes.status === 402 || /insufficient[_ ]?credit/i.test(eStr)) {
+        code = "insufficient_credits";
+        const bal = Number(data?.balance), cost = Number(data?.cost);
+        msg = isFinite(bal) && isFinite(cost)
+          ? `Not enough credits — this request needs ${Math.round(cost)}, you have ${Math.round(bal)}.`
+          : "Not enough credits for this request.";
+      }
+      return NextResponse.json({ error: msg, code }, { status: startRes.status || 500 });
     }
     const requestId = String(data?.request_id || data?.id || data?.job_id || "").trim();
     if (!requestId) return NextResponse.json({ error: "no request_id: " + txt.slice(0, 150) }, { status: 500 });

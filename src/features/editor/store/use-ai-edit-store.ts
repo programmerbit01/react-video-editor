@@ -20,6 +20,7 @@ export interface ChatMsg {
   genStatus?: string; // background generation status (queued #, %, ✓/⚠️) — per-shot detail, flickers
   buildProgress?: string; // PERSISTENT aggregate counter during a build ("4/10 · 8 img · 2 vid") — never clobbered by per-shot genStatus
   genPreviews?: { kind: string; url: string; prompt?: string }[]; // generated media previews (+ the prompt/text it came from)
+  genErrors?: string[]; // PERSISTENT gen failures (esp. "insufficient credits") — shown as a red block so a swallowed error is never silent
   // BEAT MODEL — the shared context a pipeline build produces: each shot's timeline slot +
   // the narration spoken during it (+ neighbours are derivable by index). Arrange uses it;
   // animate / effects / lip-sync read it so their motion/prompts are context-aware.
