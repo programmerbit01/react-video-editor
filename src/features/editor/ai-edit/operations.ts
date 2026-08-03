@@ -92,14 +92,19 @@ const fadeComposition = (from: number, to: number, name: string) => ({
 // DROP the item (no audio track ever appears — this was the "voiceover not on the timeline" bug). The
 // reducer LOADS the audio and sets the real duration itself → the voiceover lands at its true length
 // ("audio is king"), so the fromMs/durationMs args are advisory only and not passed through.
-export function addAudio(src: string, name: string, _fromMs = 0, _durationMs = 5000): string {
+export function addAudio(src: string, name: string, opts?: { durationMs?: number }): string {
   const id = nanoid();
   const prompt = String(name || "").trim();
+  // A KNOWN duration (fetched via server ffprobe) → the item is valid + placed even if the browser's
+  // own audio-load stalls or FAILS on a slow/remote CDN (which was dropping the voiceover). Mirrors
+  // addVideo passing `duration`. Do NOT pass `display` — that made the reducer drop the clip.
+  const durMs = Number(opts?.durationMs) > 0 ? Math.round(Number(opts!.durationMs)) : 0;
   dispatch(ADD_AUDIO, {
     payload: {
       id,
       type: "audio",
       name: (prompt || "voiceover").slice(0, 40),
+      ...(durMs ? { duration: durMs } : {}),
       details: { src },
       ...(prompt ? { metadata: { prompt: prompt.slice(0, 200) } } : {}),
     },

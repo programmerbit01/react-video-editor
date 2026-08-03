@@ -447,6 +447,17 @@ async function optimizePromptVision(prompt: string, mediaType: string, media: st
   } catch { return prompt; }
 }
 
+// Real playable duration (ms) of an audio/video url via the vApp's server ffprobe — reliable where the
+// browser's own media load stalls/fails (slow remote CDN). 0 = unknown (caller falls back).
+async function fetchAudioDurationMs(url: string): Promise<number> {
+  try {
+    const r = await fetch(withEditorBase(`/api/media-duration?url=${encodeURIComponent(url)}`), { cache: "no-store" });
+    const d = await r.json().catch(() => ({}));
+    const secs = Number(d?.duration_seconds);
+    return isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : 0;
+  } catch { return 0; }
+}
+
 // Streaming twin of llmText — the same /vapp/llm task, but SSE so the caller can SHOW it typing
 // live (e.g. the script step). `onDelta` gets the full text so far each chunk. Passes `signal` so a
 // Stop aborts the upstream LLM too. Falls back to the blocking llmText on any non-stream response.
@@ -1628,10 +1639,19 @@ export default function AiEditPanel() {
       } else {
         let newId = "";
         if (label === "audio") {
-          // AUDIO IS KING. ADD_AUDIO loads the voiceover and sets its REAL length itself, so the
-          // images arrange to MATCH it — no manual duration needed (and passing `display` used to
-          // make the reducer silently drop the clip = "no voiceover on the timeline").
-          newId = await serializedAdd("audio", () => addAudio(url, g.text || "voiceover"));
+          // The voiceover is the #1 thing that "goes missing" on the timeline, worse on REMOTE: the
+          // browser's own audio-load (to read the length) stalls/fails on a slow CDN and the clip drops.
+          // Fix: fetch the REAL duration SERVER-side (ffprobe) so the item is valid without that load,
+          // and RETRY the add (a fresh-R2 clip can also 404 the first CDN hit). ~2.5 words/s is the last-
+          // resort length so the arrange still spans something even if the probe is unavailable.
+          const probed = await fetchAudioDurationMs(url);
+          const estMs = Math.round((String(g.text || "").split(/\s+/).filter(Boolean).length / 2.5) * 1000);
+          const durMs = probed || estMs || 0;
+          for (let attempt = 0; attempt < 3 && !newId; attempt++) {
+            newId = await serializedAdd("audio", () => addAudio(url, g.text || "voiceover", durMs ? { durationMs: durMs } : undefined), 20000);
+            if (!newId && attempt < 2) { elog(`[AUDIO ADD] attempt ${attempt + 1} didn't land — retrying`); await sleep(1000); }
+          }
+          if (!newId) elog(`[AUDIO ADD] voiceover FAILED to land after 3 tries (url …${String(url).slice(-40)})`);
         } else if (label === "image") newId = await serializedAdd("image", () => addImage(url, g.prompt || g.text || "image"));
         else if (label === "video") newId = await serializedAdd("video", () => addVideo(url, g.prompt || g.text || "video"));
         // serializedAdd already dispatched the add, WAITED for it to land, and logged it — so the
@@ -2259,8 +2279,11 @@ export default function AiEditPanel() {
         // which was silently DROPPING the voiceover off the timeline ("ab audio hi ni timeline me").
         let aid = "";
         if (aUrl) {
+          // Known SERVER duration (ffprobe) → the clip is valid even if the browser audio-load fails on
+          // a slow remote CDN (the drop we were retrying around).
+          const aDurMs = await fetchAudioDurationMs(aUrl);
           for (let att = 0; att < 3 && !_stopBuild; att++) {
-            const id = await serializedAdd("audio", () => addAudio(aUrl, "narration"), 22000);
+            const id = await serializedAdd("audio", () => addAudio(aUrl, "narration", aDurMs ? { durationMs: aDurMs } : undefined), 22000);
             if (id && (useStore.getState().trackItemsMap || {})[id]) { aid = id; break; }
             if (id) applyOperations([{ op: "delete", itemId: id }]);
             elog(`[DRAMA v2 ASM] shot ${k + 1} audio add try ${att + 1}/3 didn't land — retry`);
