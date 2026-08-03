@@ -5,6 +5,27 @@
 > JSON** to **one shared, versioned store**, so opening a project restores the **full timeline**
 > (as the editor already does) and you can **revert / resume from any point**.
 
+> **✅ SHIPPED (2026‑08‑03) — server‑backed, per‑user project storage (localStorage removed).**
+> Projects now persist on the vApp server in **PocketBase `vapp_jobs` as `type="project"` rows** —
+> one row per project, keyed by `user_id` + `job_id=<projectId>`, with `input={name,savedAt,data}`.
+> This **replaces browser localStorage** (`vapp_saved_projects`), which was throwing
+> `QuotaExceededError` once a handful of projects piled up. **Save, load, update (upsert), autosave,
+> delete and import** all go through the server, and projects are **user‑scoped — no user ever sees
+> another's**. Media stays on **R2** exactly as the design already references it; only the reference
+> JSON is stored. A **one‑time migration** pushes any pre‑existing localStorage projects up on first
+> load so nothing is lost.
+>
+> **Deliberate deviations from §5/§6 below** (product call): we **reused the existing `vapp_jobs`
+> collection** with a `type="project"` discriminator instead of a **new `vapp_projects`** collection,
+> and did **NOT** build per‑save **versioning** — save is **last‑write‑wins upsert** (PATCH the same
+> row by `job_id`). Endpoints shipped: **`GET/POST/DELETE /vapp/editor-projects`** (`vapp_server.py`),
+> resolving the caller via `_api_user` (Bearer token from the editor's `?token=`) — NOT the versioned
+> `/vapp/projects` spec. Writes use raw `_pb_call` (no job‑SSE spam on autosave); rows carry a terminal
+> `status` and startup cleanup skips `type="project"`, so a saved project is **never purged**. The
+> versioned store, render→project link and MCP/Dify unification in §5–§13 remain the (optional) fuller
+> roadmap. **Files:** `vapp_server/vapp_server.py`, editor `api/vapp-projects/route.ts`,
+> `utils/project-storage.ts`, `navbar.tsx`.
+
 > **✅ Partially shipped (2026‑07‑12)** — the MCP slice of §8/§9: **every MCP render/assemble now
 > ALWAYS saves an editor project** (auto‑unique name when none given) so it shows in the editor's
 > **AI Projects** list and restores the full timeline on select. `_render_design` + the

@@ -129,47 +129,54 @@ export default function Navbar({
   // tracks which saved project is currently loaded (null = unsaved / new)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
-  useEffect(() => {
-    setSavedProjects(getSavedProjects());
-  }, [isProjectsOpen]);
-
-  // Sync AI-rendered projects from vapp server into localStorage on mount
-  useEffect(() => {
+  // Projects load from the vApp server (PocketBase, per-user) — see project-storage.
+  // The list already MERGES the user's saved projects with AI-rendered ones server-side,
+  // so there is nothing to reconcile into localStorage anymore.
+  const refreshProjects = useCallback(async () => {
     try {
-      fetch(`/editor/api/vapp-projects`)
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (!data?.projects?.length) return;
-          const projects = getSavedProjects();
-          let changed = false;
-          for (const proj of data.projects) {
-            const idx = projects.findIndex((p: SavedProject) => p.id === proj.id);
-            if (idx === -1) {
-              projects.unshift(proj as SavedProject); // new AI project → front of the list
-              changed = true;
-            } else {
-              const serverItems = (((proj as any)?.data?.trackItemIds as any[]) || []).length;
-              const localItems = (((projects[idx] as any)?.data?.trackItemIds as any[]) || []).length;
-              // Refresh the local copy when the server copy is NEWER, OR when the local copy
-              // lost its timeline (e.g. an autosave race emptied it) while the server still has
-              // the real design — otherwise selecting the project shows a BLANK timeline.
-              if (
-                Number((proj as any).savedAt || 0) > Number((projects[idx] as any).savedAt || 0) ||
-                (serverItems > 0 && localItems === 0)
-              ) {
-                projects[idx] = { ...projects[idx], ...(proj as SavedProject) };
-                changed = true;
-              }
-            }
-          }
-          if (changed) {
-            localStorage.setItem("vapp_saved_projects", JSON.stringify(projects));
-            setSavedProjects(getSavedProjects());
-          }
-        })
-        .catch(() => {});
+      setSavedProjects(await getSavedProjects());
     } catch {}
   }, []);
+
+  useEffect(() => {
+    void refreshProjects();
+  }, [isProjectsOpen, refreshProjects]);
+
+  // One-time migration: older builds kept the user's projects in browser localStorage
+  // (the store that hit the ~5MB quota). Push any that aren't on the server yet UP to
+  // PocketBase so switching to server-backed storage never drops a user's existing work.
+  // AI projects (id "ai_…") already live on the server — skip them.
+  const migratedRef = useRef(false);
+  useEffect(() => {
+    if (migratedRef.current) return;
+    migratedRef.current = true;
+    void (async () => {
+      let local: SavedProject[] = [];
+      try {
+        const raw = localStorage.getItem("vapp_saved_projects");
+        local = raw ? (JSON.parse(raw) as SavedProject[]) : [];
+      } catch {
+        local = [];
+      }
+      const mine = local.filter(
+        (p) =>
+          p && p.id && !String(p.id).startsWith("ai_") &&
+          Array.isArray((p.data as any)?.trackItemIds) &&
+          (p.data as any).trackItemIds.length > 0
+      );
+      if (!mine.length) return;
+      const server = await getSavedProjects();
+      const have = new Set(server.map((p) => p.id));
+      const pending = mine.filter((p) => !have.has(p.id));
+      if (!pending.length) return;
+      for (const p of pending) {
+        try {
+          await updateProject(p.id, p.name, p.data); // upserts by id → creates on the server
+        } catch {}
+      }
+      void refreshProjects();
+    })();
+  }, [refreshProjects]);
 
   const handleUndo = () => dispatch(HISTORY_UNDO);
   const handleRedo = () => dispatch(HISTORY_REDO);
@@ -191,21 +198,26 @@ export default function Navbar({
 
   const triggerSaveSuccess = () => {
     setSaveSuccess(true);
-    setSavedProjects(getSavedProjects());
+    void refreshProjects();
     setTimeout(() => setSaveSuccess(false), 2000);
   };
 
-  const handleSaveProject = (name: string) => {
+  const handleSaveProject = async (name: string) => {
     const data = buildProjectData();
-    if (currentProjectId) {
-      updateProject(currentProjectId, name, data);
-    } else {
-      const saved = saveProject(name, data);
-      setCurrentProjectId(saved.id);
+    try {
+      if (currentProjectId) {
+        await updateProject(currentProjectId, name, data);
+      } else {
+        const saved = await saveProject(name, data);
+        setCurrentProjectId(saved.id);
+      }
+      setTitle(name);
+      setProjectName(name);
+      triggerSaveSuccess();
+    } catch (e) {
+      console.error("[project] save failed:", e);
+      alert("Save failed — couldn't reach the server. Check your connection and try again.");
     }
-    setTitle(name);
-    setProjectName(name);
-    triggerSaveSuccess();
   };
 
 
@@ -241,11 +253,11 @@ export default function Navbar({
     }
   };
 
-  const handleDeleteProject = (e: React.MouseEvent, id: string) => {
+  const handleDeleteProject = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    deleteProject(id);
+    await deleteProject(id);
     if (currentProjectId === id) setCurrentProjectId(null);
-    setSavedProjects(getSavedProjects());
+    void refreshProjects();
   };
 
   // --- Import / Export project as a single .json file ---
@@ -274,10 +286,8 @@ export default function Navbar({
     // New-Project clear must not wipe the saved design (this was blanking opened AI projects).
     const ids = (data as any)?.trackItemIds;
     if (!Array.isArray(ids) || ids.length === 0) return;
-    try {
-      updateProject(currentProjectId, title || projectName || "Untitled video", data);
-      setSavedProjects(getSavedProjects());
-    } catch {}
+    // Fire-and-forget to the server; don't refetch the whole list on every autosave.
+    void updateProject(currentProjectId, title || projectName || "Untitled video", data).catch(() => {});
   };
   const debouncedAutosave = useMemo(() => debounce(() => autosaveImplRef.current(), 2500), []);
   useEffect(() => {
@@ -327,8 +337,8 @@ export default function Navbar({
       const data = (parsed?.data ?? parsed) as Record<string, unknown>;
       if (!data || typeof data !== "object") throw new Error("invalid");
       const name = String(parsed?.name || file.name.replace(/\.json$/i, "")) || "Imported project";
-      const saved = saveProject(name, data);
-      setSavedProjects(getSavedProjects());
+      const saved = await saveProject(name, data);
+      void refreshProjects();
       handleLoadProject(saved);
     } catch {
       alert("Import failed — that file isn't a valid project JSON.");

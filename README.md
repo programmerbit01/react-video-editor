@@ -35,6 +35,7 @@ Video Editor application using React and TypeScript.
 - 💬 Captions: word‑synced captions from a transcript, generated and styled in one panel — see [CAPTIONS.md](CAPTIONS.md).
 - ✦ AI Edit: turn natural‑language prompts into timeline edits + generated/stock media + script‑synced captions — see [AI_EDIT.md](AI_EDIT.md).
 - ✂️ Manual editing: select a whole row from a gutter checkbox, apply one panel edit/effect to **every** selected clip, preview/filter stock sounds (Music vs SFX), and ramp a clip's **speed over time** on one clip — see the **Timeline editing** section below.
+- 💾 Projects: save / load / autosave / update / delete **server‑side, per‑user** (PocketBase `vapp_jobs`, `type="project"`) — no more browser‑localStorage quota crashes, and no cross‑user mixing. Media stays on R2; only the reference JSON is stored. See [PROJECT_PERSISTENCE.md](PROJECT_PERSISTENCE.md).
 
 > **Working on captions?** Read [CAPTIONS.md](CAPTIONS.md) first. Captions had three UIs and three
 > builders; the copies disagreeing with each other caused every caption bug we've chased. That doc
