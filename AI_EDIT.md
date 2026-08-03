@@ -103,6 +103,33 @@ computes zoom/pan per frame from `details.kenBurns` (`zoomIn`/`zoomOut`/`panLeft
 
 ---
 
+## 🧭 Edit mode = a lean INTENT ROUTER (single ops, no pipeline mixing)
+
+Plain **Edit / General** (`pipeline === ""`) is deliberately **independent** of the Faceless/Drama
+pipelines. Small local models fumble a bloated all‑ops prompt, so a send in Edit mode:
+
+1. tries the lean **`edit_intent`** router first — one focused, JSON‑only call that maps the instruction
+   straight to the `{summary,operations}` envelope (the plan box shows **"⚙ Plan"**, not "🎬 Directing");
+2. falls back to the full `OPS_SYSTEM_PROMPT` director only if the router yields no ops.
+
+Rules that keep it clean:
+- **SINGLE tasks only** — one edit, one generate/search, one sfx/music, one arrange. The whole‑video
+  auto‑director (`direct`) was **removed** from Edit mode — building a full video from a topic is a
+  *pipeline* the user picks from the director dropdown, never an Edit‑mode op.
+- **Length is reused, not hardcoded** — "30‑second audio about X" → the router emits
+  `{kind:"audio",text:"__SCRIPT__",topic,durationSec}` and the client writes the narration via the
+  existing length‑aware **`script`** task (30s ≈ 75 words). No client word‑count, no cropping.
+- **Aspect is honored** — the router copies the orientation the user names onto every generate op
+  (`9:16`/`16:9`/`1:1`); the vApp already maps it to a real resolution (LTX `720x1280` etc.).
+- **`animate` (i2v)** honors aspect + duration, **waits for the video to land** (`serializedAdd`) before
+  replacing the still, and — when **✨ optimise** is on — sends the SOURCE image to the vision optimiser
+  (`/api/optimize-prompt` → `/vapp/prompt/optimize`) so the motion prompt is written from what's in the image.
+
+Chat results are **draggable onto the timeline** (same `Draggable` payload the Stock/vApp media tiles use).
+The **✨ optimise** toggle is surfaced in the run row (auto / stream / fast / ✨ optimise).
+
+---
+
 ## 🔌 Endpoints (editor route → vApp)
 
 | Editor route | vApp endpoint(s) | Purpose |
@@ -110,6 +137,8 @@ computes zoom/pan per frame from `details.kenBurns` (`zoomIn`/`zoomOut`/`panLeft
 | `POST /api/ai-edit` | `POST /v1/chat/completions` (stream:false, `litellm/*`) | plan ops from a prompt |
 | `GET /api/ai-edit` | `GET /v1/models` | model dropdown (litellm/*) |
 | `POST /api/ai-generate` | `POST /api/v1/{model}` (`eleven-multilingual-v2`/`vapp-image`/`vapp-video`/`vapp-music-gen-1`/`vapp-sfx`) | start a media job → `request_id` (`vapp-sfx` = MMAudio remux: send `video_url` + optional prompt) |
+| `POST /api/optimize-prompt` | `POST /vapp/prompt/optimize` (the SAME endpoint Image/Video Studio use) | **VISION** prompt optimiser — pass `media` (a source-image url) and the optimiser model SEES it and writes the prompt from what's in the picture (i2v animate). Fail‑open |
+| `POST /api/ai-llm` (task `edit_intent`) | `POST /vapp/llm` | **Edit‑mode intent router** — a lean JSON classifier that maps ONE Edit instruction → the `{summary,operations}` envelope; single ops only |
 | `GET /api/ai-generate?id=` | `GET /vapp/wait_job/{id}?timeout=` | long‑poll (done + `output_url`, or `queue_position`/`progress`) |
 | `POST /api/transcribe` | `POST /vapp/transcribe` | start STT job |
 | `GET /api/transcribe/[id]` | `GET /api/v1/predictions/{id}/result` | poll → clean `{status,done,failed,stt}` |

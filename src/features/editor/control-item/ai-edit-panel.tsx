@@ -8,6 +8,10 @@ import { PLAYER_SEEK } from "../constants/events";
 import useCaptionTranscribeStore from "../captions/transcribe-store";
 import useAudioLibraryStore from "../store/use-audio-library-store";
 import { addCaptions } from "../captions/builder";
+import { addManualSfx } from "../utils/scene-audio";
+import { getStateManagerRef } from "../utils/state-manager-ref";
+import Draggable from "@/components/shared/draggable";
+import { generateId } from "@designcombo/timeline";
 import {
   applyOperations,
   applyMotionBatch,
@@ -269,6 +273,22 @@ function extractVoiceId(s: string): string {
   return m ? m[1] : "";
 }
 
+// Parse the requested AUDIO/voiceover duration (seconds) from the prompt — the number must sit RIGHT
+// NEXT TO "audio/voiceover/narration" so a per-clip video length ("1 video for 11 seconds") is NEVER
+// mistaken for it. "100s audio", "2 minute voiceover", "audio of 90s", "audio: 100 sec" all work. 0 = none.
+function parseAudioSecs(t: string): number {
+  const s = String(t || "");
+  const toSec = (n: number, u: string) => Math.round(n * (/^m/i.test(u) ? 60 : 1));
+  // number immediately before "audio/voiceover/narration" (only whitespace / "of" between)
+  let m = s.match(/(\d+(?:\.\d+)?)\s*(m(?:in(?:ute)?s?)?|s(?:ec(?:ond)?s?)?)\s+(?:of\s+)?(?:audio|voice[\s-]?over|voiceover|narration)\b/i);
+  // else the number right AFTER it ("audio of 100s", "voiceover: 90 sec")
+  if (!m) m = s.match(/\b(?:audio|voice[\s-]?over|voiceover|narration)\b\s*(?:of|:|is|=|for)?\s*(\d+(?:\.\d+)?)\s*(m(?:in(?:ute)?s?)?|s(?:ec(?:ond)?s?)?)\b/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  return isFinite(n) && n > 0 ? toSec(n, m[2]) : 0;
+}
+
+
 // Start a background media generation job → request_id (fast, non-blocking).
 async function startGen(payload: Record<string, any>): Promise<{ id: string; prompt: string }> {
   const res = await fetch(withEditorBase("/api/ai-generate"), {
@@ -410,6 +430,21 @@ async function llmText(task: string, input: string, token: string, images?: stri
   } catch {
     return "";
   }
+}
+
+// VISION prompt optimiser — the SAME /vapp/prompt/optimize endpoint Image/Video Studio use. When a
+// reference image `media` is passed, the optimiser model SEES it and writes the prompt from what's
+// actually in the image (i2i-edit / i2v-animate). Fail-open → returns the original prompt.
+async function optimizePromptVision(prompt: string, mediaType: string, media: string | undefined, token: string): Promise<string> {
+  try {
+    const res = await fetch(withEditorBase("/api/optimize-prompt"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, media_type: mediaType, ...(media ? { media } : {}), token }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return String(d?.optimized_prompt || prompt).trim() || prompt;
+  } catch { return prompt; }
 }
 
 // Streaming twin of llmText — the same /vapp/llm task, but SSE so the caller can SHOW it typing
@@ -986,7 +1021,12 @@ export default function AiEditPanel() {
       // Per-director SCRIPT style (custom directors' optional 2nd box) rides in the INPUT so the base
       // `script` task rules (duration, ignore-editing-directions) stay in force and the style is added.
       const dirScript = s.customDirectors.find((d) => d.id === s.pipeline)?.scriptPrompt;
-      const scriptInput = dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text;
+      // DISAMBIGUATE the length only (no word math, no cropping): the prompt often has BOTH a per-shot
+      // video length ("1 video, 11 seconds") AND the audio length ("100s audio"). Surfacing which number
+      // is the narration stops the model anchoring on the wrong one. The `script` task owns the pacing.
+      const audioSecs = parseAudioSecs(text);
+      const lenNote = audioSecs ? `\n\n(The TOTAL spoken narration length is ${audioSecs} seconds — any other seconds in the request are per-shot video lengths, NOT the narration.)` : "";
+      const scriptInput = (dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text) + lenNote;
       // Drama v2 uses its OWN screenwriter task (tagged NARRATOR / DIALOGUE screenplay); everyone else
       // uses the shared `script` narration task. (Isolated — v1/faceless/edit are untouched.)
       const scriptTask = s.pipeline === "drama_v2" ? "drama_script" : "script";
@@ -1036,6 +1076,21 @@ export default function AiEditPanel() {
       ? `\n\n━━━ REFERENCE IMAGE attached — the AI-image shots are made by EDITING it. The edit model already SEES the image, so do NOT describe what's in it and do NOT write "the same person/subject from the reference". For EACH image shot write a SHORT Flux-EDIT prompt = ONLY the changes, compact instruction/keyword style (NOT a paragraph): put the MOST IMPORTANT change FIRST (earliest instructions carry the most weight), then the next, then minor ones — e.g. "change outfit to a bold red leather jacket and jeans; confident standing pose; neon city rooftop at night; low angle, cinematic". END every image prompt with "keep the same face and identity, do not change anything else". ━━━`
       : "";
     const projCtx = projectContext(trackItemsMap) + narrationTimeline(useAiEditStore.getState().transcript?.segments);
+    // EDIT-MODE FAST ROUTER: plain Edit ("" director) first tries a LEAN JSON classifier (edit_intent) —
+    // ONE focused, small-model-friendly call that maps the request straight to ops. If it yields ops we
+    // use them and SKIP the big OPS_SYSTEM_PROMPT director; otherwise we fall through to that director.
+    // (Pipelines are untouched — they always use their own director + the script step above.)
+    let _routerContent = "";
+    if (!s.pipeline) {
+      try {
+        s.updateLast({ content: "", genStatus: "🧭 Reading your request…" });
+        const routed = await llmText("edit_intent", `${projCtx ? projCtx + "\n\n" : ""}${ctx}\n\nUser request: ${text}`, getToken());
+        const rOps = extractOps(routed)?.operations?.length || 0;
+        if (rOps) { _routerContent = routed; elog(`[EDIT ROUTER] ${rOps} op(s) → skip the full director`); }
+        else elog(`[EDIT ROUTER] no ops → fall back to the full director`);
+      } catch (e: any) { elog(`[EDIT ROUTER] failed: ${e?.message || e} → director fallback`); }
+      if (_work?.signal.aborted) { s.setBusy(false); return; }
+    }
     const payload: Record<string, any> = {
       model: s.model,
       token: getToken(),
@@ -1069,13 +1124,15 @@ export default function AiEditPanel() {
     const t0 = Date.now();
     let firstContentAt = 0;
     try {
-      const { content, reasoning } = await runChat(payload, (p) => {
-        if (p.content && !firstContentAt) firstContentAt = Date.now();
-        // Pipeline: the scene plan is raw JSON — hide it in a collapsible "🎬 Directing" box (not a
-        // wall of code in the chat); show a status line instead. Edit mode streams normally.
-        if (s.pipeline) s.updateLast({ directText: p.content, directOpen: true, content: p.content ? "🎬 Directing shots & effects…" : "", genStatus: p.content ? "🎬 Directing…" : "", reasoning: p.reasoning });
-        else s.updateLast({ content: p.content, reasoning: p.reasoning });
-      }, _work?.signal);
+      const { content, reasoning } = _routerContent
+        ? { content: _routerContent, reasoning: "" } // the fast router already produced the ops — no director call
+        : await runChat(payload, (p) => {
+          if (p.content && !firstContentAt) firstContentAt = Date.now();
+          // Pipeline: the scene plan is raw JSON — hide it in a collapsible "🎬 Directing" box (not a
+          // wall of code in the chat); show a status line instead. Edit mode streams normally.
+          if (s.pipeline) s.updateLast({ directText: p.content, directOpen: true, content: p.content ? "🎬 Directing shots & effects…" : "", genStatus: p.content ? "🎬 Directing…" : "", reasoning: p.reasoning });
+          else s.updateLast({ content: p.content, reasoning: p.reasoning });
+        }, _work?.signal);
       const reasoningMs = reasoning ? (firstContentAt || Date.now()) - t0 : undefined;
       elog(`[LLM RET] in ${Date.now() - t0}ms · ${content.length} chars`);
       const env = extractOps(content);
@@ -1229,9 +1286,18 @@ export default function AiEditPanel() {
         const st0 = useStore.getState().trackItemsMap || {};
         const tgt0 = g.itemId || activeIds[0] || Object.keys(st0).find((id) => (st0[id] as any)?.type === "audio");
         const tgtFrom = (tgt0 ? (st0[tgt0] as any) : null)?.display?.from ?? 0;
-        const cues: any[] = Array.isArray(g.cues) && g.cues.length
+        const rawCues: any[] = Array.isArray(g.cues) && g.cues.length
           ? g.cues
           : [{ query: g.query || g.prompt || g.text, atMs: g.atMs, atSec: g.atSec }];
+        // Resolve each cue's time + SORT by time so we can cap each clip to end BEFORE the next one starts
+        // (independent SFX with clear boundaries — no overlap/"merge").
+        const cues = rawCues
+          .map((c: any) => ({
+            query: String(c?.query || "").trim(),
+            atMs: Math.max(0, Math.round(Number.isFinite(Number(c?.atMs)) ? Number(c.atMs) : (c?.atSec != null ? Number(c.atSec) * 1000 : tgtFrom))),
+          }))
+          .filter((c: any) => c.query)
+          .sort((a: any, b: any) => a.atMs - b.atMs);
         const SFX_MAX_MS = 5000; // an SFX is SHORT — cap the placed clip so a long file never sprawls
         const source = String(g.source || "openverse").toLowerCase().trim(); // DEFAULT = Openverse only; director sets another if asked
         // Search the stock SOUND source; prefer the SHORTEST clip (SFX ≠ a 30s bed). Broaden (drop
@@ -1246,12 +1312,13 @@ export default function AiEditPanel() {
           const short = list.filter((it: any) => dur(it) > 0 && dur(it) <= 10); // real SFX are a few seconds
           return short[0] || list.slice().sort((a: any, b: any) => dur(a) - dur(b))[0]; // else the shortest available
         };
-        const placed: { itemId: string; fromMs: number; toMs: number }[] = [];
         const previews: any[] = [];
+        const addedIds: string[] = [];
         let done = 0;
-        for (const c of cues) {
+        for (let ci = 0; ci < cues.length; ci++) {
+          const c = cues[ci];
           if (_stopBuild) break;
-          const rawq = String(c?.query || "").trim();
+          const rawq = c.query;
           if (!rawq) continue;
           s.updateAt(i, { genStatus: `🔎 SFX ${done + 1}/${cues.length}: "${rawq}"…` });
           const words = rawq.split(/\s+/).filter(Boolean);
@@ -1259,26 +1326,35 @@ export default function AiEditPanel() {
           if (!hit && words.length > 2) hit = await doSearch(words.slice(0, 2).join(" "));
           if (!hit && words.length > 1) hit = await doSearch(words[words.length - 1]); // head noun (e.g. "waves")
           if (!hit) { elog(`[STOCK SFX] no sound for "${rawq}"`); continue; }
-          const atMs = Number.isFinite(Number(c?.atMs)) ? Number(c.atMs)
-            : (c?.atSec != null ? Number(c.atSec) * 1000 : tgtFrom);
-          const aid = await serializedAdd("audio", () => addAudio(hit.details.src, `sfx: ${hit.title || rawq}`));
-          if (!aid) { elog(`[STOCK SFX] "${rawq}" found but add failed`); continue; }
-          const it: any = (useStore.getState().trackItemsMap || {})[aid];
-          const realLen = Number(it?.duration) || (it?.display ? it.display.to - it.display.from : 0) || 3000;
-          const len = Math.min(realLen, SFX_MAX_MS); // SFX stays short even if the source file is long
-          const at = Math.max(0, Math.round(atMs));
-          applyOperations([{ op: "edit", itemId: aid, details: { volume: g.volume ?? 40 } }]);
-          placed.push({ itemId: aid, fromMs: at, toMs: at + len });
+          const at = c.atMs;
+          const nextAt = cues[ci + 1]?.atMs;
+          const clipMs = Math.max(300, Math.round((Number(hit?.details?.duration) || 3) * 1000));
+          // End BEFORE the next cue starts (60ms breathing room) so consecutive SFX never overlap/merge;
+          // also keep the ≤5s SFX cap.
+          const gapCap = nextAt != null ? Math.max(300, nextAt - at - 60) : SFX_MAX_MS;
+          const durMs = Math.min(clipMs, SFX_MAX_MS, gapCap);
+          // Use the EDITOR'S OWN SFX placement (the Stock/SFX panel's "Add at playhead"): it drops the
+          // clip on ONE shared, NON-magnetic "sound-effects" row at an EXACT time — so gaps between cues
+          // survive (a plain audio track is magnetic and would snap them to the end, the bug we hit).
+          const sm = getStateManagerRef();
+          if (!sm) continue;
+          const st: any = sm.getState();
+          const before = new Set<string>(st.trackItemIds || []);
+          const patch = addManualSfx(
+            { duration: st.duration, tracks: st.tracks, trackItemIds: st.trackItemIds, trackItemsMap: st.trackItemsMap },
+            { from: at, src: hit.details.src, name: `sfx: ${hit.title || rawq}`, durationMs: durMs, volume: g.volume ?? 40 },
+          );
+          sm.updateState(patch, { updateHistory: true, kind: "add" });
+          const newId = (patch.trackItemIds || []).find((id: string) => !before.has(id));
+          if (newId) addedIds.push(newId);
           previews.push({ kind: "audio", url: hit.details.src, prompt: `(sfx@${Math.round(at / 1000)}s · ${hit.source_name || "stock"}) ${hit.title || rawq}` });
           done += 1;
-          elog(`[STOCK SFX] "${rawq}" → ${String(hit.title || "").slice(0, 30)} [${hit.source_name || "?"}] @${Math.round(at / 1000)}s`);
+          elog(`[STOCK SFX] "${rawq}" → ${String(hit.title || "").slice(0, 30)} [${hit.source_name || "?"}] @${Math.round(at / 1000)}s ${durMs}ms`);
         }
-        // Drop EVERY sfx clip onto ONE dedicated "SFX" row at its own time (not a row each).
-        if (placed.length) placeAudioClips(placed, { trackRole: "sfx", trackName: "SFX" });
         const cur1 = useAiEditStore.getState().messages[i]?.snapshot || {};
-        s.updateAt(i, { snapshot: { ...cur1, ...Object.fromEntries(placed.map((p) => [p.itemId, null])) } });
+        s.updateAt(i, { snapshot: { ...cur1, ...Object.fromEntries(addedIds.map((id) => [id, null])) } }); // Revert removes them
         const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
-        s.updateAt(i, { genStatus: placed.length ? `✓ Added ${placed.length} SFX on one row` : "⚠️ sfx: no stock sounds found for those cues", genPreviews: [...prev, ...previews] });
+        s.updateAt(i, { genStatus: addedIds.length ? `✓ Added ${addedIds.length} SFX on the sound-effects row` : "⚠️ sfx: no stock sounds found for those cues", genPreviews: [...prev, ...previews] });
       } catch (e: any) { s.updateAt(i, { genStatus: `⚠️ sfx: ${e?.message || e}` }); }
       return;
     }
@@ -1446,14 +1522,24 @@ export default function AiEditPanel() {
         // snapshot the original image so Revert restores it
         const cur0 = useAiEditStore.getState().messages[i]?.snapshot || {};
         s.updateAt(i, { snapshot: { ...cur0, [g.itemId]: JSON.parse(JSON.stringify(item)) } });
+        // OPTIMISE (if the ✨ toggle is on): the route skips optimization for i2v (image_url present), so
+        // enrich the MOTION prompt HERE via optimize_video, then send it as-is. Off = the raw motion.
+        let motionPrompt = String(g.prompt || "subtle cinematic motion, gentle camera movement").trim();
+        const wantOpt = g.optimize !== undefined ? !!g.optimize : useAiEditStore.getState().optimizePrompt;
+        if (wantOpt) {
+          s.updateAt(i, { genStatus: "✨ Looking at the image + optimising…" });
+          // VISION: send the SOURCE image so the optimiser SEES it and writes the motion prompt from
+          // what's actually in the picture (reuses Image/Video Studio's /vapp/prompt/optimize).
+          try { const opt = await optimizePromptVision(motionPrompt, "video", src, getToken()); if (opt && opt.length >= 3) motionPrompt = opt; } catch (e: any) { elog(`[animate optimise] ${e?.message || e}`); }
+        }
         s.updateAt(i, { genStatus: "🎞️ Animating image → video…" });
         const { id: jobId } = await startGen({
           kind: "video",
-          prompt: g.prompt || "subtle cinematic motion, gentle camera movement",
+          prompt: motionPrompt,
           image_url: src,
           aspect_ratio: g.aspect_ratio,
           duration: g.duration,
-          optimize: false,
+          optimize: false, // already optimised above when requested (route can't — image_url is set)
           token: getToken(),
         });
         if (!jobId) throw new Error("no job id");
@@ -1462,13 +1548,20 @@ export default function AiEditPanel() {
           const q = d?.queue_position;
           s.updateAt(i, { genStatus: q != null ? `Queued #${q}…` : p != null ? `Animating ${p}%…` : "Animating…" });
         });
-        const newId = addVideo(url, "animated");
-        // drop the new video into the image's EXACT slot, then remove the still
-        if (disp) applyOperations([{ op: "arrange", items: [{ itemId: newId, fromMs: disp.from || 0, toMs: disp.to || (disp.from || 0) + 5000 }] }]);
+        // WAIT for the video to actually LAND before touching the timeline — addVideo returns an id
+        // before the reducer commits, so the old un-awaited add + delete raced (image gone, video never
+        // placed = "done but nothing there"). serializedAdd awaits the land.
+        const newId = await serializedAdd("video", () => addVideo(url, "animated"));
+        if (!newId) { s.updateAt(i, { genStatus: "⚠️ animate: the video didn't land — kept the original image" }); return; }
+        // drop the new video into the image's slot for its FULL length, THEN remove the still (replace).
+        const vit: any = useStore.getState().trackItemsMap?.[newId];
+        const vlen = Number(vit?.duration) || (g.duration ? g.duration * 1000 : 5000);
+        const from = disp?.from || 0;
+        applyOperations([{ op: "arrange", items: [{ itemId: newId, fromMs: from, toMs: from + vlen }] } as any]);
         applyOperations([{ op: "delete", itemId: g.itemId }]);
         const cur = useAiEditStore.getState().messages[i]?.snapshot || {};
         const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
-        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url, prompt: `(gen) ${String(g.prompt || "animate").trim()}` }], genStatus: "✓ Image animated → video" });
+        s.updateAt(i, { snapshot: { ...cur, [newId]: null }, genPreviews: [...prev, { kind: "video", url, prompt: `(gen${wantOpt ? " ✨" : ""}) ${motionPrompt}` }], genStatus: "✓ Image animated → video (replaced)" });
       } catch (e: any) {
         s.updateAt(i, { genStatus: `⚠️ animate: ${e?.message || "failed"}` });
       }
@@ -1487,6 +1580,17 @@ export default function AiEditPanel() {
         // snapshot the original image so Revert restores it
         const cur0 = useAiEditStore.getState().messages[i]?.snapshot || {};
         s.updateAt(i, { snapshot: { ...cur0, [g.itemId]: item ? JSON.parse(JSON.stringify(item)) : null } });
+      }
+      // TOPIC VOICEOVER: the router asked for "N-second audio about X" via text "__SCRIPT__" + topic +
+      // durationSec. REUSE the length-aware `script` task (30s ≈ 75 words) to write the narration — no
+      // hardcoded word counts, no cropping. (Exact-words voiceovers keep their text as-is.)
+      if (label === "audio" && String(g.text || "").trim() === "__SCRIPT__" && String(g.topic || "").trim()) {
+        const secs = Math.max(3, Math.round(Number(g.durationSec) || 20));
+        s.updateAt(i, { genStatus: `✍️ Writing ~${secs}s narration…` });
+        try {
+          const narr = (await llmText("script", `${g.topic}. ${secs} second audio.`, getToken())).trim();
+          g.text = narr || String(g.topic);
+        } catch { g.text = String(g.topic); }
       }
       const sentPrompt = String(g.prompt || g.text || "").trim();
       const { id, prompt: usedPrompt } = await startGen({
@@ -2599,6 +2703,10 @@ export default function AiEditPanel() {
               className={`rounded-full border px-2 py-[1px] text-[9px] ${!s.showThinking ? "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300" : "border-border bg-background text-muted-foreground"}`}>
               fast
             </button>
+            <button type="button" onClick={() => s.setOptimizePrompt(!s.optimizePrompt)} title="Optimise = AI enriches each image/video prompt (optimize_image/optimize_video) before generating"
+              className={`rounded-full border px-2 py-[1px] text-[9px] ${s.optimizePrompt ? "border-violet-500/50 bg-violet-500/15 text-violet-600 dark:text-violet-300" : "border-border bg-background text-muted-foreground"}`}>
+              ✨ optimise
+            </button>
           </div>
 
           {/* Selection chips */}
@@ -2759,7 +2867,7 @@ export default function AiEditPanel() {
                           className="flex items-center gap-1 text-[10px] text-fuchsia-600/80 hover:text-fuchsia-600 dark:text-fuchsia-300/70"
                         >
                           <span>{m.directOpen ? "▾" : "▸"}</span>
-                          <span>🎬 Directing</span>
+                          <span>{m.directText ? "🎬 Directing" : "⚙ Plan"}</span>
                           {m.ops?.length ? (
                             <span className="text-[9px] opacity-60">
                               {m.ops.filter((o: any) => o.op === "generate" && o.kind !== "audio").length || m.ops.length} shots
@@ -2771,7 +2879,7 @@ export default function AiEditPanel() {
                             {m.ops?.length ? (
                               <ul className="space-y-0.5">
                                 {m.ops.map((op: any, oi: number) => (
-                                  <li key={oi} className="truncate">• {describeOp(op)}</li>
+                                  <li key={oi} className="whitespace-pre-wrap break-words">• {describeOp(op)}</li>
                                 ))}
                               </ul>
                             ) : null}
@@ -2803,14 +2911,20 @@ export default function AiEditPanel() {
                         </span>
                       )}
                     </div>
-                    {m.genPreviews?.map((pv, k) => (
-                      <div key={k} className="mt-1.5">
-                        {pv.prompt ? (
-                          <div className="mb-1 whitespace-pre-wrap break-words text-[10px] leading-snug text-foreground/55">{pv.prompt}</div>
-                        ) : null}
-                        {pv.kind === "image" ? (
+                    {m.genPreviews?.map((pv, k) => {
+                      // DRAG-AND-DROP a chat result onto the timeline — same payload the vApp/Stock media
+                      // tiles drag (id/type/details.src/preview/metadata); the timeline drop handler adds it.
+                      const dragData = {
+                        id: generateId(),
+                        type: pv.kind,
+                        details: { src: pv.url, width: 1920, height: 1080, ...(pv.kind === "image" ? { kenBurns: "zoomIn" } : {}) },
+                        preview: pv.url,
+                        metadata: {},
+                      };
+                      const media =
+                        pv.kind === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={pv.url} alt="" className="max-h-40 rounded-lg border border-border" />
+                          <img src={pv.url} alt="" draggable={false} className="max-h-40 rounded-lg border border-border" />
                         ) : pv.kind === "video" ? (
                           // preload="none": do NOT auto-download every result preview the moment the
                           // panel renders — on a slow pipe 3-4 of these + the main player all pulling
@@ -2819,9 +2933,25 @@ export default function AiEditPanel() {
                           <video src={pv.url} poster={withEditorBase(`/api/media-poster?url=${encodeURIComponent(pv.url)}`)} controls preload="none" className="max-h-40 w-full rounded-lg border border-border bg-black" />
                         ) : (
                           <audio src={pv.url} controls preload="none" className="w-full" />
-                        )}
-                      </div>
-                    ))}
+                        );
+                      return (
+                        <div key={k} className="mt-1.5">
+                          {pv.prompt ? (
+                            <div className="mb-1 whitespace-pre-wrap break-words text-[10px] leading-snug text-foreground/55">{pv.prompt}</div>
+                          ) : null}
+                          <Draggable
+                            data={dragData}
+                            renderCustomPreview={
+                              pv.kind === "audio"
+                                ? <div style={{ width: 64, height: 40, borderRadius: 8, background: "#333", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 18 }}>♪</div>
+                                : <div style={{ width: 72, height: 72, borderRadius: 8, backgroundImage: `url(${pv.url})`, backgroundSize: "cover", backgroundPosition: "center" }} />
+                            }
+                          >
+                            <div className="cursor-grab active:cursor-grabbing" title="Drag onto the timeline">{media}</div>
+                          </Draggable>
+                        </div>
+                      );
+                    })}
 
                     {/* Inline proposed operations */}
                     {m.ops && m.ops.length > 0 && !m.applied && (

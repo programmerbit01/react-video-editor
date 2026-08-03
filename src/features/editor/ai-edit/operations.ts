@@ -620,13 +620,6 @@ export function revertSnapshot(snapshot: Record<string, any>): void {
 
 export const CAPABILITIES: { group: string; items: { label: string; example: string }[] }[] = [
   {
-    group: "🎬 Make a whole video (auto-director)",
-    items: [
-      { label: "Video from a topic", example: "make me a video about the Nazca Lines" },
-      { label: "With AI-generated visuals", example: "create a 40 second video about deep sea creatures with generated images" },
-    ],
-  },
-  {
     group: "Motion (Ken Burns)",
     items: [
       { label: "Zoom in", example: "add a slow zoom in on this" },
@@ -665,6 +658,16 @@ export const CAPABILITIES: { group: string; items: { label: string; example: str
       { label: "Generate image", example: "generate a cinematic mountain landscape at golden hour" },
       { label: "Generate video", example: "generate a 5 second drone shot flying over mountains" },
       { label: "Edit image (AI)", example: "regenerate this image with a deep red tint" },
+      { label: "Animate image → video", example: "animate this image with a slow push-in" },
+    ],
+  },
+  {
+    group: "Sound & Music",
+    items: [
+      { label: "Stock sound effects", example: "add sound effects matched to the narration" },
+      { label: "AI sound for a video", example: "generate sound effects for this video" },
+      { label: "Stock music", example: "add calm piano background music" },
+      { label: "AI music", example: "generate a tense cinematic soundtrack" },
     ],
   },
   {
@@ -706,8 +709,9 @@ Supported operations:
 - Delete: { "op":"delete", "itemIds": ["<id>"] }
 - Add a text overlay: { "op":"add", "type":"text", "text":"Title", "fromMs":0, "toMs":5000 }
 - Generate a voiceover (TTS) — this SPEAKS the text aloud, it is NOT music: { "op":"generate", "kind":"audio", "text":"the narration words to speak about the topic" }   (there is no music generation; kind:audio is always a spoken voiceover — put real narration sentences in "text")
-- Generate an IMAGE (SHORT comma-separated keyword prompt) and add it: { "op":"generate", "kind":"image", "prompt":"cinematic mountain landscape, golden hour, 85mm, sharp", "aspect_ratio":"16:9" }
-- Generate a VIDEO (LONG descriptive prompt — motion, camera, lighting) and add it: { "op":"generate", "kind":"video", "prompt":"aerial drone shot flying low over misty mountains at sunrise, slow push in, cinematic", "duration":5, "aspect_ratio":"16:9" }
+- ASPECT / ORIENTATION — read the orientation the user asks for and put it in "aspect_ratio" on EVERY generate op AND every stock search op (they all must match): 'vertical / portrait / reels / shorts / tiktok / insta story / 9:16' -> "9:16"; 'landscape / wide / youtube / horizontal / 16:9' -> "16:9"; 'square / 1:1' -> "1:1"; '4:5' -> "4:5". Use the SAME ratio for every shot in one request. NEVER ignore a requested orientation and NEVER just copy "16:9" from the examples below — if the user says 9:16 (or vertical/shorts), you MUST output "aspect_ratio":"9:16". Only when the user gives NO orientation, default to "16:9".
+- Generate an IMAGE (SHORT comma-separated keyword prompt) and add it: { "op":"generate", "kind":"image", "prompt":"cinematic mountain landscape, golden hour, 85mm, sharp", "aspect_ratio":"<the orientation the user asked for>" }
+- Generate a VIDEO (LONG descriptive prompt — motion, camera, lighting) and add it: { "op":"generate", "kind":"video", "prompt":"aerial drone shot flying low over misty mountains at sunrise, slow push in, cinematic", "duration":5, "aspect_ratio":"<the orientation the user asked for>" }
 - Edit / regenerate the SELECTED image with AI (img2img — recolor, restyle, alter it): { "op":"regenerate", "itemId":"<id>", "prompt":"the same image but tinted deep red" }   (for images ONLY; "make it red" on an image = this)
 - ANIMATE the SELECTED image into a VIDEO (image-to-video — bring a still to life with subtle motion, keeps it in the SAME timeline slot): { "op":"animate", "itemId":"<id>", "prompt":"gentle camera push-in, hair moving in the wind" }   (use when the user says "animate", "make it move", "bring it to life", "turn this into video"; the motion prompt is short — describe the MOTION, not the scene)
 - LIP-SYNC a talking-head VIDEO to the timeline audio (transcribes both, matches the spoken words, places + trims the video so its lips match the voiceover): { "op":"lipsync", "target":"selected" }  (or "itemId":"<video id>"; if nothing specified it does every video). Use when the user says "lip sync", "sync the video to the audio", "match lips", "arrange lip sync".
@@ -727,7 +731,7 @@ Supported operations:
     Use "search" (stock) when the user says "stock", "find", or "footage". Use "generate" (AI) ONLY when they say "generate", "create", or "make an AI …". Keep queries relevant to the narration/topic.
 - For a DYNAMIC look, VARY the kenBurns kind across clips (alternate zoomIn / zoomOut / panLeft / panRight) — don't put the same motion on every clip.
 - Add word‑synced CAPTIONS / subtitles under the voiceover (uses the narration transcript automatically): { "op":"captions" }   (no itemId needed — it captions the voiceover/audio track)
-- MAKE A WHOLE VIDEO FROM A TOPIC — one‑shot auto‑director. When the user asks to "make / create / build me a video about X" FROM SCRATCH (there are NO existing clips to assemble), emit EXACTLY ONE op and nothing else: { "op":"direct", "topic":"<the subject, e.g. the Nazca Lines>", "durationSec":40, "mediaKind":"stock", "captions":true }. The editor then auto‑writes the script, generates the voiceover, plans the shots, adds time‑synced visuals (with Ken Burns) and captions — do NOT add generate/voiceover/arrange/captions ops yourself. Set mediaKind:"image" if the user wants AI‑GENERATED visuals (else "stock" = fast real footage); durationSec from the ask (default 40). Use "direct" ONLY to build a NEW video from a topic — NOT for editing or arranging clips that already exist.
+- SINGLE, FOCUSED TASKS ONLY — Edit mode does the ONE thing the user named (an edit, one generate/search, one sfx/music, one arrange of EXISTING clips). Do NOT auto-plan a whole multi-shot video from a bare topic — building a full video from scratch is a SEPARATE pipeline the user selects from the director dropdown (Non-lip-sync / Lip-sync), NOT an edit-mode op. For a topic like "war battle", just do the single thing asked: "30 second audio" → ONE voiceover op { "op":"generate","kind":"audio","text":"…" }; never a full auto-directed video.
 
 IMPORTANT: For "zoom in/out" or "pan" ALWAYS use the kenBurns fields above — NEVER a CSS transform/scale (the player ignores that).
 Rules: use ONLY the itemId values in the selection context (NEVER invent ids). Convert seconds to milliseconds. SELECTION IS NOT NEEDED TO CREATE MEDIA — generate (image/video/audio voiceover), search (stock), add (text), captions, arrange and direct NEVER need a selected item, so ALWAYS emit them when the user asks, whether or not anything is selected. A selection present does NOT change a generate/search request — it still ADDS new media (do not refuse with "nothing selected"). A selection is required ONLY to MODIFY an EXISTING clip (edit, regenerate, animate, lipsync, fade, delete). Return "operations": [] and explain in "summary" ONLY when a MODIFY request has no item to act on — NEVER for a generate / search / create request. Output ONLY the json block.`;
