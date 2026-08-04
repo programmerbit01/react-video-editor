@@ -13,6 +13,7 @@ import { AiVoice } from "./ai-voice";
 import { SFX } from "./sfx";
 import { VappMedia } from "./vapp-media";
 import { Stock } from "./stock";
+import { WebSearch } from "./web-search";
 import { Graphics } from "./graphics";
 import { MotionGraphics } from "./motion-graphics";
 
@@ -30,6 +31,9 @@ const ActiveMenuItem = () => {
   }
   if (activeMenuItem === "stock") {
     return <Stock />;
+  }
+  if (activeMenuItem === "web") {
+    return <WebSearch />;
   }
   if (activeMenuItem === "videos") {
     return <Videos />;

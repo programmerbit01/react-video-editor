@@ -9,7 +9,7 @@ import {
   TooltipTrigger
 } from "@/components/ui/tooltip";
 import useStore from "./store/use-store";
-import { BarChart2, Sparkles } from "lucide-react";
+import { BarChart2, Sparkles, Globe } from "lucide-react";
 
 // Define menu items configuration for better maintainability
 const MENU_ITEMS = [
@@ -26,6 +26,13 @@ const MENU_ITEMS = [
     label: "Stock",
     ariaLabel: "Stock media — video, images, audio",
     color: "text-rose-300"
+  },
+  {
+    id: "web",
+    icon: Globe,
+    label: "Web",
+    ariaLabel: "Web & news search — live material via Dify",
+    color: "text-teal-300"
   },
   {
     id: "texts",

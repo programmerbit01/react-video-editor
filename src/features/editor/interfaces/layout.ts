@@ -16,6 +16,7 @@ export type IMenuItem =
   | "sfx"
   | "vapp"
   | "stock"
+  | "web"
   | "graphics"
   | "motionGraphics";
 export interface ILayoutState {

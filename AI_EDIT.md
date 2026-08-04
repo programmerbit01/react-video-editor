@@ -155,6 +155,42 @@ chat stays free — the user can keep prompting. An `arrange` op in the same mes
 
 ---
 
+## 🩺 Reliability & diagnostics (non‑lip‑sync)
+
+**Symptom:** the voiceover sometimes never reaches the timeline (worse on slow internet;
+same prompt succeeds one run, fails the next).
+
+**Root cause — the audio op is coupled to the director's shot‑plan JSON:**
+- The narration `script` is written FIRST (its own LLM stream) → `injectedScript`.
+- The **audio op is only created inside** `if (env && env.operations?.length)` — i.e. ONLY
+  when the director's shot‑plan JSON parsed into ≥1 op. If that JSON is empty / cut‑off /
+  invalid (or its SSE stream drops), `injectedScript` is discarded → **audio gen never runs**.
+- The director JSON goes "incomplete" two ways: **server‑cut** (`max_tokens`) or **net‑drop**
+  (the SSE stream stalls — worse on slow internet). LLM non‑determinism = same prompt can
+  parse one run and break the next.
+
+**Shipped:**
+- **max_tokens** — `editor_edit` had none → defaulted to **1200** (`vapp_llm/llm_service.py`
+  `setdefault("max_tokens", 1200)`), truncating a 15‑shot JSON. Set to **16000** in
+  `configs/model_config.json` (matches `script`/`drama_script`). Config = live‑reload.
+- **Red console diagnostics** — on any director/script failure `console.error` now classifies
+  the cause with char‑count + elapsed ms + reply tail (`diagnoseDirectorReply`):
+  `TRUNCATED / cut mid‑JSON (max_tokens OR SSE drop)` · `MALFORMED JSON` ·
+  `EMPTY (stream dropped)` · `stream ERROR (network/timeout)` · `0 operations`.
+
+**Pending (real robustness):** *decouple* the voiceover from the director ops — when
+`injectedScript` exists but the shot‑plan yields no ops, still generate/place the audio from
+the script, guarded by `s.pipeline && injectedScript` (Edit mode + the success path untouched).
+Then a bad/dropped director JSON never loses the narration.
+
+> Secondary (separate bugs): designcombo's `ADD_AUDIO` reducer always does a client‑side
+> `new Audio()` metadata load (ignores a supplied `duration`, unlike `ADD_VIDEO`) → a slow /
+> CORS‑flaky CDN can still drop the clip at the *add* step (~10%). And a
+> `calcBounding: reading 'left' of undefined` crash can abort a state commit on a racey,
+> half‑built timeline.
+
+---
+
 ## 📁 Key files
 
 **Editor** (`src/features/editor/`)

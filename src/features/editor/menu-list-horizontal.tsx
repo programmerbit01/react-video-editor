@@ -1,5 +1,6 @@
 import useLayoutStore from "./store/use-layout-store";
 import { Icons } from "@/components/shared/icons";
+import { Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Drawer,
@@ -33,6 +34,11 @@ const menuItems: MenuItemData[] = [
     id: "stock",
     label: "Stock",
     icon: Icons.video
+  },
+  {
+    id: "web",
+    label: "Web",
+    icon: Globe
   },
   {
     id: "captions",

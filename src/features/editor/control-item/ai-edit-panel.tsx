@@ -263,6 +263,22 @@ async function runChat(
   return { content, reasoning };
 }
 
+// When the director's reply can't be turned into ops, say WHY in the console (red) — so a missing
+// voiceover / empty build is never a mystery. Classifies the raw reply: EMPTY (stream dropped before
+// any output), NON-JSON, TRUNCATED (cut mid-JSON = max_tokens hit OR the SSE stream dropped), or
+// MALFORMED (braces balanced but invalid). Brace counting is approximate (counts braces inside strings
+// too) but reliably flags a hard cut-off — enough to tell "too long / dropped" from "bad JSON".
+function diagnoseDirectorReply(content: string): string {
+  const c = String(content || "");
+  if (!c.trim().length) return "EMPTY — no content arrived (stream dropped before any output, or an LLM error)";
+  const looksOps = /^\s*[[{]/.test(c.trim()) || /"operations"\s*:/.test(c);
+  if (!looksOps) return `NON-JSON reply (${c.length} chars) — the model didn't output an ops object`;
+  const opens = (c.match(/[{[]/g) || []).length;
+  const closes = (c.match(/[}\]]/g) || []).length;
+  if (opens > closes) return `TRUNCATED / cut mid-JSON (${c.length} chars · ${opens} open vs ${closes} close braces) — hit max_tokens OR the SSE stream dropped`;
+  return `MALFORMED JSON (${c.length} chars · braces balanced) — the model produced invalid JSON`;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Pull a voice id the user typed in their prompt ("voice id = pNInz6obpgDQGcFmaJgB", "voice_id: …",
@@ -1049,7 +1065,7 @@ export default function AiEditPanel() {
         injectedScript = (await llmTextStream(scriptTask, scriptInput, getToken(), (full) => {
           s.updateLast({ scriptText: full, scriptOpen: true });
         }, _work?.signal, undefined, refSrcs.length ? refSrcs : undefined)).trim();
-      } catch (e: any) { elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
+      } catch (e: any) { console.error(`[AI-Edit] SCRIPT step stream ERROR (network / timeout) · ${e?.message || e}`); elog(`[SCRIPT STEP] failed: ${e?.message || e}`); }
       // Defensive: even told not to, a model may prepend a "REF: …" or "[REF]…[/REF]" label (a scene
       // description, NOT narration). Strip it so the TTS never SPEAKS the word "REF". A whole
       // [REF]…[/REF] block is dropped; a bare "REF:" token is removed (its sentence reads fine as an opener).
@@ -1079,7 +1095,7 @@ export default function AiEditPanel() {
       }
       if (_work?.signal.aborted) { s.setBusy(false); return; } // Stop pressed during the script step
       // No script → don't proceed to a broken build (the audio op would stay the "__SCRIPT__" placeholder).
-      if (!directorScript) { s.updateLast({ content: "⚠️ Couldn't write the script — try again." }); s.setBusy(false); return; }
+      if (!directorScript) { console.error("[AI-Edit] SCRIPT step produced NO narration (empty) — likely a stream drop or LLM error; aborting build"); s.updateLast({ content: "⚠️ Couldn't write the script — try again." }); s.setBusy(false); return; }
     }
 
     // A reference image → the AI-image shots EDIT it. The edit model (Flux) already SEES the image and
@@ -1202,11 +1218,14 @@ export default function AiEditPanel() {
           if (msg) applyMsg(idx, msg);
         }
       } else if (env) {
+        // A VALID envelope with ZERO ops — the model chose to do nothing (NOT a parse failure).
+        console.error(`[AI-Edit] director returned 0 operations (valid envelope, no shots) · ${Date.now() - t0}ms · ${s.pipeline ? "pipeline=" + s.pipeline : "edit"}`);
         s.updateLast({ content: env.summary || "No changes needed.", reasoning, reasoningMs, thinkingOpen: false });
       } else {
-        // extractOps found nothing. If the reply LOOKS like an ops JSON that didn't parse
-        // (a long pipeline plan cut off mid-output, or malformed), SAY so — otherwise it
-        // reads as "silently stopped with no error" (raw JSON dumped in the chat).
+        // extractOps found nothing. SAY WHY in the console (red) so a missing voiceover / empty build
+        // is diagnosable at a glance — TRUNCATED (max_tokens / SSE drop) vs MALFORMED vs EMPTY —
+        // instead of only a vague ⚠️ in the chat.
+        console.error(`[AI-Edit] director JSON → NO OPS · ${diagnoseDirectorReply(content)} · ${Date.now() - t0}ms · tail: …${String(content || "").slice(-200)}`);
         const looksLikeOps = /^\s*\{/.test(content || "") || /"operations"\s*:/.test(content || "");
         s.updateLast({
           content: looksLikeOps
@@ -1219,6 +1238,9 @@ export default function AiEditPanel() {
       }
     } catch (e: any) {
       const stopped = e?.name === "AbortError" || _work?.signal.aborted;
+      // Red console line so a DROPPED director stream (network / timeout / upstream LLM error) is
+      // never mistaken for "the model produced nothing" — this is the slow-internet failure mode.
+      if (!stopped) console.error(`[AI-Edit] director LLM stream ERROR (network / timeout / upstream) · ${Date.now() - t0}ms · ${e?.message || e}`);
       s.updateLast({ content: stopped ? "⏹ Stopped." : "⚠️ " + (e?.message || "request failed"), thinkingOpen: false });
     } finally {
       s.setBusy(false);
