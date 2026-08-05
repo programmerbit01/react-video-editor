@@ -20,7 +20,7 @@ import useUploadStore from "../store/use-upload-store";
 // with a ✨ Curate button (config-driven LLM pass on the vApp).
 // Nothing here imports archival; a broken web search only breaks this tab.
 
-type WebType = "news" | "web" | "images";
+type WebType = "news" | "web" | "images" | "videos";
 type Recency = "day" | "week" | "month" | "any";
 
 interface WebItem {
@@ -44,6 +44,7 @@ const TYPES: { id: WebType; label: string }[] = [
   { id: "news", label: "News" },
   { id: "web", label: "Web" },
   { id: "images", label: "Images" },
+  { id: "videos", label: "Video" },
 ];
 
 const RECENCY: { id: Recency; label: string }[] = [
@@ -787,12 +788,17 @@ function WebResearchOverlay({
                 </span>
               )}
             </div>
-            <iframe
-              src={browserCfg.url}
-              title="Research browser"
-              className="h-full w-full flex-1 bg-black"
-              allow="clipboard-read; clipboard-write; autoplay; fullscreen"
-            />
+            {/* Cover-fill: the iframe matches NEKO_SCREEN's aspect (4:3) and FILLS the
+                panel — crops a little top/bottom instead of leaving black bars. */}
+            <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+              <iframe
+                src={browserCfg.url}
+                title="Research browser"
+                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 border-0 bg-black"
+                style={{ minWidth: "100%", minHeight: "100%", width: "auto", height: "auto", aspectRatio: "4 / 3" }}
+                allow="clipboard-read; clipboard-write; autoplay; fullscreen"
+              />
+            </div>
           </div>
         </div>
       </div>
