@@ -12,6 +12,7 @@ const MODEL_FOR: Record<string, string> = {
   audio: "eleven-multilingual-v2",   // the current + only TTS model for all audio
   music: "vapp-music-gen-1",         // AI MUSIC (ACE-Step) — the same model Voice Studio "Generate music" uses
   sfx: "vapp-sfx",                   // AI SFX/ambience — MMAudio REMUX on an existing video (edit_remux, no regen)
+  upscale: "vapp-video-upscale",     // FlashVSR/Lanczos super-resolution on an existing video (no regen)
   image: "vapp-image",
   video: "vapp-video",
 };
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
     const sfxSrc = String(body.video_url || body.video || "").trim();
     // SFX (MMAudio remux) needs a source VIDEO, not a prompt (the prompt is optional — MMAudio infers
     // from the video). Every other kind requires a prompt/text.
-    if (!prompt && !(kind === "sfx" && sfxSrc)) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
+    if (!prompt && !((kind === "sfx" || kind === "upscale") && sfxSrc)) return NextResponse.json({ error: "prompt/text is required" }, { status: 400 });
 
     // Optimize text-to-image/video prompts through /vapp/llm (skip audio = verbatim, and
     // img2img/regenerate = an edit instruction, not a fresh prompt). Fail-open to `prompt`.
@@ -109,6 +110,17 @@ export async function POST(request: Request) {
         video_url: sfxSrc,
         prompt: prompt, // used as the MMAudio prompt (optional)
         postprocess_audio_prompt: prompt,
+      };
+    } else if (kind === "upscale") {
+      // FlashVSR / Lanczos super-resolution on an EXISTING video (no regen). The worker ONLY applies
+      // spatial_upsampling via `params` (it does params.update(body.params), which overrides the
+      // settings file) — a TOP-LEVEL value is IGNORED (not in the whitelist). So send it under params,
+      // with a harmless top-level echo. (See vapp_higgs muapi appendAdvancedParams.)
+      const su = String(body.spatial_upsampling || "flashvsr2").trim();
+      reqBody = {
+        video_url: sfxSrc,
+        spatial_upsampling: su,              // harmless top-level echo
+        params: { spatial_upsampling: su },  // the one the worker actually applies
       };
     } else if (kind === "music") {
       // AI MUSIC (ACE-Step, vapp-music-gen-1) — the SAME submit path Voice Studio "Generate music" uses.

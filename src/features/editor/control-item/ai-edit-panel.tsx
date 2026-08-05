@@ -1637,6 +1637,36 @@ export default function AiEditPanel() {
       return;
     }
 
+    // UPSCALE — replace the SELECTED video with a higher-res version (FlashVSR super-resolution),
+    // IN PLACE: the clip keeps its slot + length, only its pixels upgrade. Modify op — needs a video.
+    if (g.op === "upscale") {
+      const item = useStore.getState().trackItemsMap?.[g.itemId];
+      const src = item?.details?.src;
+      if (!src) { s.updateAt(i, { genStatus: "⚠️ upscale: select a video first" }); return; }
+      if (item?.type !== "video") { s.updateAt(i, { genStatus: "⚠️ upscale: that clip isn't a video" }); return; }
+      // factor → FlashVSR level (matches Video Studio: 1 / 1.5 / 2). An explicit spatial_upsampling wins
+      // (e.g. "lanczos" = fast non-AI). NOTE: the worker only honours it via `params` (top-level is ignored).
+      const factor = Number(g.factor) || 2;
+      const su = String(g.spatial_upsampling || (factor >= 2 ? "flashvsr2" : factor >= 1.5 ? "flashvsr1.5" : "flashvsr1"));
+      try {
+        // snapshot the ORIGINAL so Revert restores the pre-upscale src
+        const cur0 = useAiEditStore.getState().messages[i]?.snapshot || {};
+        s.updateAt(i, { snapshot: { ...cur0, [g.itemId]: JSON.parse(JSON.stringify(item)) }, genStatus: `⬆️ Upscaling video (${su})…` });
+        const { id: jobId } = await startGen({ kind: "upscale", video_url: src, spatial_upsampling: su, token: getToken() });
+        if (!jobId) throw new Error("no job id");
+        const url = await waitGen(jobId, (d) => {
+          const p = d?.progress; const q = d?.queue_position;
+          s.updateAt(i, { genStatus: q != null ? `Queued #${q}…` : p != null ? `Upscaling ${p}%…` : "Upscaling…" });
+        });
+        replaceMedia(g.itemId, url); // in-place swap — same slot, higher res
+        const prev = useAiEditStore.getState().messages[i]?.genPreviews || [];
+        s.updateAt(i, { genPreviews: [...prev, { kind: "video", url, prompt: `(upscale ${su})` }], genStatus: `✓ Upscaled (${su})` });
+      } catch (e: any) {
+        s.updateAt(i, { genStatus: `⚠️ upscale: ${e?.message || "failed"}` });
+      }
+      return;
+    }
+
     const isRegen = g.op === "regenerate";
     const label = isRegen ? "image" : g.kind || "audio";
     if (_creditHalt) return; // a sibling gen already 402'd — don't fire more paid calls that will all fail
@@ -2562,8 +2592,8 @@ export default function AiEditPanel() {
     elog(`[AI-Edit] applyMsg(i=${i}) — ops:${m.ops.length}, alreadyApplied:${!!useAiEditStore.getState().messages[i]?.applied}`);
     if (useAiEditStore.getState().messages[i]?.applied) { elog("[AI-Edit] applyMsg skipped — already applied (double-trigger caught)"); return; }
     s.updateAt(i, { applied: true });
-    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx", "stockmusic", "arrange", "captions", "direct"].includes(o.op));
-    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "lipsync", "musicbed", "music", "sfx", "stocksfx", "stockmusic"].includes(o.op));
+    const sync = m.ops.filter((o: any) => !["generate", "regenerate", "search", "animate", "upscale", "lipsync", "musicbed", "music", "sfx", "stocksfx", "stockmusic", "arrange", "captions", "direct"].includes(o.op));
+    const gens = m.ops.filter((o: any) => ["generate", "regenerate", "search", "animate", "upscale", "lipsync", "musicbed", "music", "sfx", "stocksfx", "stockmusic"].includes(o.op));
     const arranges = m.ops.filter((o: any) => o.op === "arrange");
     const captionOps = m.ops.filter((o: any) => o.op === "captions");
     const directs = m.ops.filter((o: any) => o.op === "direct");

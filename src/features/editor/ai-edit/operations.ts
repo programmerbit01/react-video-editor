@@ -24,7 +24,7 @@ import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT } from "./edi
 export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT };
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "websearch" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "music" | "sfx" | "stocksfx" | "stockmusic";
+  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "websearch" | "captions" | "direct" | "animate" | "upscale" | "lipsync" | "musicbed" | "music" | "sfx" | "stocksfx" | "stockmusic";
   itemId?: string;
   voice_id?: string; // audio (TTS) op — the user's chosen voice; forwarded to the vApp (empty = default voice)
   seed?: number; // music (AI-generate) — optional fixed seed for reproducibility
@@ -72,6 +72,9 @@ export interface AiEditOp {
   query?: string;
   count?: number;
   source?: string; // stock source: "pexels" (default) | "archive" (Internet Archive) | "openverse" | "wikimedia" (csv ok)
+  // upscale (replace a SELECTED video with a higher-res version — FlashVSR super-resolution, in place):
+  factor?: number; // 1 | 1.5 | 2  →  flashvsr1 / flashvsr1.5 / flashvsr2 (default 2)
+  spatial_upsampling?: string; // explicit worker value ("flashvsr2" | "lanczos" | …) — overrides factor
 }
 
 export interface OpsEnvelope {
@@ -568,6 +571,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "websearch") return `Web search (${op.kind || "news"}): "${(op.query || op.prompt || "").slice(0, 30)}" ×${op.count || 5}`;
   if (op.op === "regenerate") return `Edit image (AI): "${(op.prompt || "").slice(0, 40)}"  (${op.itemId})`;
   if (op.op === "animate") return `🎞️ Animate image → video: "${(op.prompt || "subtle motion").slice(0, 40)}"  (${op.itemId})`;
+  if (op.op === "upscale") return `⬆️ Upscale video → ${op.spatial_upsampling || (op.factor ? `${op.factor}×` : "2×")}  (${op.itemId})`;
   if (op.op === "generate") return `Generate ${op.kind || "audio"}: "${(op.text || op.prompt || "").slice(0, 40)}"`;
   if (op.op === "edit") {
     const id = op.target === "all" ? "all clips" : op.target === "selected" ? "selection" : op.itemIds?.length ? `${op.itemIds.length} clips` : op.itemId;
@@ -665,6 +669,7 @@ export const CAPABILITIES: { group: string; items: { label: string; example: str
       { label: "Generate video", example: "generate a 5 second drone shot flying over mountains" },
       { label: "Edit image (AI)", example: "regenerate this image with a deep red tint" },
       { label: "Animate image → video", example: "animate this image with a slow push-in" },
+      { label: "Upscale video", example: "upscale this video to 2x" },
     ],
   },
   {
@@ -721,6 +726,7 @@ Supported operations:
 - Generate a VIDEO (LONG descriptive prompt — motion, camera, lighting) and add it: { "op":"generate", "kind":"video", "prompt":"aerial drone shot flying low over misty mountains at sunrise, slow push in, cinematic", "duration":5, "aspect_ratio":"<the orientation the user asked for>" }
 - Edit / regenerate the SELECTED image with AI (img2img — recolor, restyle, alter it): { "op":"regenerate", "itemId":"<id>", "prompt":"the same image but tinted deep red" }   (for images ONLY; "make it red" on an image = this)
 - ANIMATE the SELECTED image into a VIDEO (image-to-video — bring a still to life with subtle motion, keeps it in the SAME timeline slot): { "op":"animate", "itemId":"<id>", "prompt":"gentle camera push-in, hair moving in the wind" }   (use when the user says "animate", "make it move", "bring it to life", "turn this into video"; the motion prompt is short — describe the MOTION, not the scene)
+- UPSCALE the SELECTED VIDEO to a higher resolution (FlashVSR super-resolution — replaces it IN PLACE, same timeline slot + length, sharper pixels): { "op":"upscale", "itemId":"<video id>", "factor":2 }. factor is 1, 1.5 or 2 (default 2). Use when the user says "upscale", "enhance", "higher resolution / res", "make it HD / sharper / crisper", "2x / 1.5x". REQUIRES a selected VIDEO. (For a fast non-AI upscale instead, set "spatial_upsampling":"lanczos".)
 - LIP-SYNC a talking-head VIDEO to the timeline audio (transcribes both, matches the spoken words, places + trims the video so its lips match the voiceover): { "op":"lipsync", "target":"selected" }  (or "itemId":"<video id>"; if nothing specified it does every video). Use when the user says "lip sync", "sync the video to the audio", "match lips", "arrange lip sync".
 - Arrange / sequence items to BUILD A VIDEO — ALWAYS this ONE form: { "op":"arrange", "target":"all" }
     Use it whenever the user says "arrange", "make a video from these", "sequence them", or you just
