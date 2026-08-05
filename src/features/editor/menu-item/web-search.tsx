@@ -1,14 +1,15 @@
 import { dispatch } from "@designcombo/events";
 import { generateId } from "@designcombo/timeline";
 import Draggable from "@/components/shared/draggable";
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { ADD_ITEMS } from "@designcombo/state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, ExternalLink, Maximize2, X, Plus, Sparkles } from "lucide-react";
+import { Search, Loader2, ExternalLink, Maximize2, X, Plus, Sparkles, Circle, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
+import useUploadStore from "../store/use-upload-store";
 
 // Web / news search tab — Phase 1, fully INDEPENDENT of Stock/archival:
 //   type: News | Web | Images  (+ recency for News)
@@ -58,6 +59,18 @@ const withEditorBase = (path: string) => {
   if (window.location.pathname.startsWith("/editor")) return `/editor${path}`;
   return path;
 };
+
+// Self-hosted research browser (Neko) — a real Chromium streamed into the right panel,
+// so NO site is ever "refused" (unlike a plain iframe). The user's browser connects to
+// it directly over WebRTC, so this URL must be reachable from the client.
+// Override per deploy with NEXT_PUBLIC_RESEARCH_BROWSER_URL.
+const RESEARCH_BROWSER_URL =
+  process.env.NEXT_PUBLIC_RESEARCH_BROWSER_URL || "http://192.168.50.123:8090/?embed=1";
+
+// Endpoint that drives the research browser to a URL (CDP-backed, runs on the Neko host).
+// The user's browser calls it directly (CORS-enabled) — click a result → the browser navigates.
+const RESEARCH_NAV_URL =
+  process.env.NEXT_PUBLIC_RESEARCH_NAV_URL || "http://192.168.50.123:9224/navigate";
 
 // Shared: drop a web result's media onto the timeline (used by panel + overlay).
 const addWebItemToTimeline = (item: WebItem) => {
@@ -334,6 +347,7 @@ function WebResearchOverlay({
   initialRecency: Recency;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [browserCfg, setBrowserCfg] = useState({ url: RESEARCH_BROWSER_URL, nav_url: RESEARCH_NAV_URL });
   const [query, setQuery] = useState(initialQuery);
   const [type, setType] = useState<WebType>(initialType);
   const [recency, setRecency] = useState<Recency>(initialRecency);
@@ -343,9 +357,24 @@ function WebResearchOverlay({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<WebItem | null>(null);
   const [curation, setCuration] = useState<Curation | null>(null);
-  const [frameLoading, setFrameLoading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recMsg, setRecMsg] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [pickRect, setPickRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const pickStart = useRef<{ x: number; y: number } | null>(null);
+  const recRef = useRef<{ mr?: MediaRecorder; stream?: MediaStream; raf?: number; chunks: Blob[] }>({ chunks: [] });
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    // Neko + navigate URLs come from the vApp config (single source of truth), env is just fallback.
+    fetch(withEditorBase("/api/websearch/browser"))
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && (d.url || d.nav_url))
+          setBrowserCfg({ url: d.url || RESEARCH_BROWSER_URL, nav_url: d.nav_url || RESEARCH_NAV_URL });
+      })
+      .catch(() => {});
+  }, []);
 
   const runSearch = useCallback(
     async (curate: boolean) => {
@@ -413,6 +442,12 @@ function WebResearchOverlay({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  useEffect(() => {
+    if (!recMsg) return;
+    const t = window.setTimeout(() => setRecMsg(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [recMsg]);
+
   const sceneMap = useMemo(() => {
     const m = new Map<string, { caption: string; order: number }>();
     (curation?.scenes || []).forEach((s, i) => {
@@ -428,6 +463,12 @@ function WebResearchOverlay({
     kept.sort((a, b) => (sceneMap.get(a.id)?.order ?? 999) - (sceneMap.get(b.id)?.order ?? 999));
     return kept;
   }, [items, curation, sceneMap]);
+
+  // Click a result → drive the embedded browser straight to that page (no copy/paste).
+  const openInBrowser = (url: string) => {
+    if (!url) return;
+    fetch(`${browserCfg.nav_url}?url=${encodeURIComponent(url)}`, { mode: "cors" }).catch(() => {});
+  };
 
   // Lay every curated scene onto the timeline, in order (each image 5s, kenBurns).
   // Falls back to the visible curated list if the LLM returned keep without scenes.
@@ -457,6 +498,97 @@ function WebResearchOverlay({
     onClose(); // close so the freshly-built storyboard is visible on the timeline
   };
 
+  // ── Screen-region recording → clip (getDisplayMedia + canvas crop + upload) ──
+  const finishRecording = () => {
+    const rc = recRef.current;
+    if (rc.raf) cancelAnimationFrame(rc.raf);
+    rc.stream?.getTracks().forEach((t) => t.stop());
+    setRecording(false);
+    const blob = new Blob(rc.chunks, { type: "video/webm" });
+    recRef.current = { chunks: [] };
+    if (!blob.size) {
+      setRecMsg("Recording was empty.");
+      return;
+    }
+    const file = new File([blob], `research-clip-${Date.now()}.webm`, { type: "video/webm" });
+    try {
+      const store = useUploadStore.getState() as any;
+      store.addPendingUploads([{ id: generateId(), file, type: file.type, status: "pending", progress: 0 }]);
+      store.processUploads();
+      setRecMsg("Recording saved to Uploads — drag it onto the timeline.");
+    } catch {
+      setRecMsg("Recording done, but the upload failed.");
+    }
+  };
+  const stopRecording = () => {
+    try {
+      if (recRef.current.mr && recRef.current.mr.state !== "inactive") recRef.current.mr.stop();
+    } catch {
+      /* noop */
+    }
+  };
+  const startRecording = async (r: { x: number; y: number; w: number; h: number }) => {
+    const md = navigator.mediaDevices as any;
+    if (!md?.getDisplayMedia) {
+      setRecMsg("Recording needs HTTPS — the editor is on http://, so the browser blocks screen capture here.");
+      return;
+    }
+    try {
+      const stream: MediaStream = await md.getDisplayMedia({ video: { frameRate: 30 }, audio: false, preferCurrentTab: true });
+      setRecMsg("Recording… press Stop when done.");
+      const track = stream.getVideoTracks()[0];
+      const st = track.getSettings();
+      const sx = ((st.width as number) || window.innerWidth) / window.innerWidth;
+      const sy = ((st.height as number) || window.innerHeight) / window.innerHeight;
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(2, Math.round(r.w));
+      canvas.height = Math.max(2, Math.round(r.h));
+      const ctx = canvas.getContext("2d");
+      const draw = () => {
+        if (ctx) ctx.drawImage(video, r.x * sx, r.y * sy, r.w * sx, r.h * sy, 0, 0, canvas.width, canvas.height);
+        recRef.current.raf = requestAnimationFrame(draw);
+      };
+      draw();
+      const recStream = (canvas as any).captureStream(30) as MediaStream;
+      const mr = new MediaRecorder(recStream, { mimeType: "video/webm" });
+      recRef.current = { mr, stream, chunks: [], raf: recRef.current.raf };
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size) recRef.current.chunks.push(e.data);
+      };
+      mr.onstop = finishRecording;
+      mr.start();
+      setRecording(true);
+      track.onended = () => stopRecording();
+    } catch {
+      setRecording(false);
+      setRecMsg("Screen-share was cancelled or blocked.");
+    }
+  };
+  const onPickDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    pickStart.current = { x: e.clientX, y: e.clientY };
+    setPickRect({ x: e.clientX, y: e.clientY, w: 0, h: 0 });
+  };
+  const onPickMove = (e: React.MouseEvent) => {
+    const s = pickStart.current;
+    if (!s) return;
+    setPickRect({ x: Math.min(s.x, e.clientX), y: Math.min(s.y, e.clientY), w: Math.abs(e.clientX - s.x), h: Math.abs(e.clientY - s.y) });
+  };
+  const onPickUp = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const s = pickStart.current;
+    pickStart.current = null;
+    setPicking(false);
+    setPickRect(null);
+    if (!s) return;
+    const r = { x: Math.min(s.x, e.clientX), y: Math.min(s.y, e.clientY), w: Math.abs(e.clientX - s.x), h: Math.abs(e.clientY - s.y) };
+    if (r.w > 20 && r.h > 20) void startRecording(r);
+  };
+
   if (!open || !mounted) return null;
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -473,72 +605,29 @@ function WebResearchOverlay({
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-white/10 px-3 py-2">
-          <span className="mr-1 text-sm font-semibold">Web Research</span>
-          {TYPES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setType(t.id)}
-              className={cn(
-                "rounded-md px-2 py-0.5 text-xs font-medium transition-colors",
-                type === t.id ? "bg-white/10 text-white" : "text-muted-foreground hover:bg-white/5"
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-          {type === "news" && (
-            <div className="flex items-center gap-1">
-              {RECENCY.map((r) => (
-                <button
-                  key={r.id}
-                  onClick={() => setRecency(r.id)}
-                  className={cn(
-                    "rounded-md px-1.5 py-0.5 text-[11px] font-medium transition-colors",
-                    recency === r.id ? "bg-white/10 text-white" : "text-muted-foreground hover:bg-white/5"
-                  )}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="relative ml-1 min-w-[180px] flex-1 md:max-w-md">
-            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onKeyDown}
-              className="h-7 pl-7 text-xs"
-            />
-          </div>
-          <Button size="sm" className="h-7 px-2 text-xs" onClick={() => runSearch(false)} disabled={loading}>
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Search"}
-          </Button>
-          <Button
-            size="sm"
-            variant={curation ? "default" : "outline"}
-            className="h-7 gap-1 px-2 text-xs"
-            onClick={() => runSearch(true)}
-            disabled={curating || !items.length}
-            title="Curate: LLM drops the noise & orders the best results (config-driven)"
+        <div className="flex flex-none items-center gap-2 border-b border-white/10 px-3 py-2">
+          <span className="text-sm font-semibold">Web Research</span>
+          <button
+            onClick={recording ? stopRecording : () => setPicking(true)}
+            title={recording ? "Stop recording" : "Record an area → clip goes to Uploads (then drag to timeline)"}
+            className={cn(
+              "ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+              recording
+                ? "bg-red-600 text-white hover:bg-red-700"
+                : "text-muted-foreground hover:bg-white/5 hover:text-white"
+            )}
           >
-            {curating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            Curate
-          </Button>
-          {curation && (
-            <button
-              onClick={() => setCuration(null)}
-              className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-white/5 hover:text-white"
-            >
-              ✕ curation
-            </button>
-          )}
+            {recording ? (
+              <Square className="h-3.5 w-3.5" />
+            ) : (
+              <Circle className="h-3.5 w-3.5 fill-red-500 text-red-500" />
+            )}
+            {recording ? "Stop" : "Record"}
+          </button>
           <button
             onClick={onClose}
             title="Close (Esc)"
-            className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-white/5 hover:text-white"
+            className="rounded-md p-1 text-muted-foreground hover:bg-white/5 hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
@@ -569,8 +658,73 @@ function WebResearchOverlay({
 
         {/* Body — 2 columns */}
         <div className="grid min-h-0 flex-1 grid-cols-[320px_1fr]">
-          {/* Left: results */}
+          {/* Left: search controls + results */}
           <div className="flex min-h-0 flex-col border-r border-white/10">
+            {/* Search controls live here (not a full-width top bar) */}
+            <div className="flex-none space-y-1.5 border-b border-white/10 p-2">
+              <div className="flex flex-wrap items-center gap-1">
+                {TYPES.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setType(t.id)}
+                    className={cn(
+                      "rounded-md px-2 py-0.5 text-xs font-medium transition-colors",
+                      type === t.id ? "bg-white/10 text-white" : "text-muted-foreground hover:bg-white/5"
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+                {type === "news" &&
+                  RECENCY.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => setRecency(r.id)}
+                      className={cn(
+                        "rounded-md px-1.5 py-0.5 text-[11px] font-medium transition-colors",
+                        recency === r.id ? "bg-white/10 text-white" : "text-muted-foreground hover:bg-white/5"
+                      )}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+              </div>
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  className="h-7 pl-7 text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button size="sm" className="h-7 flex-1 px-2 text-xs" onClick={() => runSearch(false)} disabled={loading}>
+                  {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Search"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant={curation ? "default" : "outline"}
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={() => runSearch(true)}
+                  disabled={curating || !items.length}
+                  title="Curate: LLM drops the noise & orders the best results"
+                >
+                  {curating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  Curate
+                </Button>
+                {curation && (
+                  <button
+                    onClick={() => setCuration(null)}
+                    title="Clear curation"
+                    className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-white/5 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
             <div className="flex-1 overflow-y-auto overscroll-contain p-2">
               <div className="grid grid-cols-2 gap-2">
                 {viewItems.map((item) => (
@@ -581,7 +735,7 @@ function WebResearchOverlay({
                     active={selected?.id === item.id}
                     onSelect={() => {
                       setSelected(item);
-                      setFrameLoading(true);
+                      openInBrowser(item.source_url);
                     }}
                     onAdd={() => addWebItemToTimeline(item)}
                   />
@@ -600,14 +754,14 @@ function WebResearchOverlay({
             </div>
           </div>
 
-          {/* Right: the real page */}
-          <div className="flex min-h-0 flex-col bg-black/20">
-            {selected ? (
-              <>
-                <div className="flex flex-none items-center gap-2 border-b border-white/10 px-3 py-1.5">
-                  <span className="truncate text-xs font-medium">{selected.title || selected.source_name}</span>
+          {/* Right: a REAL browser (self-hosted Neko) — every site works, nothing "refused" */}
+          <div className="flex min-h-0 flex-col bg-black/40">
+            <div className="flex flex-none items-center gap-2 border-b border-white/10 px-3 py-1.5">
+              <span className="flex-none text-xs font-semibold">🌐 Browser</span>
+              {selected ? (
+                <>
                   <span className="truncate text-[10px] text-muted-foreground">{selected.source_url}</span>
-                  <div className="ml-auto flex items-center gap-1.5">
+                  <div className="ml-auto flex flex-none items-center gap-1.5">
                     <Button
                       size="sm"
                       className="h-7 gap-1 px-2 text-xs"
@@ -626,35 +780,45 @@ function WebResearchOverlay({
                       <ExternalLink className="h-3.5 w-3.5" /> Open
                     </a>
                   </div>
-                </div>
-                <div className="relative flex-1">
-                  {frameLoading && (
-                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-                      <Loader2 className="h-6 w-6 animate-spin text-white/70" />
-                    </div>
-                  )}
-                  <iframe
-                    key={selected.source_url}
-                    src={selected.source_url}
-                    title={selected.title || "page"}
-                    className="h-full w-full bg-white"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-presentation allow-downloads"
-                    referrerPolicy="no-referrer-when-downgrade"
-                    onLoad={() => setFrameLoading(false)}
-                  />
-                  <div className="pointer-events-none absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-0.5 text-[10px] text-white/70">
-                    Blank? This site blocks embedding — use ↗ Open.
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                Left me kisi result pe click karo — uska poora page yahan khulega.
-              </div>
-            )}
+                </>
+              ) : (
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  Real browser — koi site refused nahi. Left result pe click → yahin khud khul jayega.
+                </span>
+              )}
+            </div>
+            <iframe
+              src={browserCfg.url}
+              title="Research browser"
+              className="h-full w-full flex-1 bg-black"
+              allow="clipboard-read; clipboard-write; autoplay; fullscreen"
+            />
           </div>
         </div>
       </div>
+      {picking && (
+        <div
+          className="fixed inset-0 z-[10000] cursor-crosshair bg-black/30"
+          onMouseDown={onPickDown}
+          onMouseMove={onPickMove}
+          onMouseUp={onPickUp}
+        >
+          <div className="pointer-events-none fixed left-1/2 top-3 -translate-x-1/2 rounded bg-black/80 px-3 py-1 text-xs text-white">
+            Drag over the page to select the area to record
+          </div>
+          {pickRect && (
+            <div
+              className="pointer-events-none fixed border-2 border-red-500 bg-red-500/10"
+              style={{ left: pickRect.x, top: pickRect.y, width: pickRect.w, height: pickRect.h }}
+            />
+          )}
+        </div>
+      )}
+      {recMsg && (
+        <div className="pointer-events-none fixed bottom-4 left-1/2 z-[10001] -translate-x-1/2 rounded-md bg-black/85 px-3 py-2 text-xs text-white shadow-lg">
+          {recMsg}
+        </div>
+      )}
     </div>,
     document.body
   );
