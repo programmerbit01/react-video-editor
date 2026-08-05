@@ -1543,6 +1543,40 @@ export default function AiEditPanel() {
       return;
     }
 
+    // WEB SEARCH — real internet (SearXNG via /api/websearch), NOT stock. Show the results as
+    // preview cards (media + source) the user drags onto the timeline. No auto-add: web images
+    // can be CORS-tainted on export, so the user picks what they want.
+    if (g.op === "websearch") {
+      const type = String(g.kind || "news").toLowerCase();
+      const n = Math.min(Math.max(1, Number(g.count) || 5), 15);
+      try {
+        s.updateAt(i, { genStatus: `Web search (${type})…` });
+        const res = await fetch(withEditorBase(`/api/websearch?query=${encodeURIComponent(g.query || g.prompt || "")}&type=${type}&per_page=${n}`));
+        const data = await res.json().catch(() => ({}));
+        const items = (Array.isArray(data.items) ? data.items : []).slice(0, n);
+        const previews = [...(useAiEditStore.getState().messages[i]?.genPreviews || [])];
+        for (const it of items) {
+          const src = it?.details?.src || it?.preview;
+          if (!src) continue;
+          const label = String(it.title || g.query || "").slice(0, 80);
+          const source = String(it.source_name || type);
+          previews.push({
+            kind: (it.type === "video" ? "video" : "image") as any,
+            url: it.preview || src,
+            prompt: `(web:${source}) ${label}${it.source_url ? " — " + it.source_url : ""}`,
+          });
+        }
+        elog(`[AI-Edit] WEB search "${String(g.query || "").slice(0, 48)}" [${type}] → ${items.length} results`);
+        s.updateAt(i, {
+          genStatus: items.length ? `✓ ${items.length} web result${items.length > 1 ? "s" : ""} — drag onto the timeline` : "⚠️ no web results",
+          genPreviews: previews,
+        });
+      } catch (e: any) {
+        s.updateAt(i, { genStatus: `⚠️ web search: ${e?.message || "failed"}` });
+      }
+      return;
+    }
+
     // ANIMATE — turn the selected image into a VIDEO (image-to-video / LTX i2v), keeping it in
     // the SAME timeline slot. The "cheap images first, upgrade selected shots to video" flow.
     if (g.op === "animate") {

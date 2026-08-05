@@ -66,7 +66,7 @@ const withEditorBase = (path: string) => {
 // it directly over WebRTC, so this URL must be reachable from the client.
 // Override per deploy with NEXT_PUBLIC_RESEARCH_BROWSER_URL.
 const RESEARCH_BROWSER_URL =
-  process.env.NEXT_PUBLIC_RESEARCH_BROWSER_URL || "http://192.168.50.123:8090/?embed=1";
+  process.env.NEXT_PUBLIC_RESEARCH_BROWSER_URL || "http://192.168.50.123:8090/?usr=guest&pwd=neko&embed=1";
 
 // Endpoint that drives the research browser to a URL (CDP-backed, runs on the Neko host).
 // The user's browser calls it directly (CORS-enabled) — click a result → the browser navigates.

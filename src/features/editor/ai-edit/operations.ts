@@ -24,7 +24,7 @@ import { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT } from "./edi
 export { COMIC_DRAMA_PROMPT, FACELESS_EDIT_PROMPT, DRAMA_V2_PROMPT };
 
 export interface AiEditOp {
-  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "music" | "sfx" | "stocksfx" | "stockmusic";
+  op: "edit" | "delete" | "add" | "fade" | "transition" | "generate" | "regenerate" | "arrange" | "search" | "websearch" | "captions" | "direct" | "animate" | "lipsync" | "musicbed" | "music" | "sfx" | "stocksfx" | "stockmusic";
   itemId?: string;
   voice_id?: string; // audio (TTS) op — the user's chosen voice; forwarded to the vApp (empty = default voice)
   seed?: number; // music (AI-generate) — optional fixed seed for reproducibility
@@ -565,6 +565,7 @@ export function describeOp(op: AiEditOp): string {
   if (op.op === "direct") return `🎬 Make a video: "${(op.topic || op.prompt || "").slice(0, 40)}"${op.durationSec ? ` (~${op.durationSec}s)` : ""}`;
   if (op.op === "arrange") return `Arrange ${op.items?.length || op.itemIds?.length || 0} items${op.totalMs ? ` over ${(op.totalMs / 1000).toFixed(1)}s` : op.items?.length ? " (smart timing)" : ""}`;
   if (op.op === "search") return `Stock ${op.kind || "image"}: "${(op.query || op.prompt || "").slice(0, 30)}" ×${op.count || 1}`;
+  if (op.op === "websearch") return `Web search (${op.kind || "news"}): "${(op.query || op.prompt || "").slice(0, 30)}" ×${op.count || 5}`;
   if (op.op === "regenerate") return `Edit image (AI): "${(op.prompt || "").slice(0, 40)}"  (${op.itemId})`;
   if (op.op === "animate") return `🎞️ Animate image → video: "${(op.prompt || "subtle motion").slice(0, 40)}"  (${op.itemId})`;
   if (op.op === "generate") return `Generate ${op.kind || "audio"}: "${(op.text || op.prompt || "").slice(0, 40)}"`;
@@ -683,6 +684,7 @@ export const CAPABILITIES: { group: string; items: { label: string; example: str
       { label: "Add captions", example: "add word-synced captions to the video" },
       { label: "Stock images", example: "find 3 stock images of snowy mountains and add them" },
       { label: "Stock video", example: "add a stock video of city traffic at night" },
+      { label: "Web search", example: "web search the latest AI news, 5 results" },
     ],
   },
 ];
