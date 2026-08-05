@@ -7,7 +7,7 @@ import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { ADD_ITEMS } from "@designcombo/state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, ExternalLink, Maximize2, X, Plus, Sparkles, Circle, Square } from "lucide-react";
+import { Search, Loader2, ExternalLink, Maximize2, X, Plus, Sparkles, Circle, Square, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import useUploadStore from "../store/use-upload-store";
 
@@ -72,6 +72,18 @@ const RESEARCH_BROWSER_URL =
 // The user's browser calls it directly (CORS-enabled) — click a result → the browser navigates.
 const RESEARCH_NAV_URL =
   process.env.NEXT_PUBLIC_RESEARCH_NAV_URL || "http://192.168.50.123:9224/navigate";
+
+// A recorded clip waits this long in the confirm bar (Discard / Upload) before it auto-uploads.
+const RECORD_HOLD_SECS = 10;
+
+// Short label for a browser tab — the bare hostname (news.bbc.co.uk → bbc.co.uk), title as fallback.
+const hostLabel = (url: string, fallback: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return fallback || "tab";
+  }
+};
 
 // Shared: drop a web result's media onto the timeline (used by panel + overlay).
 const addWebItemToTimeline = (item: WebItem) => {
@@ -363,7 +375,20 @@ function WebResearchOverlay({
   const [picking, setPicking] = useState(false);
   const [pickRect, setPickRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const pickStart = useRef<{ x: number; y: number } | null>(null);
-  const recRef = useRef<{ mr?: MediaRecorder; stream?: MediaStream; raf?: number; chunks: Blob[] }>({ chunks: [] });
+  const recRef = useRef<{ mr?: MediaRecorder; raf?: number; chunks: Blob[] }>({ chunks: [] });
+  // A recorded clip awaiting the user's Discard / Upload decision (auto-uploads after a countdown).
+  const [pendingRec, setPendingRec] = useState<{ file: File; sizeKB: number } | null>(null);
+  const [recCountdown, setRecCountdown] = useState(0);
+  const pendingRef = useRef<File | null>(null); // mirrors pendingRec.file so close-cleanup never loses a clip
+  const recTimerRef = useRef<{ interval?: number; timeout?: number }>({});
+  // The screen-capture stream is requested ONCE and kept alive so back-to-back records don't
+  // re-trigger Chrome's "Allow … to see this tab?" prompt every single time.
+  const displayRef = useRef<MediaStream | null>(null);
+  const [recCursor, setRecCursor] = useState(true); // include the mouse pointer in the recording
+  const [recSettings, setRecSettings] = useState(false); // recording-settings popover open
+  // Open browser tabs (from the nav service). The strip only shows when there are 2+ (Cmd+click
+  // opens a new tab); a single tab stays a clean page like before.
+  const [tabs, setTabs] = useState<{ id: string; title: string; url: string; active: boolean }[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -449,6 +474,42 @@ function WebResearchOverlay({
     return () => window.clearTimeout(t);
   }, [recMsg]);
 
+  // Overlay closed → release the shared screen-capture and any timers. Save an undecided clip
+  // (rather than lose it) so closing mid-countdown still keeps the recording.
+  useEffect(() => {
+    if (open) return;
+    clearRecTimer();
+    if (recRef.current.raf) cancelAnimationFrame(recRef.current.raf);
+    if (pendingRef.current) commitUpload(pendingRef.current);
+    displayRef.current?.getTracks().forEach((t) => t.stop());
+    displayRef.current = null;
+    setRecording(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  // True unmount → make sure the screen-share is stopped (Chrome's "Sharing this tab" bar clears).
+  useEffect(
+    () => () => {
+      clearRecTimer();
+      displayRef.current?.getTracks().forEach((t) => t.stop());
+      displayRef.current = null;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // Poll the research browser's open tabs while the overlay is open (the strip renders only
+  // when there are 2+; a single tab stays a clean page like before).
+  useEffect(() => {
+    if (!open) {
+      setTabs([]);
+      return;
+    }
+    refreshTabs();
+    const iv = window.setInterval(refreshTabs, 2500);
+    return () => window.clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, browserCfg.nav_url]);
+
   const sceneMap = useMemo(() => {
     const m = new Map<string, { caption: string; order: number }>();
     (curation?.scenes || []).forEach((s, i) => {
@@ -466,9 +527,30 @@ function WebResearchOverlay({
   }, [items, curation, sceneMap]);
 
   // Click a result → drive the embedded browser straight to that page (no copy/paste).
-  const openInBrowser = (url: string) => {
+  // Base of the nav service (drop the trailing /navigate) → /tabs, /activate, /close live here.
+  const navBase = () => browserCfg.nav_url.replace(/\/navigate\/?$/, "");
+  const refreshTabs = () => {
+    fetch(`${navBase()}/tabs`, { mode: "cors" })
+      .then((r) => r.json())
+      .then((d) => setTabs(Array.isArray(d?.tabs) ? d.tabs : []))
+      .catch(() => {});
+  };
+  // newtab (Cmd/Ctrl+click) → open a NEW persistent tab; plain click → replace the current page.
+  const openInBrowser = (url: string, newtab = false) => {
     if (!url) return;
-    fetch(`${browserCfg.nav_url}?url=${encodeURIComponent(url)}`, { mode: "cors" }).catch(() => {});
+    fetch(`${browserCfg.nav_url}?url=${encodeURIComponent(url)}${newtab ? "&newtab=1" : ""}`, { mode: "cors" })
+      .catch(() => {})
+      .finally(() => window.setTimeout(refreshTabs, 700));
+  };
+  const activateTab = (id: string) => {
+    fetch(`${navBase()}/activate?id=${encodeURIComponent(id)}`, { mode: "cors" })
+      .catch(() => {})
+      .finally(() => window.setTimeout(refreshTabs, 300));
+  };
+  const closeTab = (id: string) => {
+    fetch(`${navBase()}/close?id=${encodeURIComponent(id)}`, { mode: "cors" })
+      .catch(() => {})
+      .finally(() => window.setTimeout(refreshTabs, 300));
   };
 
   // Lay every curated scene onto the timeline, in order (each image 5s, kenBurns).
@@ -499,19 +581,18 @@ function WebResearchOverlay({
     onClose(); // close so the freshly-built storyboard is visible on the timeline
   };
 
-  // ── Screen-region recording → clip (getDisplayMedia + canvas crop + upload) ──
-  const finishRecording = () => {
-    const rc = recRef.current;
-    if (rc.raf) cancelAnimationFrame(rc.raf);
-    rc.stream?.getTracks().forEach((t) => t.stop());
-    setRecording(false);
-    const blob = new Blob(rc.chunks, { type: "video/webm" });
-    recRef.current = { chunks: [] };
-    if (!blob.size) {
-      setRecMsg("Recording was empty.");
-      return;
-    }
-    const file = new File([blob], `research-clip-${Date.now()}.webm`, { type: "video/webm" });
+  // ── Screen-region recording → clip (getDisplayMedia + canvas crop → confirm bar → upload) ──
+  const clearRecTimer = () => {
+    if (recTimerRef.current.interval) window.clearInterval(recTimerRef.current.interval);
+    if (recTimerRef.current.timeout) window.clearTimeout(recTimerRef.current.timeout);
+    recTimerRef.current = {};
+  };
+  // Push a finished clip to Uploads (then the user drags it onto the timeline from there).
+  const commitUpload = (file: File) => {
+    clearRecTimer();
+    pendingRef.current = null;
+    setPendingRec(null);
+    setRecCountdown(0);
     try {
       const store = useUploadStore.getState() as any;
       store.addPendingUploads([{ id: generateId(), file, type: file.type, status: "pending", progress: 0 }]);
@@ -521,6 +602,38 @@ function WebResearchOverlay({
       setRecMsg("Recording done, but the upload failed.");
     }
   };
+  const discardRec = () => {
+    clearRecTimer();
+    pendingRef.current = null;
+    setPendingRec(null);
+    setRecCountdown(0);
+    setRecMsg("Recording discarded.");
+  };
+  // Offer Discard / Upload; auto-upload after RECORD_HOLD_SECS if the user doesn't decide. The
+  // timeout captures `file` directly, so the auto-upload is immune to stale state.
+  const startPending = (file: File, sizeKB: number) => {
+    clearRecTimer();
+    pendingRef.current = file;
+    setPendingRec({ file, sizeKB });
+    setRecCountdown(RECORD_HOLD_SECS);
+    recTimerRef.current.interval = window.setInterval(() => setRecCountdown((c) => Math.max(0, c - 1)), 1000);
+    recTimerRef.current.timeout = window.setTimeout(() => commitUpload(file), RECORD_HOLD_SECS * 1000);
+  };
+  const finishRecording = () => {
+    const rc = recRef.current;
+    if (rc.raf) cancelAnimationFrame(rc.raf);
+    // NOTE: the shared display stream is intentionally kept ALIVE (displayRef) so the next record
+    // reuses the granted screen-share — no repeated "Allow … to see this tab?" prompt.
+    setRecording(false);
+    const blob = new Blob(rc.chunks, { type: "video/webm" });
+    recRef.current = { chunks: [] };
+    if (!blob.size) {
+      setRecMsg("Recording was empty.");
+      return;
+    }
+    const file = new File([blob], `research-clip-${Date.now()}.webm`, { type: "video/webm" });
+    startPending(file, Math.round(blob.size / 1024)); // don't auto-upload yet — let the user decide
+  };
   const stopRecording = () => {
     try {
       if (recRef.current.mr && recRef.current.mr.state !== "inactive") recRef.current.mr.stop();
@@ -528,14 +641,29 @@ function WebResearchOverlay({
       /* noop */
     }
   };
-  const startRecording = async (r: { x: number; y: number; w: number; h: number }) => {
+  // Request the screen-share ONCE and reuse it across records; returns a live stream (or null).
+  const getDisplayStream = async (): Promise<MediaStream | null> => {
+    const cur = displayRef.current;
+    if (cur && cur.getVideoTracks().some((t) => t.readyState === "live")) return cur;
     const md = navigator.mediaDevices as any;
     if (!md?.getDisplayMedia) {
-      setRecMsg("Recording needs HTTPS — the editor is on http://, so the browser blocks screen capture here.");
-      return;
+      setRecMsg("Recording needs HTTPS — the browser blocks screen capture here.");
+      return null;
     }
+    const stream: MediaStream = await md.getDisplayMedia({ video: { frameRate: 30, cursor: recCursor ? "motion" : "never" }, audio: false, preferCurrentTab: true, selfBrowserSurface: "include" });
+    displayRef.current = stream;
+    // If the user ends the share from Chrome's "Stop sharing" bar, drop it so the next record re-asks.
+    stream.getVideoTracks()[0].onended = () => {
+      if (displayRef.current === stream) displayRef.current = null;
+      stopRecording();
+    };
+    return stream;
+  };
+  const startRecording = async (r: { x: number; y: number; w: number; h: number }) => {
+    if (pendingRef.current) commitUpload(pendingRef.current); // save an undecided clip before a new one
     try {
-      const stream: MediaStream = await md.getDisplayMedia({ video: { frameRate: 30 }, audio: false, preferCurrentTab: true });
+      const stream = await getDisplayStream();
+      if (!stream) return;
       setRecMsg("Recording… press Stop when done.");
       const track = stream.getVideoTracks()[0];
       const st = track.getSettings();
@@ -556,14 +684,13 @@ function WebResearchOverlay({
       draw();
       const recStream = (canvas as any).captureStream(30) as MediaStream;
       const mr = new MediaRecorder(recStream, { mimeType: "video/webm" });
-      recRef.current = { mr, stream, chunks: [], raf: recRef.current.raf };
+      recRef.current = { mr, chunks: [], raf: recRef.current.raf };
       mr.ondataavailable = (e) => {
         if (e.data && e.data.size) recRef.current.chunks.push(e.data);
       };
       mr.onstop = finishRecording;
       mr.start();
       setRecording(true);
-      track.onended = () => stopRecording();
     } catch {
       setRecording(false);
       setRecMsg("Screen-share was cancelled or blocked.");
@@ -625,6 +752,32 @@ function WebResearchOverlay({
             )}
             {recording ? "Stop" : "Record"}
           </button>
+          <div className="relative flex-none">
+            <button
+              onClick={() => setRecSettings((v) => !v)}
+              title="Recording settings"
+              className="rounded-md p-1 text-muted-foreground hover:bg-white/5 hover:text-white"
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </button>
+            {recSettings && (
+              <div className="absolute right-0 top-8 z-[10002] w-56 rounded-md border border-white/10 bg-background p-2.5 text-xs shadow-xl">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={recCursor}
+                    onChange={(e) => setRecCursor(e.target.checked)}
+                    className="accent-red-500"
+                  />
+                  Show mouse cursor in the recording
+                </label>
+                <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">
+                  Records the area you drag over the page. The “Recording…” label is never captured.
+                  Turn the cursor off for a cleaner clip.
+                </p>
+              </div>
+            )}
+          </div>
           <button
             onClick={onClose}
             title="Close (Esc)"
@@ -734,9 +887,9 @@ function WebResearchOverlay({
                     item={item}
                     caption={sceneMap.get(item.id)?.caption}
                     active={selected?.id === item.id}
-                    onSelect={() => {
+                    onSelect={(e) => {
                       setSelected(item);
-                      openInBrowser(item.source_url);
+                      openInBrowser(item.source_url, e.metaKey || e.ctrlKey); // Cmd/Ctrl+click → new tab
                     }}
                     onAdd={() => addWebItemToTimeline(item)}
                   />
@@ -784,10 +937,39 @@ function WebResearchOverlay({
                 </>
               ) : (
                 <span className="ml-auto text-[10px] text-muted-foreground">
-                  Real browser — koi site refused nahi. Left result pe click → yahin khud khul jayega.
+                  Real browser — koi site refused nahi. Result pe click → yahin khule; ⌘/Ctrl+click → nayi tab.
                 </span>
               )}
             </div>
+            {/* Tab strip — only when 2+ tabs are open (Cmd/Ctrl+click a result to open one).
+                A single tab stays a clean page, no strip. Click = switch (no reload), × = close. */}
+            {tabs.length >= 2 && (
+              <div className="flex flex-none items-center gap-1 overflow-x-auto border-b border-white/10 bg-black/60 px-2 py-1">
+                {tabs.map((t) => (
+                  <div
+                    key={t.id}
+                    onClick={() => activateTab(t.id)}
+                    title={t.url}
+                    className={cn(
+                      "group flex max-w-[190px] flex-none cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors",
+                      t.active ? "bg-white/15 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
+                    )}
+                  >
+                    <span className="truncate">{hostLabel(t.url, t.title)}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(t.id);
+                      }}
+                      title="Close tab"
+                      className="flex-none rounded p-0.5 text-white/40 hover:bg-white/20 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {/* Cover-fill: the iframe matches NEKO_SCREEN's aspect (4:3) and FILLS the
                 panel — crops a little top/bottom instead of leaving black bars. */}
             <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
@@ -820,11 +1002,30 @@ function WebResearchOverlay({
           )}
         </div>
       )}
-      {recMsg && (
+      {pendingRec ? (
+        <div className="fixed bottom-4 left-1/2 z-[10001] flex -translate-x-1/2 items-center gap-3 rounded-lg bg-black/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-white/10">
+          <span className="font-medium">
+            Clip recorded{pendingRec.sizeKB ? ` · ${pendingRec.sizeKB} KB` : ""}
+          </span>
+          <button
+            onClick={discardRec}
+            className="rounded-md bg-white/10 px-2.5 py-1 font-medium text-white/90 transition hover:bg-white/20"
+          >
+            Discard
+          </button>
+          <button
+            onClick={() => commitUpload(pendingRec.file)}
+            className="rounded-md bg-emerald-500 px-2.5 py-1 font-semibold text-white transition hover:bg-emerald-400"
+          >
+            Upload{recCountdown > 0 ? ` · auto ${recCountdown}s` : ""}
+          </button>
+        </div>
+      ) : recMsg && !recording ? (
+        // While actively capturing, don't paint a toast over the page — it would land IN the clip.
         <div className="pointer-events-none fixed bottom-4 left-1/2 z-[10001] -translate-x-1/2 rounded-md bg-black/85 px-3 py-2 text-xs text-white shadow-lg">
           {recMsg}
         </div>
-      )}
+      ) : null}
     </div>,
     document.body
   );
@@ -840,7 +1041,7 @@ const ResultCard = ({
   item: WebItem;
   caption?: string;
   active: boolean;
-  onSelect: () => void;
+  onSelect: (e: React.MouseEvent) => void;
   onAdd: () => void;
 }) => {
   const label = (caption || item.title || item.source_name || "").trim();
