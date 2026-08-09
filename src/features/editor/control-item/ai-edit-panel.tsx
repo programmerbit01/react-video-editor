@@ -1054,7 +1054,7 @@ export default function AiEditPanel() {
       // video length ("1 video, 11 seconds") AND the audio length ("100s audio"). Surfacing which number
       // is the narration stops the model anchoring on the wrong one. The `script` task owns the pacing.
       const audioSecs = parseAudioSecs(text);
-      const lenNote = audioSecs ? `\n\n(The TOTAL spoken narration length is ${audioSecs} seconds — any other seconds in the request are per-shot video lengths, NOT the narration.)` : "";
+      const lenNote = audioSecs ? `\n\n(IMPORTANT: the spoken narration must last ABOUT ${audioSecs} seconds at a natural speaking pace — write enough to fill it, but do NOT significantly exceed or fall short of ${audioSecs}s. Any other seconds in the request are per-shot video lengths, NOT the narration.)` : "";
       const scriptInput = (dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text) + lenNote;
       // Drama v2 uses its OWN screenwriter task (tagged NARRATOR / DIALOGUE screenplay); everyone else
       // uses the shared `script` narration task. (Isolated — v1/faceless/edit are untouched.)
@@ -1088,6 +1088,27 @@ export default function AiEditPanel() {
         injectedScript = narr || injectedScript.replace(/^\s*(NARRATOR|DIALOGUE[^:]*)\s*:\s*/gim, "").replace(/\s*\n+\s*/g, " ").trim();
         elog(`[DRAMA v2] screenplay: ${lines.length} lines, ${dCount} dialogue → narrator VO ${wc(narr)} words`);
         elog(`[DRAMA v2 SCREENPLAY]\n${directorScript}`); // the FULL tagged screenplay drama_script wrote
+      }
+      // LENGTH GUARD (pre-TTS — fix the TEXT, NEVER a 2nd TTS): if the user gave a target duration and the
+      // written narration is GROSSLY off it (rough word-count estimate), rewrite the SCRIPT ONCE to fit
+      // BEFORE it ever reaches TTS — a cheap text call, so the audio is right the FIRST time. No hardcoded
+      // word count (target = the user's seconds), no cropping (the LLM rewrites coherently). Only big
+      // misses trigger it (the "5-min / cut" cases); normal ±variance is left alone. Non-drama only
+      // (drama's screenplay carries DIALOGUE too, so its length is a different calc).
+      if (s.pipeline !== "drama_v2" && audioSecs && injectedScript) {
+        const estSec = wc(injectedScript) / 2.5; // ~2.5 words/s — rough, ONLY to catch big misses (not exact)
+        const ratio = estSec / audioSecs;
+        if (ratio > 1.6 || ratio < 0.55) {
+          const tooLong = ratio > 1.6;
+          elog(`[SCRIPT LEN] ${wc(injectedScript)} words ≈ ${Math.round(estSec)}s vs target ${audioSecs}s → ${tooLong ? "too long" : "too short"}, rewriting once (pre-TTS)`);
+          s.updateLast({ genStatus: `✍️ Narration ${tooLong ? "too long" : "too short"} — fitting to ~${audioSecs}s…`, scriptOpen: true });
+          const fixInput = `${scriptInput}\n\n━━━ Your previous narration was ${tooLong ? "TOO LONG" : "TOO SHORT"} for a ${audioSecs}-second voiceover (it runs about ${Math.round(estSec)}s). REWRITE it to be spoken in about ${audioSecs} seconds — ${tooLong ? "keep only the essential beats and tighten it" : "expand it with more relevant detail"}. Keep it coherent and natural; do NOT cut off mid-sentence. Output ONLY the narration.\n\nPrevious narration:\n${injectedScript}`;
+          try {
+            const redo = (await llmTextStream(scriptTask, fixInput, getToken(), (full) => { s.updateLast({ scriptText: full, scriptOpen: true }); }, _work?.signal, undefined, refSrcs.length ? refSrcs : undefined)).trim();
+            const cleaned = redo.replace(/^\s*\[REF\][\s\S]*?\[\/REF\]\s*/i, "").replace(/^\s*REF\s*:\s*/i, "").trim();
+            if (cleaned) { injectedScript = cleaned; directorScript = cleaned; elog(`[SCRIPT LEN] rewritten → ${wc(injectedScript)} words ≈ ${Math.round(wc(injectedScript) / 2.5)}s`); }
+          } catch (e: any) { elog(`[SCRIPT LEN] rewrite failed (kept original): ${e?.message || e}`); }
+        }
       }
       if (directorScript) {
         elog(`[SCRIPT STEP] ${wc(injectedScript)} words voiceover (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
