@@ -1077,7 +1077,10 @@ export default function AiEditPanel() {
       // video length ("1 video, 11 seconds") AND the audio length ("100s audio"). Surfacing which number
       // is the narration stops the model anchoring on the wrong one. The `script` task owns the pacing.
       const audioSecs = parseAudioSecs(text);
-      const lenNote = audioSecs ? `\n\n(IMPORTANT — LENGTH: this is a SHORT ${audioSecs}-second video. The spoken narration must last ABOUT ${audioSecs} seconds ≈ ${Math.round(audioSecs * 2.5)} words at a natural pace. Do NOT try to cover the whole topic — pick only a few key beats and be concise. Significantly exceeding ${audioSecs}s is WRONG. Any other seconds in the request are per-shot video lengths, NOT the narration.)` : "";
+      // Tell the scriptwriter the EXACT word count (computed here from the target seconds), so it never
+      // has to derive it from "100s" and never over-writes. One number, stated plainly = the whole fix.
+      const targetWords = audioSecs ? Math.round(audioSecs * 2.5) : 0;
+      const lenNote = targetWords ? `\n\n━━━ WORD COUNT (STRICT): Write the narration in APPROXIMATELY ${targetWords} words — this is a ${audioSecs}-second voiceover at ~2.5 words/sec. ${targetWords} words is the TARGET: count as you write and STOP at about ${targetWords} words. Do NOT write a long essay and do NOT try to cover the whole topic — cover only what fits in ${targetWords} words. (Any OTHER seconds in the request are per-shot video lengths, NOT the narration.) ━━━` : "";
       const scriptInput = (dirScript ? `${text}\n\nNARRATION VOICE / STYLE (how it should sound): ${dirScript}` : text) + lenNote;
       // Drama v2 uses its OWN screenwriter task (tagged NARRATOR / DIALOGUE screenplay); everyone else
       // uses the shared `script` narration task. (Isolated — v1/faceless/edit are untouched.)
@@ -1111,51 +1114,6 @@ export default function AiEditPanel() {
         injectedScript = narr || injectedScript.replace(/^\s*(NARRATOR|DIALOGUE[^:]*)\s*:\s*/gim, "").replace(/\s*\n+\s*/g, " ").trim();
         elog(`[DRAMA v2] screenplay: ${lines.length} lines, ${dCount} dialogue → narrator VO ${wc(narr)} words`);
         elog(`[DRAMA v2 SCREENPLAY]\n${directorScript}`); // the FULL tagged screenplay drama_script wrote
-      }
-      // LENGTH GUARD (pre-TTS): a big topic + a short target = the model over-writes ("100s" asked → it
-      // writes a 3-min essay and only half-trims on one rewrite). So: LOOP the rewrite up to 3× to fit
-      // the seconds, and as a HARD GUARANTEE, keep only WHOLE leading sentences up to the target if it
-      // STILL won't shorten — coherent (never mid-sentence), single TTS, no hardcoded constant (the
-      // target is derived from the user's own seconds). Non-drama only (drama's screenplay has DIALOGUE).
-      if (s.pipeline !== "drama_v2" && audioSecs && injectedScript) {
-        const WPS = 2.5;                                    // ~words/second — rough, only to SIZE the target
-        const targetWords = Math.round(audioSecs * WPS);
-        const estOf = (t: string) => wc(t) / WPS;
-        const trimToWholeSentences = (txt: string, maxWords: number): string => {
-          const sentences = txt.match(/[^.!?]+[.!?]+["')\]]*\s*/g) || [txt];
-          let out = "", count = 0;
-          for (const sen of sentences) {
-            const w = sen.trim().split(/\s+/).filter(Boolean).length;
-            if (count > 0 && count + w > maxWords) break;    // stop BEFORE exceeding — whole sentences only
-            out += sen; count += w;
-          }
-          return out.trim() || txt;
-        };
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const ratio = estOf(injectedScript) / audioSecs;
-          if (ratio >= 0.7 && ratio <= 1.3) break;           // within ±30% → good enough
-          const tooLong = ratio > 1.3;
-          elog(`[SCRIPT LEN] attempt ${attempt + 1}: ${wc(injectedScript)} words ≈ ${Math.round(estOf(injectedScript))}s vs target ${audioSecs}s → ${tooLong ? "too long" : "too short"}, rewriting`);
-          s.updateLast({ genStatus: `✍️ Narration ${tooLong ? "too long" : "too short"} — fitting to ~${audioSecs}s (try ${attempt + 1})…`, scriptOpen: true });
-          const fixInput = `${scriptInput}\n\n━━━ LENGTH CORRECTION: your narration runs about ${Math.round(estOf(injectedScript))} seconds, but this is a SHORT ${audioSecs}-second video (target ≈ ${targetWords} words). ${tooLong ? `It is FAR TOO LONG. Do NOT cover the whole topic — pick ONLY the ${Math.max(2, Math.round(audioSecs / 25))} most essential beats and be RUTHLESS. Cut it down to about ${targetWords} words.` : `It is too short — expand to about ${targetWords} words with more relevant detail.`} Keep it coherent, END ON A COMPLETE SENTENCE, never cut off mid-sentence. Output ONLY the narration.\n\nPrevious narration:\n${injectedScript}`;
-          try {
-            const redo = (await llmTextStream(scriptTask, fixInput, getToken(), (full) => { s.updateLast({ scriptText: full, scriptOpen: true }); }, _work?.signal, undefined, refSrcs.length ? refSrcs : undefined)).trim();
-            const cleaned = redo.replace(/^\s*\[REF\][\s\S]*?\[\/REF\]\s*/i, "").replace(/^\s*REF\s*:\s*/i, "").trim();
-            if (cleaned) { injectedScript = cleaned; directorScript = cleaned; }
-          } catch (e: any) { elog(`[SCRIPT LEN] rewrite failed: ${e?.message || e}`); break; }
-          if (_work?.signal.aborted) break;
-        }
-        // HARD GUARANTEE: still overshooting after the retries (model won't write short for a big topic)
-        // → keep only whole LEADING sentences up to the target (+15% grace). Coherent end, deterministic,
-        // single TTS — so "100s" stays ~100s no matter what. Only fires when it's still way over.
-        if (estOf(injectedScript) / audioSecs > 1.3) {
-          const trimmed = trimToWholeSentences(injectedScript, Math.round(targetWords * 1.15));
-          if (trimmed && wc(trimmed) < wc(injectedScript)) {
-            injectedScript = trimmed; directorScript = trimmed;
-            elog(`[SCRIPT LEN] model wouldn't shorten enough → trimmed to whole sentences`);
-          }
-        }
-        elog(`[SCRIPT LEN] final → ${wc(injectedScript)} words ≈ ${Math.round(estOf(injectedScript))}s (target ${audioSecs}s)`);
       }
       if (directorScript) {
         elog(`[SCRIPT STEP] ${wc(injectedScript)} words voiceover (~${Math.round(wc(injectedScript) / 2.5)}s spoken)`);
