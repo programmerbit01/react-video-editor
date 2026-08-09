@@ -361,6 +361,19 @@ async function transcribeAudio(
   src: string,
   token: string
 ): Promise<{ start: number; end: number; text: string; words?: any[] }[]> {
+  // GET-OR-TRANSCRIBE: reuse a stored transcript for this src instead of re-running STT. The result
+  // cache is persisted (localStorage → survives a refresh) AND shared by EVERY caller (arrange,
+  // captions, lip-sync), so one audio is transcribed ONCE — not re-run (a slow 40×3s poll that was
+  // timing out) on each build / each op. Only actually transcribe when there's nothing cached.
+  try {
+    const cached = useCaptionTranscribeStore.getState().resultsByMedia?.[src];
+    if (cached && Array.isArray(cached.segments) && cached.segments.length) {
+      elog(`[transcribe] reuse cached transcript (${cached.segments.length} segs) — no STT call`);
+      return cached.segments
+        .map((sg: any) => ({ start: Number(sg?.start || 0), end: Number(sg?.end || 0), text: String(sg?.text || "").trim(), words: sg?.words }))
+        .filter((x: any) => x.text);
+    }
+  } catch { /* cache read failed — fall through to a real transcribe */ }
   const startRes = await fetch(withEditorBase("/api/transcribe"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -384,7 +397,7 @@ async function transcribeAudio(
     if (pd?.failed) throw new Error("transcription failed");
     if (pd?.done) {
       const segs = Array.isArray(pd?.stt?.segments) ? pd.stt.segments : [];
-      return segs
+      const mapped = segs
         .map((sg: any) => ({
           start: Number(sg?.start || 0),
           end: Number(sg?.end || 0),
@@ -394,6 +407,16 @@ async function transcribeAudio(
             : undefined,
         }))
         .filter((x: any) => x.text);
+      // SAVE so the next caller (and a refresh) reuses it — the same audio is never re-transcribed.
+      try {
+        if (mapped.length) useCaptionTranscribeStore.getState().setTranscriptResult(src, {
+          text: String(pd?.stt?.text || mapped.map((m: any) => m.text).join(" ")),
+          language: String(pd?.stt?.language || ""),
+          segment_count: mapped.length,
+          segments: mapped as any,
+        });
+      } catch { /* cache write failed — the result is still returned */ }
+      return mapped;
     }
   }
   throw new Error("transcription timed out");
@@ -1171,6 +1194,24 @@ export default function AiEditPanel() {
       payload.extra_body = { think: false };
     }
     elog(`[LLM REQ] director=${curDirector?.label || "edit assistant"} · task=editor_edit · in="${String(payload.messages[1].content).replace(/\s+/g, " ").slice(0, 160)}…"`);
+    // SALVAGE the voiceover: if the director fails to produce ops but the narration was ALREADY written
+    // (the pipeline script step ran), still generate + place the VOICEOVER from that script — the
+    // narration is NEVER thrown away just because the shot-plan JSON broke / cut off / the stream dropped.
+    // Pipeline only (Edit mode has no injectedScript). Returns true when it ran the fallback.
+    const salvageVoiceover = (why: string): boolean => {
+      if (!s.pipeline || !injectedScript) return false;
+      const audioOp: any = { op: "generate", kind: "audio", text: injectedScript };
+      const _vid = extractVoiceId(text);
+      if (_vid) audioOp.voice_id = _vid;
+      elog(`[AI-Edit] ${why} → salvaging the VOICEOVER from the written script (decoupled from the shot plan)`);
+      s.updateLast({ content: "⚠️ The shot plan didn't come through — I kept the voiceover from the script. Add visuals, or retry for the shots.", ops: [audioOp], thinkingOpen: false });
+      if (useAiEditStore.getState().autoApply) {
+        const idx = useAiEditStore.getState().messages.length - 1;
+        const msg = useAiEditStore.getState().messages[idx];
+        if (msg) applyMsg(idx, msg);
+      }
+      return true;
+    };
     const t0 = Date.now();
     let firstContentAt = 0;
     try {
@@ -1241,28 +1282,32 @@ export default function AiEditPanel() {
       } else if (env) {
         // A VALID envelope with ZERO ops — the model chose to do nothing (NOT a parse failure).
         console.error(`[AI-Edit] director returned 0 operations (valid envelope, no shots) · ${Date.now() - t0}ms · ${s.pipeline ? "pipeline=" + s.pipeline : "edit"}`);
-        s.updateLast({ content: env.summary || "No changes needed.", reasoning, reasoningMs, thinkingOpen: false });
+        if (!salvageVoiceover("director returned 0 operations")) s.updateLast({ content: env.summary || "No changes needed.", reasoning, reasoningMs, thinkingOpen: false });
       } else {
         // extractOps found nothing. SAY WHY in the console (red) so a missing voiceover / empty build
         // is diagnosable at a glance — TRUNCATED (max_tokens / SSE drop) vs MALFORMED vs EMPTY —
         // instead of only a vague ⚠️ in the chat.
         console.error(`[AI-Edit] director JSON → NO OPS · ${diagnoseDirectorReply(content)} · ${Date.now() - t0}ms · tail: …${String(content || "").slice(-200)}`);
-        const looksLikeOps = /^\s*\{/.test(content || "") || /"operations"\s*:/.test(content || "");
-        s.updateLast({
-          content: looksLikeOps
-            ? "⚠️ The plan came back as cut-off / invalid JSON (too long to finish). Try again, or ask for fewer shots."
-            : content || "No operations produced.",
-          reasoning,
-          reasoningMs,
-          thinkingOpen: false,
-        });
+        if (!salvageVoiceover("director JSON produced no ops")) {
+          const looksLikeOps = /^\s*\{/.test(content || "") || /"operations"\s*:/.test(content || "");
+          s.updateLast({
+            content: looksLikeOps
+              ? "⚠️ The plan came back as cut-off / invalid JSON (too long to finish). Try again, or ask for fewer shots."
+              : content || "No operations produced.",
+            reasoning,
+            reasoningMs,
+            thinkingOpen: false,
+          });
+        }
       }
     } catch (e: any) {
       const stopped = e?.name === "AbortError" || _work?.signal.aborted;
       // Red console line so a DROPPED director stream (network / timeout / upstream LLM error) is
       // never mistaken for "the model produced nothing" — this is the slow-internet failure mode.
       if (!stopped) console.error(`[AI-Edit] director LLM stream ERROR (network / timeout / upstream) · ${Date.now() - t0}ms · ${e?.message || e}`);
-      s.updateLast({ content: stopped ? "⏹ Stopped." : "⚠️ " + (e?.message || "request failed"), thinkingOpen: false });
+      // Even on a dropped director stream, KEEP the voiceover if the script was already written.
+      if (stopped) s.updateLast({ content: "⏹ Stopped.", thinkingOpen: false });
+      else if (!salvageVoiceover("director stream errored")) s.updateLast({ content: "⚠️ " + (e?.message || "request failed"), thinkingOpen: false });
     } finally {
       s.setBusy(false);
     }
@@ -1761,7 +1806,13 @@ export default function AiEditPanel() {
             newId = await serializedAdd("audio", () => addAudio(url, g.text || "voiceover", durMs ? { durationMs: durMs } : undefined), 20000);
             if (!newId && attempt < 2) { elog(`[AUDIO ADD] attempt ${attempt + 1} didn't land — retrying`); await sleep(1000); }
           }
-          if (!newId) elog(`[AUDIO ADD] voiceover FAILED to land after 3 tries (url …${String(url).slice(-40)})`);
+          if (!newId) {
+            elog(`[AUDIO ADD] voiceover FAILED to land after 3 tries (url …${String(url).slice(-40)})`);
+            // LOUD, persistent error — a swallowed "audio generated but not on the timeline" is exactly
+            // what made this feel random. The red block tells the user it exists + how to place it.
+            const prevErr = useAiEditStore.getState().messages[i]?.genErrors || [];
+            s.updateAt(i, { genErrors: [...prevErr, "Voiceover was generated but didn't land on the timeline — drag it in from the media panel, or retry."], genStatus: "⚠️ Voiceover didn't land" });
+          }
         } else if (label === "image") newId = await serializedAdd("image", () => addImage(url, g.prompt || g.text || "image"));
         else if (label === "video") newId = await serializedAdd("video", () => addVideo(url, g.prompt || g.text || "video"));
         // serializedAdd already dispatched the add, WAITED for it to land, and logged it — so the
